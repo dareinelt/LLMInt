@@ -13,20 +13,21 @@ $defaultModel = getSetting('default_model', '');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
-            --bg:          #0f1117;
-            --surface:     #1a1d27;
-            --surface-alt: #22263a;
-            --border:      #2e3250;
+            --bg:          #212121;
+            --surface:     #2f2f2f;
+            --surface-alt: #3a3a3a;
+            --border:      rgba(255,255,255,.08);
             --accent:      #6c63ff;
             --accent-dark: #5249cc;
-            --text:        #e2e4f0;
-            --text-muted:  #8b90b0;
-            --user-bg:     #2a2d45;
-            --bot-bg:      #1e2035;
-            --error:       #e05c5c;
-            --success:     #4caf7d;
-            --radius:      10px;
-            --font:        'Segoe UI', system-ui, -apple-system, sans-serif;
+            --text:        #ececf1;
+            --text-muted:  #8e8ea0;
+            --user-bg:     #2f2f2f;
+            --error:       #ef4444;
+            --success:     #22c55e;
+            --radius:      12px;
+            --radius-lg:   20px;
+            --font:        ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+            --max-w:       760px;
         }
 
         body {
@@ -36,188 +37,172 @@ $defaultModel = getSetting('default_model', '');
             height: 100dvh;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
 
         /* ── Header ───────────────────────────────────────────────── */
         header {
             display: flex;
             align-items: center;
-            gap: 14px;
-            padding: 14px 20px;
-            background: var(--surface);
+            justify-content: space-between;
+            padding: 0 20px;
+            height: 52px;
+            background: var(--bg);
             border-bottom: 1px solid var(--border);
             flex-shrink: 0;
         }
 
         header h1 {
-            font-size: 1.15rem;
+            font-size: 1rem;
             font-weight: 600;
-            letter-spacing: .02em;
-        }
-
-        header .badge {
-            font-size: .72rem;
-            background: var(--accent);
-            color: #fff;
-            padding: 2px 8px;
-            border-radius: 20px;
+            letter-spacing: .01em;
         }
 
         header .admin-link {
-            margin-left: auto;
-            font-size: .78rem;
+            font-size: .8rem;
             color: var(--text-muted);
             text-decoration: none;
+            padding: 4px 12px;
+            border-radius: 8px;
+            transition: background .15s, color .15s;
         }
 
-        header .admin-link:hover { color: var(--text); }
+        header .admin-link:hover { background: var(--surface); color: var(--text); }
 
-        /* ── Config bar ───────────────────────────────────────────── */
-        #config-bar {
-            display: none;
-        }
-
-        #config-bar label {
-            font-size: .82rem;
-            color: var(--text-muted);
-            white-space: nowrap;
-        }
-
-        #model-select {
-            flex: 1 1 200px;
-            padding: 6px 10px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            color: var(--text);
-            font-size: .85rem;
-        }
-
-        button {
-            padding: 6px 14px;
-            border: none;
-            border-radius: var(--radius);
-            cursor: pointer;
-            font-size: .85rem;
-            font-weight: 500;
-            transition: background .15s, opacity .15s;
-        }
-
-        #refresh-btn {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            color: var(--text);
-        }
-
-        #refresh-btn:hover { background: var(--border); }
-
-        #refresh-btn:disabled { opacity: .5; cursor: default; }
-
-        /* ── Status bar ───────────────────────────────────────────── */
-        #status-bar {
-            font-size: .78rem;
-            padding: 4px 20px;
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
-            min-height: 26px;
-            display: flex;
-            align-items: center;
-            flex-shrink: 0;
-        }
-
-        #status-bar.ok    { color: var(--success); }
-        #status-bar.error { color: var(--error); }
-        #status-bar.info  { color: var(--text-muted); }
+        /* ── Config bar (hidden – keeps DOM refs for JS) ──────────── */
+        #config-bar { display: none; }
 
         /* ── Chat area ─────────────────────────────────────────────── */
         #chat-area {
             flex: 1 1 0;
             overflow-y: auto;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
             scroll-behavior: smooth;
+            padding: 8px 0;
         }
 
+        /* ── Welcome screen ────────────────────────────────────────── */
+        #welcome {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            gap: 10px;
+            text-align: center;
+            padding: 32px 16px;
+        }
+
+        .welcome-logo { font-size: 2.8rem; margin-bottom: 8px; }
+
+        #welcome h2 { font-size: 1.6rem; font-weight: 600; }
+
+        #welcome p { font-size: .9rem; color: var(--text-muted); max-width: 380px; }
+
+        /* ── Message rows ──────────────────────────────────────────── */
         .message {
             display: flex;
             gap: 12px;
-            max-width: 860px;
+            max-width: var(--max-w);
+            margin: 0 auto;
+            padding: 10px 24px;
             width: 100%;
+            align-items: flex-start;
         }
 
-        .message.user  { align-self: flex-end; flex-direction: row-reverse; }
-        .message.assistant { align-self: flex-start; }
-        .message.system-msg { align-self: center; }
+        .message.user { flex-direction: row-reverse; }
 
+        .message.system-msg { justify-content: center; }
+
+        /* ── Avatar (assistant only) ───────────────────────────────── */
         .avatar {
-            width: 34px;
-            height: 34px;
+            width: 28px;
+            height: 28px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1rem;
+            font-size: .62rem;
+            font-weight: 700;
             flex-shrink: 0;
+            margin-top: 3px;
+            letter-spacing: .02em;
         }
 
-        .message.user      .avatar { background: var(--accent); }
-        .message.assistant .avatar { background: #3a3d5c; }
+        .message.assistant .avatar { background: var(--accent); color: #fff; }
 
+        /* ── Bubbles ───────────────────────────────────────────────── */
         .bubble {
-            padding: 10px 14px;
-            border-radius: var(--radius);
-            line-height: 1.6;
-            font-size: .9rem;
-            white-space: pre-wrap;
+            line-height: 1.65;
+            font-size: .94rem;
             word-break: break-word;
         }
 
-        .message.user      .bubble { background: var(--user-bg); }
-        .message.assistant .bubble { background: var(--bot-bg); border: 1px solid var(--border); white-space: normal; }
+        /* User: rounded pill, no avatar shown */
+        .message.user .bubble {
+            background: var(--user-bg);
+            border-radius: var(--radius-lg) var(--radius-lg) 4px var(--radius-lg);
+            padding: 10px 16px;
+            max-width: 80%;
+            white-space: pre-wrap;
+        }
 
-        /* ── Markdown rendering inside assistant bubbles ───────────── */
+        /* Assistant: no background, full width */
+        .message.assistant .bubble {
+            flex: 1;
+            min-width: 0;
+            white-space: normal;
+        }
+
+        /* System message */
+        .message.system-msg .bubble {
+            color: var(--text-muted);
+            font-size: .8rem;
+        }
+
+        /* Streaming cursor */
+        .message.assistant .bubble.streaming::after {
+            content: '▋';
+            animation: blink .8s step-end infinite;
+        }
+
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* ── Markdown inside assistant bubbles ─────────────────────── */
         .message.assistant .bubble h1,
         .message.assistant .bubble h2,
         .message.assistant .bubble h3,
         .message.assistant .bubble h4 {
-            margin: .9em 0 .3em;
+            margin: .8em 0 .3em;
             font-weight: 600;
             line-height: 1.3;
         }
-        .message.assistant .bubble h1 { font-size: 1.25rem; }
-        .message.assistant .bubble h2 { font-size: 1.1rem; }
-        .message.assistant .bubble h3 { font-size: 1rem; }
-        .message.assistant .bubble h4 { font-size: .9rem; }
+        .message.assistant .bubble h1 { font-size: 1.2rem; }
+        .message.assistant .bubble h2 { font-size: 1.05rem; }
+        .message.assistant .bubble h3 { font-size: .97rem; }
         .message.assistant .bubble h1:first-child,
         .message.assistant .bubble h2:first-child,
-        .message.assistant .bubble h3:first-child,
-        .message.assistant .bubble h4:first-child { margin-top: 0; }
+        .message.assistant .bubble h3:first-child { margin-top: 0; }
 
-        .message.assistant .bubble p { margin: .45em 0; }
+        .message.assistant .bubble p { margin: .4em 0; }
         .message.assistant .bubble p:first-child { margin-top: 0; }
         .message.assistant .bubble p:last-child  { margin-bottom: 0; }
 
         .message.assistant .bubble ul,
-        .message.assistant .bubble ol {
-            margin: .4em 0 .4em 1.4em;
-            padding: 0;
-        }
+        .message.assistant .bubble ol { margin: .4em 0 .4em 1.4em; }
         .message.assistant .bubble li { margin: .15em 0; }
 
         .message.assistant .bubble code {
-            font-family: 'Consolas', 'Fira Code', monospace;
-            font-size: .84em;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: .83em;
             background: rgba(255,255,255,.07);
             padding: .1em .35em;
             border-radius: 4px;
         }
         .message.assistant .bubble pre {
-            background: #12141f;
+            background: #1a1a1a;
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 10px 14px;
+            padding: 12px 16px;
             margin: .6em 0;
             overflow-x: auto;
         }
@@ -238,79 +223,130 @@ $defaultModel = getSetting('default_model', '');
             padding: .2em .8em;
             color: var(--text-muted);
         }
-        .message.system-msg .bubble {
-            background: transparent;
-            color: var(--text-muted);
-            font-size: .8rem;
-            border: none;
-            padding: 2px 0;
-        }
 
-        .message.assistant .bubble.streaming::after {
-            content: '▋';
-            animation: blink .8s step-end infinite;
-        }
-
-        @keyframes blink { 50% { opacity: 0; } }
-
-        /* ── Input row ─────────────────────────────────────────────── */
-        #input-row {
-            display: flex;
-            gap: 10px;
-            padding: 14px 20px;
-            background: var(--surface);
-            border-top: 1px solid var(--border);
+        /* ── Input outer (fade + full-width bg) ───────────────────── */
+        #input-outer {
             flex-shrink: 0;
+            background: linear-gradient(to bottom, transparent, var(--bg) 30%);
+            padding-top: 24px;
         }
 
-        #user-input {
-            flex: 1;
-            padding: 10px 14px;
-            background: var(--bg);
+        /* ── Input section (max-width centered) ────────────────────── */
+        #input-section {
+            max-width: var(--max-w);
+            margin: 0 auto;
+            padding: 0 16px 16px;
+        }
+
+        /* ── System prompt ─────────────────────────────────────────── */
+        #system-prompt-wrap {
+            display: none;
+            margin-bottom: 8px;
+        }
+
+        #system-prompt-label {
+            font-size: .75rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        #system-prompt-wrap textarea {
+            width: 100%;
+            background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--radius);
             color: var(--text);
             font-family: var(--font);
-            font-size: .9rem;
-            resize: none;
-            min-height: 44px;
-            max-height: 180px;
-            overflow-y: auto;
-            line-height: 1.5;
+            font-size: .85rem;
+            padding: 10px 14px;
+            resize: vertical;
+            min-height: 72px;
+            outline: none;
         }
 
-        #user-input:focus { outline: none; border-color: var(--accent); }
+        #system-prompt-wrap textarea:focus { border-color: var(--accent); }
+
+        /* ── Input box (textarea + action buttons) ─────────────────── */
+        #input-box {
+            display: flex;
+            align-items: flex-end;
+            gap: 6px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 10px 10px 10px 16px;
+            transition: border-color .15s;
+        }
+
+        #input-box:focus-within { border-color: rgba(108,99,255,.45); }
+
+        #user-input {
+            flex: 1;
+            background: none;
+            border: none;
+            color: var(--text);
+            font-family: var(--font);
+            font-size: .94rem;
+            resize: none;
+            min-height: 24px;
+            max-height: 200px;
+            line-height: 1.55;
+            outline: none;
+            padding: 0;
+            overflow-y: auto;
+        }
+
+        #user-input::placeholder { color: var(--text-muted); }
+
+        #clear-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: .85rem;
+            transition: background .15s, color .15s;
+        }
+
+        #clear-btn:hover { background: var(--surface-alt); color: var(--text); }
 
         #send-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            border: none;
             background: var(--accent);
             color: #fff;
-            padding: 0 20px;
-            align-self: flex-end;
-            height: 44px;
-            border-radius: var(--radius);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 1.1rem;
+            font-weight: 600;
+            transition: background .15s, opacity .15s;
         }
 
         #send-btn:hover:not(:disabled) { background: var(--accent-dark); }
-        #send-btn:disabled { opacity: .5; cursor: default; }
+        #send-btn:disabled { opacity: .35; cursor: default; }
 
-        #clear-btn {
-            background: transparent;
-            border: 1px solid var(--border);
-            color: var(--text-muted);
-            align-self: flex-end;
-            height: 44px;
+        /* ── Input meta row (system-prompt toggle + status) ────────── */
+        #input-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 2px 0;
+            min-height: 22px;
         }
 
-        #clear-btn:hover { border-color: var(--text-muted); color: var(--text); }
-
-        /* ── Scrollbar ─────────────────────────────────────────────── */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-        /* ── System-prompt section ─────────────────────────────────── */
         #system-toggle {
-            font-size: .78rem;
+            font-size: .75rem;
             color: var(--text-muted);
             background: transparent;
             border: none;
@@ -319,33 +355,17 @@ $defaultModel = getSetting('default_model', '');
             text-decoration: underline dotted;
         }
 
-        #system-prompt-wrap {
-            display: none;
-            padding: 8px 20px;
-            background: var(--surface-alt);
-            border-bottom: 1px solid var(--border);
-        }
+        #system-toggle:hover { color: var(--text); }
 
-        #system-prompt-wrap textarea {
-            width: 100%;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            color: var(--text);
-            font-family: var(--font);
-            font-size: .82rem;
-            padding: 8px 10px;
-            resize: vertical;
-            min-height: 60px;
-        }
+        #status-bar { font-size: .75rem; }
+        #status-bar.ok    { color: var(--success); }
+        #status-bar.error { color: var(--error); }
+        #status-bar.info  { color: var(--text-muted); }
 
-        #system-prompt-wrap textarea:focus { outline: none; border-color: var(--accent); }
-
-        #system-prompt-label {
-            font-size: .78rem;
-            color: var(--text-muted);
-            margin-bottom: 4px;
-        }
+        /* ── Scrollbar ─────────────────────────────────────────────── */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 3px; }
     </style>
 </head>
 <body>
@@ -353,40 +373,45 @@ $defaultModel = getSetting('default_model', '');
 <!-- ── Header ──────────────────────────────────────────────── -->
 <header>
     <h1>🤖 KHWF KI</h1>
-    <a class="admin-link" href="admin/login.php">⚙️ Admin</a>
+    <a class="admin-link" href="admin/login.php">⚙ Admin</a>
 </header>
 
-<!-- ── Config bar ─────────────────────────────────────────── -->
+<!-- ── Config bar (hidden – DOM refs kept for JS) ─────────── -->
 <div id="config-bar">
     <label for="model-select">Modell:</label>
-    <select id="model-select">
-        <option value="">– Modelle laden –</option>
-    </select>
-
-    <button id="refresh-btn" title="Modelle neu laden">⟳ Modelle laden</button>
-
-    <button id="system-toggle">System-Prompt</button>
+    <select id="model-select"><option value="">– Modelle laden –</option></select>
+    <button id="refresh-btn">⟳ Modelle laden</button>
 </div>
-
-<!-- ── System prompt (hidden by default) ──────────────────── -->
-<div id="system-prompt-wrap">
-    <div id="system-prompt-label">System-Prompt (optional):</div>
-    <textarea id="system-prompt" rows="3"
-              placeholder="Du bist ein hilfreicher Assistent …"></textarea>
-</div>
-
-<!-- ── Status bar ─────────────────────────────────────────── -->
-<div id="status-bar" class="info">Bereit. Nachricht schreiben und los!</div>
 
 <!-- ── Chat messages ──────────────────────────────────────── -->
 <div id="chat-area"></div>
 
-<!-- ── Input row ──────────────────────────────────────────── -->
-<div id="input-row">
-    <textarea id="user-input" rows="1"
-              placeholder="Nachricht schreiben … (Enter = Senden, Shift+Enter = Zeilenumbruch)"></textarea>
-    <button id="clear-btn" title="Verlauf löschen">🗑</button>
-    <button id="send-btn">Senden ↑</button>
+<!-- ── Input (bottom, centered) ───────────────────────────── -->
+<div id="input-outer">
+    <div id="input-section">
+
+        <!-- System prompt (shown on demand above the input box) -->
+        <div id="system-prompt-wrap">
+            <div id="system-prompt-label">System-Prompt (optional):</div>
+            <textarea id="system-prompt" rows="3"
+                      placeholder="Du bist ein hilfreicher Assistent …"></textarea>
+        </div>
+
+        <!-- Main input container -->
+        <div id="input-box">
+            <textarea id="user-input" rows="1"
+                      placeholder="Nachricht schreiben … (Enter = Senden, Shift+Enter = Zeilenumbruch)"></textarea>
+            <button id="clear-btn" title="Verlauf löschen">🗑</button>
+            <button id="send-btn" title="Senden">↑</button>
+        </div>
+
+        <!-- Meta row: system-prompt toggle + status -->
+        <div id="input-meta">
+            <button id="system-toggle">System-Prompt ▾</button>
+            <span id="status-bar" class="info">Bereit</span>
+        </div>
+
+    </div>
 </div>
 
 <script>
@@ -408,6 +433,22 @@ $defaultModel = getSetting('default_model', '');
     const systemToggle    = document.getElementById('system-toggle');
     const systemPromptWrap = document.getElementById('system-prompt-wrap');
     const systemPromptTA  = document.getElementById('system-prompt');
+
+    /* ── Welcome screen ──────────────────────────────────── */
+
+    function showWelcome() {
+        chatArea.innerHTML =
+            '<div id="welcome">' +
+            '<div class="welcome-logo">🤖</div>' +
+            '<h2>Wie kann ich helfen?</h2>' +
+            '<p>Stelle eine Frage – ich helfe dir gerne weiter.</p>' +
+            '</div>';
+    }
+
+    function hideWelcome() {
+        const w = document.getElementById('welcome');
+        if (w) w.remove();
+    }
 
     /* Default model set by the admin */
     const defaultModel = <?= json_encode($defaultModel) ?>;
@@ -564,12 +605,18 @@ $defaultModel = getSetting('default_model', '');
     /* ── Render a message bubble ─────────────────────────── */
 
     function appendMessage(role, content, streaming = false) {
+        hideWelcome();
+
         const wrapper = document.createElement('div');
         wrapper.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
 
-        const avatar = document.createElement('div');
-        avatar.className = 'avatar';
-        avatar.textContent = role === 'user' ? '🧑' : '🤖';
+        // Avatar only for assistant
+        if (role === 'assistant') {
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = 'KI';
+            wrapper.appendChild(avatar);
+        }
 
         const bubble = document.createElement('div');
         bubble.className = 'bubble' + (streaming ? ' streaming' : '');
@@ -579,7 +626,6 @@ $defaultModel = getSetting('default_model', '');
             bubble.textContent = content;
         }
 
-        wrapper.appendChild(avatar);
         wrapper.appendChild(bubble);
         chatArea.appendChild(wrapper);
         scrollToBottom();
@@ -730,7 +776,7 @@ $defaultModel = getSetting('default_model', '');
     clearBtn.addEventListener('click', () => {
         history    = [];
         chatArea.innerHTML = '';
-        appendSystemMessage('Verlauf gelöscht.');
+        showWelcome();
         setStatus('Verlauf gelöscht.', 'info');
     });
 
@@ -740,6 +786,7 @@ $defaultModel = getSetting('default_model', '');
     });
 
     /* ── Auto-focus input on start ───────────────────────── */
+    showWelcome();
     userInput.focus();
 })();
 </script>

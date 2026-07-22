@@ -60,17 +60,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
-            --bg:          #0f1117;
-            --surface:     #1a1d27;
-            --surface-alt: #22263a;
-            --border:      #2e3250;
+            --bg:          #212121;
+            --surface:     #2f2f2f;
+            --surface-alt: #3a3a3a;
+            --border:      rgba(255,255,255,.08);
             --accent:      #6c63ff;
             --accent-dark: #5249cc;
-            --text:        #e2e4f0;
-            --text-muted:  #8b90b0;
-            --error:       #e05c5c;
-            --radius:      10px;
-            --font:        'Segoe UI', system-ui, -apple-system, sans-serif;
+            --text:        #ececf1;
+            --text-muted:  #8e8ea0;
+            --error:       #ef4444;
+            --radius:      12px;
+            --font:        ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
         }
 
         body {
