@@ -64,10 +64,8 @@ foreach ($payload['messages'] as $msg) {
     }
 }
 
-// Allow the UI to override the base URL.
-$baseUrl = isset($payload['endpoint']) && $payload['endpoint'] !== ''
-    ? rtrim(filter_var($payload['endpoint'], FILTER_SANITIZE_URL), '/')
-    : LMSTUDIO_BASE_URL;
+// Endpoint is managed exclusively via the admin panel and loaded from the database.
+$baseUrl = LMSTUDIO_BASE_URL;
 
 $stream = isset($payload['stream']) && $payload['stream'] === true;
 

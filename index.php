@@ -59,6 +59,15 @@
             border-radius: 20px;
         }
 
+        header .admin-link {
+            margin-left: auto;
+            font-size: .78rem;
+            color: var(--text-muted);
+            text-decoration: none;
+        }
+
+        header .admin-link:hover { color: var(--text); }
+
         /* ── Config bar ───────────────────────────────────────────── */
         #config-bar {
             display: flex;
@@ -75,16 +84,6 @@
             font-size: .82rem;
             color: var(--text-muted);
             white-space: nowrap;
-        }
-
-        #endpoint-input {
-            flex: 1 1 220px;
-            padding: 6px 10px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            color: var(--text);
-            font-size: .85rem;
         }
 
         #model-select {
@@ -296,14 +295,11 @@
 <header>
     <h1>🤖 LM Studio Chat</h1>
     <span class="badge">PHP · REST API</span>
+    <a class="admin-link" href="admin/login.php">⚙️ Admin</a>
 </header>
 
 <!-- ── Config bar ─────────────────────────────────────────── -->
 <div id="config-bar">
-    <label for="endpoint-input">Endpunkt:</label>
-    <input id="endpoint-input" type="text" value="http://localhost:1234/v1"
-           placeholder="http://localhost:1234/v1" title="LM Studio API Base URL">
-
     <label for="model-select">Modell:</label>
     <select id="model-select">
         <option value="">– Modelle laden –</option>
@@ -344,7 +340,6 @@
     'use strict';
 
     /* DOM refs */
-    const endpointInput   = document.getElementById('endpoint-input');
     const modelSelect     = document.getElementById('model-select');
     const refreshBtn      = document.getElementById('refresh-btn');
     const statusBar       = document.getElementById('status-bar');
@@ -382,29 +377,15 @@
         el.style.height = Math.min(el.scrollHeight, 180) + 'px';
     }
 
-    /* ── Endpoint persistence ────────────────────────────── */
-    const LS_ENDPOINT = 'lmstudio_endpoint';
-    const saved = localStorage.getItem(LS_ENDPOINT);
-    if (saved) endpointInput.value = saved;
-
-    endpointInput.addEventListener('change', () => {
-        localStorage.setItem(LS_ENDPOINT, endpointInput.value.trim());
-    });
-
     /* ── Model loading ───────────────────────────────────── */
 
     async function loadModels() {
-        const endpoint = endpointInput.value.trim() || 'http://localhost:1234/v1';
-        localStorage.setItem(LS_ENDPOINT, endpoint);
-
         refreshBtn.disabled = true;
         setStatus('Modelle werden geladen …', 'info');
         modelSelect.innerHTML = '<option value="">– Laden … –</option>';
 
-        const params = new URLSearchParams({ endpoint });
-
         try {
-            const res  = await fetch('api/models.php?' + params.toString());
+            const res  = await fetch('api/models.php');
             const data = await res.json();
 
             if (data.error) {
@@ -491,8 +472,6 @@
         if (sysPrompt) messages.push({ role: 'system', content: sysPrompt });
         messages.push(...history);
 
-        const endpoint = endpointInput.value.trim() || 'http://localhost:1234/v1';
-
         isStreaming = true;
         sendBtn.disabled = true;
         setStatus('Antwort wird generiert …', 'info');
@@ -501,7 +480,6 @@
         let   accumulated = '';
 
         const payload = {
-            endpoint,
             model,
             messages,
             stream: true,

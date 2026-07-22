@@ -16,10 +16,8 @@ require_once __DIR__ . '/../config.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
-// Allow the UI to override the base URL (e.g. when the user changes the endpoint field).
-$baseUrl = isset($_GET['endpoint']) && $_GET['endpoint'] !== ''
-    ? rtrim(filter_var($_GET['endpoint'], FILTER_SANITIZE_URL), '/')
-    : LMSTUDIO_BASE_URL;
+// Endpoint is managed exclusively via the admin panel and loaded from the database.
+$baseUrl = LMSTUDIO_BASE_URL;
 
 $url = $baseUrl . '/models';
 
