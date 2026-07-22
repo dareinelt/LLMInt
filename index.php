@@ -353,7 +353,6 @@ $defaultModel = getSetting('default_model', '');
 <!-- ── Header ──────────────────────────────────────────────── -->
 <header>
     <h1>🤖 KHWF KI</h1>
-    <span class="badge">PHP · REST API</span>
     <a class="admin-link" href="admin/login.php">⚙️ Admin</a>
 </header>
 
