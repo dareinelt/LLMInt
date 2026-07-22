@@ -175,7 +175,69 @@ $defaultModel = getSetting('default_model', '');
         }
 
         .message.user      .bubble { background: var(--user-bg); }
-        .message.assistant .bubble { background: var(--bot-bg); border: 1px solid var(--border); }
+        .message.assistant .bubble { background: var(--bot-bg); border: 1px solid var(--border); white-space: normal; }
+
+        /* ── Markdown rendering inside assistant bubbles ───────────── */
+        .message.assistant .bubble h1,
+        .message.assistant .bubble h2,
+        .message.assistant .bubble h3,
+        .message.assistant .bubble h4 {
+            margin: .9em 0 .3em;
+            font-weight: 600;
+            line-height: 1.3;
+        }
+        .message.assistant .bubble h1 { font-size: 1.25rem; }
+        .message.assistant .bubble h2 { font-size: 1.1rem; }
+        .message.assistant .bubble h3 { font-size: 1rem; }
+        .message.assistant .bubble h4 { font-size: .9rem; }
+        .message.assistant .bubble h1:first-child,
+        .message.assistant .bubble h2:first-child,
+        .message.assistant .bubble h3:first-child,
+        .message.assistant .bubble h4:first-child { margin-top: 0; }
+
+        .message.assistant .bubble p { margin: .45em 0; }
+        .message.assistant .bubble p:first-child { margin-top: 0; }
+        .message.assistant .bubble p:last-child  { margin-bottom: 0; }
+
+        .message.assistant .bubble ul,
+        .message.assistant .bubble ol {
+            margin: .4em 0 .4em 1.4em;
+            padding: 0;
+        }
+        .message.assistant .bubble li { margin: .15em 0; }
+
+        .message.assistant .bubble code {
+            font-family: 'Consolas', 'Fira Code', monospace;
+            font-size: .84em;
+            background: rgba(255,255,255,.07);
+            padding: .1em .35em;
+            border-radius: 4px;
+        }
+        .message.assistant .bubble pre {
+            background: #12141f;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 10px 14px;
+            margin: .6em 0;
+            overflow-x: auto;
+        }
+        .message.assistant .bubble pre code {
+            background: none;
+            padding: 0;
+            font-size: .83rem;
+            white-space: pre;
+        }
+        .message.assistant .bubble hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: .7em 0;
+        }
+        .message.assistant .bubble blockquote {
+            border-left: 3px solid var(--accent);
+            margin: .5em 0;
+            padding: .2em .8em;
+            color: var(--text-muted);
+        }
         .message.system-msg .bubble {
             background: transparent;
             color: var(--text-muted);
@@ -362,12 +424,6 @@ $defaultModel = getSetting('default_model', '');
         statusBar.className   = type;
     }
 
-    function escapeHtml(str) {
-        const d = document.createElement('div');
-        d.appendChild(document.createTextNode(str));
-        return d.innerHTML;
-    }
-
     function scrollToBottom() {
         chatArea.scrollTop = chatArea.scrollHeight;
     }
@@ -375,6 +431,135 @@ $defaultModel = getSetting('default_model', '');
     function autoResizeTextarea(el) {
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 180) + 'px';
+    }
+
+    /* ── Markdown renderer (for assistant messages) ─────── */
+
+    function escapeHtmlContent(str) {
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function inlineMarkdown(str) {
+        // Bold+italic ***text***
+        str = str.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+        // Bold **text**
+        str = str.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        // Bold __text__
+        str = str.replace(/__(.+?)__/g, '<strong>$1</strong>');
+        // Italic *text*
+        str = str.replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
+        // Italic _text_
+        str = str.replace(/_([^_\n]+?)_/g, '<em>$1</em>');
+        // Inline code `code`
+        str = str.replace(/`([^`]+)`/g, '<code>$1</code>');
+        return str;
+    }
+
+    function renderMarkdown(text) {
+        const lines = text.split('\n');
+        let html = '';
+        let inCodeBlock = false;
+        let codeContent = '';
+        let inList = false;
+        let listOrdered = false;
+
+        function closeList() {
+            if (inList) {
+                html += listOrdered ? '</ol>' : '</ul>';
+                inList = false;
+            }
+        }
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+
+            // Fenced code block (``` or ~~~)
+            if (/^(`{3,}|~{3,})/.test(line)) {
+                if (!inCodeBlock) {
+                    closeList();
+                    inCodeBlock = true;
+                    codeContent = '';
+                } else {
+                    inCodeBlock = false;
+                    html += '<pre><code>' + escapeHtmlContent(codeContent) + '</code></pre>';
+                }
+                continue;
+            }
+            if (inCodeBlock) {
+                codeContent += (codeContent ? '\n' : '') + line;
+                continue;
+            }
+
+            const escaped = escapeHtmlContent(line);
+
+            // Horizontal rule
+            if (/^[-*_]{3,}\s*$/.test(line)) {
+                closeList();
+                html += '<hr>';
+                continue;
+            }
+
+            // Headings
+            const hMatch = line.match(/^(#{1,4}) (.+)$/);
+            if (hMatch) {
+                closeList();
+                const level = hMatch[1].length;
+                html += `<h${level}>${inlineMarkdown(escapeHtmlContent(hMatch[2]))}</h${level}>`;
+                continue;
+            }
+
+            // Blockquote
+            const bqMatch = line.match(/^> (.*)$/);
+            if (bqMatch) {
+                closeList();
+                html += `<blockquote>${inlineMarkdown(escapeHtmlContent(bqMatch[1]))}</blockquote>`;
+                continue;
+            }
+
+            // Ordered list item (1. text)
+            const olMatch = line.match(/^\d+\. (.+)$/);
+            if (olMatch) {
+                if (!inList || !listOrdered) { closeList(); html += '<ol>'; inList = true; listOrdered = true; }
+                html += `<li>${inlineMarkdown(escapeHtmlContent(olMatch[1]))}</li>`;
+                continue;
+            }
+
+            // Unordered list item (*, -, +)
+            const ulMatch = line.match(/^[*\-+] (.+)$/);
+            if (ulMatch) {
+                if (!inList || listOrdered) { closeList(); html += '<ul>'; inList = true; listOrdered = false; }
+                html += `<li>${inlineMarkdown(escapeHtmlContent(ulMatch[1]))}</li>`;
+                continue;
+            }
+
+            // Empty line → close list or add spacing
+            if (line.trim() === '') {
+                if (inList) {
+                    closeList();
+                } else {
+                    // Only add break if the previous output doesn't already end with a block element
+                    if (html && !/(<\/(?:h[1-4]|p|ul|ol|pre|blockquote|hr)>|<hr>)$/.test(html)) {
+                        html += '<br>';
+                    }
+                }
+                continue;
+            }
+
+            // Regular line
+            closeList();
+            html += `<p>${inlineMarkdown(escaped)}</p>`;
+        }
+
+        closeList();
+        if (inCodeBlock) {
+            html += '<pre><code>' + escapeHtmlContent(codeContent) + '</code></pre>';
+        }
+
+        return html;
     }
 
     /* ── Render a message bubble ─────────────────────────── */
@@ -389,7 +574,11 @@ $defaultModel = getSetting('default_model', '');
 
         const bubble = document.createElement('div');
         bubble.className = 'bubble' + (streaming ? ' streaming' : '');
-        bubble.textContent = content;
+        if (role === 'assistant') {
+            bubble.innerHTML = content ? renderMarkdown(content) : '';
+        } else {
+            bubble.textContent = content;
+        }
 
         wrapper.appendChild(avatar);
         wrapper.appendChild(bubble);
@@ -480,7 +669,7 @@ $defaultModel = getSetting('default_model', '');
 
                 const delta = obj.choices?.[0]?.delta?.content ?? '';
                 accumulated += delta;
-                bubble.textContent = accumulated;
+                bubble.innerHTML = renderMarkdown(accumulated);
                 scrollToBottom();
             }
 
@@ -506,7 +695,7 @@ $defaultModel = getSetting('default_model', '');
                 processSseLine(remaining);
             }
 
-            bubble.textContent = accumulated || '(Leere Antwort)';
+            bubble.innerHTML = accumulated ? renderMarkdown(accumulated) : '(Leere Antwort)';
             bubble.classList.remove('streaming');
 
             // Store assistant reply in history.
