@@ -7,7 +7,7 @@ $defaultModel = getSetting('default_model', '');
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LM Studio Chat</title>
+    <title>KHWF KI</title>
     <style>
         /* ── Reset & base ─────────────────────────────────────────── */
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -352,7 +352,7 @@ $defaultModel = getSetting('default_model', '');
 
 <!-- ── Header ──────────────────────────────────────────────── -->
 <header>
-    <h1>🤖 LM Studio Chat</h1>
+    <h1>🤖 KHWF KI</h1>
     <span class="badge">PHP · REST API</span>
     <a class="admin-link" href="admin/login.php">⚙️ Admin</a>
 </header>
