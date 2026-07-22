@@ -2,6 +2,19 @@
 <?php
 require_once __DIR__ . '/db.php';
 $defaultModel = getSetting('default_model', '');
+if ($defaultModel === '') {
+    // Fall back to the first active endpoint's configured model.
+    try {
+        $ep = getDb()->query(
+            "SELECT default_model FROM endpoints WHERE is_active = 1 AND default_model != '' ORDER BY sort_order ASC, id ASC LIMIT 1"
+        )->fetch();
+        if ($ep) {
+            $defaultModel = $ep['default_model'];
+        }
+    } catch (PDOException $e) {
+        // Ignore – endpoints table may not exist yet (before setup.php is run).
+    }
+}
 ?>
 <html lang="de">
 <head>

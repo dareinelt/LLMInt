@@ -4,9 +4,8 @@
  * admin/index.php
  *
  * Protected admin dashboard.
- * Allows managing the LM Studio endpoint / timeout settings
- * and changing the admin account password.
- * All data is persisted in the MySQL database.
+ * Manages multiple LM Studio endpoints (CRUD), shows load-balancing
+ * statistics, lists user accounts, and allows password changes.
  */
 
 session_start();
@@ -20,12 +19,6 @@ require_once __DIR__ . '/../db.php';
 
 $db = getDb();
 
-// ── Load current values ───────────────────────────────────────────────────────
-
-$currentBaseUrl    = getSetting('lmstudio_base_url', 'http://localhost:1234/v1');
-$currentTimeout    = getSetting('lmstudio_timeout', '120');
-$currentDefaultModel = getSetting('default_model', '');
-
 // ── Generate CSRF token ───────────────────────────────────────────────────────
 
 if (empty($_SESSION['csrf_token'])) {
@@ -37,6 +30,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
 $flashOk    = '';
 $flashError = '';
+$editEp     = null; // endpoint being edited (populated after POST redirect)
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (($_POST['csrf_token'] ?? '') !== $csrfToken) {
@@ -44,33 +38,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $action = $_POST['action'] ?? '';
 
-        if ($action === 'save_settings') {
-            $newUrl          = trim($_POST['lmstudio_base_url'] ?? '');
-            $newTimeout      = (int) ($_POST['lmstudio_timeout'] ?? 120);
-            $newDefaultModel = trim($_POST['default_model'] ?? '');
+        // ── Add endpoint ──────────────────────────────────────────────────────
+        if ($action === 'add_endpoint') {
+            $newUrl     = trim($_POST['ep_base_url'] ?? '');
+            $newTimeout = (int) ($_POST['ep_timeout'] ?? 120);
+            $newModel   = trim($_POST['ep_default_model'] ?? '');
+            $isActive   = isset($_POST['ep_is_active']) ? 1 : 0;
 
             if ($newUrl === '') {
-                $flashError = 'Die Endpunkt-URL darf nicht leer sein.';
+                $flashError = 'URL darf nicht leer sein.';
             } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
                 $flashError = 'Bitte eine gültige URL eingeben.';
             } elseif ($newTimeout < 1 || $newTimeout > 600) {
                 $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
-            } elseif ($newDefaultModel === '') {
-                $flashError = 'Bitte ein Standardmodell auswählen.';
             } else {
-                setSetting('lmstudio_base_url', rtrim($newUrl, '/'));
-                setSetting('lmstudio_timeout',  (string) $newTimeout);
-                setSetting('default_model',     $newDefaultModel);
-                $currentBaseUrl       = rtrim($newUrl, '/');
-                $currentTimeout       = (string) $newTimeout;
-                $currentDefaultModel  = $newDefaultModel;
-                $flashOk = 'Einstellungen gespeichert.';
+                $maxOrder = (int) $db->query(
+                    'SELECT COALESCE(MAX(sort_order), -1) FROM endpoints'
+                )->fetchColumn();
+                $db->prepare(
+                    'INSERT INTO endpoints (base_url, timeout, default_model, is_active, sort_order)
+                     VALUES (?, ?, ?, ?, ?)'
+                )->execute([rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $maxOrder + 1]);
+                $flashOk = 'Endpunkt hinzugefügt.';
             }
 
+        // ── Update endpoint ───────────────────────────────────────────────────
+        } elseif ($action === 'update_endpoint') {
+            $epId       = (int) ($_POST['ep_id'] ?? 0);
+            $newUrl     = trim($_POST['ep_base_url'] ?? '');
+            $newTimeout = (int) ($_POST['ep_timeout'] ?? 120);
+            $newModel   = trim($_POST['ep_default_model'] ?? '');
+            $isActive   = isset($_POST['ep_is_active']) ? 1 : 0;
+
+            if ($epId <= 0) {
+                $flashError = 'Ungültige Endpunkt-ID.';
+            } elseif ($newUrl === '') {
+                $flashError = 'URL darf nicht leer sein.';
+            } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
+                $flashError = 'Bitte eine gültige URL eingeben.';
+            } elseif ($newTimeout < 1 || $newTimeout > 600) {
+                $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
+            } else {
+                $db->prepare(
+                    'UPDATE endpoints
+                        SET base_url = ?, timeout = ?, default_model = ?, is_active = ?
+                      WHERE id = ?'
+                )->execute([rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $epId]);
+                $flashOk = 'Endpunkt gespeichert.';
+            }
+
+        // ── Delete endpoint ───────────────────────────────────────────────────
+        } elseif ($action === 'delete_endpoint') {
+            $epId = (int) ($_POST['ep_id'] ?? 0);
+            if ($epId > 0) {
+                $db->prepare('DELETE FROM endpoints WHERE id = ?')->execute([$epId]);
+                $flashOk = 'Endpunkt gelöscht.';
+            }
+
+        // ── Change password ───────────────────────────────────────────────────
         } elseif ($action === 'change_password') {
-            $oldPass  = $_POST['old_password']      ?? '';
-            $newPass  = $_POST['new_password']      ?? '';
-            $newPass2 = $_POST['new_password_confirm'] ?? '';
+            $oldPass  = $_POST['old_password']         ?? '';
+            $newPass  = $_POST['new_password']          ?? '';
+            $newPass2 = $_POST['new_password_confirm']  ?? '';
 
             $stmt = $db->prepare('SELECT password_hash FROM users WHERE id = ? LIMIT 1');
             $stmt->execute([$_SESSION['admin_id']]);
@@ -94,11 +123,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// ── Load user list for the "User info" section ────────────────────────────────
+// ── Load data ─────────────────────────────────────────────────────────────────
+
+$endpoints = $db->query(
+    'SELECT * FROM endpoints ORDER BY sort_order ASC, id ASC'
+)->fetchAll();
 
 $users = $db->query(
     'SELECT id, username, email, created_at, last_login FROM users ORDER BY id'
 )->fetchAll();
+
+// ── Load statistics ───────────────────────────────────────────────────────────
+
+try {
+    $epStats = $db->query('
+        SELECT
+            e.id,
+            e.base_url,
+            e.default_model,
+            e.is_active,
+            COALESCE(SUM(CASE WHEN t.status = \'running\' THEN 1 ELSE 0 END), 0) AS cnt_running,
+            COALESCE(SUM(CASE WHEN t.status = \'done\'    THEN 1 ELSE 0 END), 0) AS cnt_done,
+            COALESCE(SUM(CASE WHEN t.status = \'error\'   THEN 1 ELSE 0 END), 0) AS cnt_error,
+            COALESCE(SUM(CASE WHEN t.status = \'done\'
+                              AND t.started_at >= NOW() - INTERVAL 24 HOUR
+                         THEN 1 ELSE 0 END), 0) AS cnt_done_24h,
+            COALESCE(SUM(t.total_tokens), 0) AS sum_tokens,
+            COALESCE(ROUND(AVG(CASE WHEN t.total_tokens IS NOT NULL
+                                    THEN t.total_tokens END)), 0) AS avg_tokens
+        FROM endpoints e
+        LEFT JOIN tasks t ON t.endpoint_id = e.id
+        GROUP BY e.id, e.base_url, e.default_model, e.is_active
+        ORDER BY e.sort_order ASC, e.id ASC
+    ')->fetchAll();
+
+    $totals = $db->query('
+        SELECT
+            COALESCE(SUM(CASE WHEN status = \'running\' THEN 1 ELSE 0 END), 0) AS total_running,
+            COALESCE(SUM(CASE WHEN status = \'done\'    THEN 1 ELSE 0 END), 0) AS total_done,
+            COALESCE(SUM(CASE WHEN status = \'error\'   THEN 1 ELSE 0 END), 0) AS total_error,
+            COALESCE(SUM(CASE WHEN status = \'done\'
+                              AND started_at >= NOW() - INTERVAL 24 HOUR
+                         THEN 1 ELSE 0 END), 0) AS total_done_24h,
+            COALESCE(SUM(total_tokens), 0) AS grand_tokens
+        FROM tasks
+    ')->fetch();
+} catch (PDOException $e) {
+    $epStats = [];
+    $totals  = [
+        'total_running' => 0, 'total_done' => 0, 'total_error' => 0,
+        'total_done_24h' => 0, 'grand_tokens' => 0,
+    ];
+}
+
+// Assign a stable colour to each distinct model name.
+$palette       = ['#6c63ff', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#f97316', '#84cc16'];
+$modelColorMap = [];
+$colorIdx      = 0;
+foreach ($endpoints as $ep) {
+    $m = $ep['default_model'];
+    if ($m !== '' && !isset($modelColorMap[$m])) {
+        $modelColorMap[$m] = $palette[$colorIdx % count($palette)];
+        $colorIdx++;
+    }
+}
+
+// Populate $editEp if the URL requests editing a specific endpoint.
+if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
+    $epId = (int) $_GET['edit'];
+    foreach ($endpoints as $ep) {
+        if ($ep['id'] === $epId) {
+            $editEp = $ep;
+            break;
+        }
+    }
+}
 
 ?>
 <!DOCTYPE html>
@@ -121,6 +220,7 @@ $users = $db->query(
             --text-muted:  #8e8ea0;
             --error:       #ef4444;
             --success:     #22c55e;
+            --warning:     #f59e0b;
             --radius:      12px;
             --font:        ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
         }
@@ -155,18 +255,14 @@ $users = $db->query(
             color: var(--text-muted);
         }
 
-        .header-right a {
-            color: var(--text-muted);
-            text-decoration: none;
-        }
-
+        .header-right a { color: var(--text-muted); text-decoration: none; }
         .header-right a:hover { color: var(--text); }
 
         /* ── Main layout ─────────────────────────────────────────── */
         main {
             flex: 1;
             padding: 28px 24px;
-            max-width: 860px;
+            max-width: 980px;
             width: 100%;
             margin: 0 auto;
             display: flex;
@@ -190,28 +286,43 @@ $users = $db->query(
             border-bottom: 1px solid var(--border);
         }
 
+        .card h3 {
+            font-size: .9rem;
+            font-weight: 600;
+            margin: 20px 0 12px;
+        }
+
         /* ── Form elements ────────────────────────────────────────── */
-        .form-group { margin-bottom: 16px; }
+        .form-group { margin-bottom: 14px; }
 
         .form-row {
             display: flex;
             flex-wrap: wrap;
-            gap: 16px;
+            gap: 14px;
         }
 
-        .form-row .form-group { flex: 1 1 200px; }
+        .form-row .form-group { flex: 1 1 180px; }
 
         label {
             display: block;
             font-size: .82rem;
             color: var(--text-muted);
-            margin-bottom: 6px;
+            margin-bottom: 5px;
+        }
+
+        label.inline {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text);
+            cursor: pointer;
         }
 
         input[type="text"],
         input[type="url"],
         input[type="number"],
-        input[type="password"] {
+        input[type="password"],
+        select {
             width: 100%;
             padding: 8px 12px;
             background: var(--bg);
@@ -222,7 +333,7 @@ $users = $db->query(
             font-family: var(--font);
         }
 
-        input:focus { outline: none; border-color: var(--accent); }
+        input:focus, select:focus { outline: none; border-color: var(--accent); }
 
         .hint {
             font-size: .75rem;
@@ -230,6 +341,7 @@ $users = $db->query(
             margin-top: 4px;
         }
 
+        /* ── Buttons ─────────────────────────────────────────────── */
         .btn {
             padding: 8px 20px;
             border: none;
@@ -238,10 +350,23 @@ $users = $db->query(
             font-weight: 500;
             cursor: pointer;
             transition: background .15s;
+            background: var(--surface-alt);
+            color: var(--text);
         }
+
+        .btn:hover { background: #464646; }
 
         .btn-primary { background: var(--accent); color: #fff; }
         .btn-primary:hover { background: var(--accent-dark); }
+
+        .btn-danger { background: rgba(239,68,68,.15); color: var(--error); }
+        .btn-danger:hover { background: rgba(239,68,68,.25); }
+
+        .btn-sm {
+            padding: 4px 12px;
+            font-size: .8rem;
+            border-radius: 8px;
+        }
 
         /* ── Flash messages ──────────────────────────────────────── */
         .flash-ok {
@@ -264,28 +389,112 @@ $users = $db->query(
             margin-bottom: 18px;
         }
 
-        /* ── User table ──────────────────────────────────────────── */
-        .user-table {
+        /* ── Generic table ───────────────────────────────────────── */
+        .data-table {
             width: 100%;
             border-collapse: collapse;
             font-size: .85rem;
         }
 
-        .user-table th {
+        .data-table th {
             text-align: left;
             padding: 8px 12px;
             color: var(--text-muted);
             font-weight: 500;
             border-bottom: 1px solid var(--border);
+            white-space: nowrap;
         }
 
-        .user-table td {
+        .data-table td {
             padding: 10px 12px;
             border-bottom: 1px solid var(--surface-alt);
+            vertical-align: middle;
         }
 
-        .user-table tr:last-child td { border-bottom: none; }
+        .data-table tr:last-child td { border-bottom: none; }
 
+        /* ── Model badge ─────────────────────────────────────────── */
+        .model-badge {
+            display: inline-block;
+            font-size: .72rem;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 20px;
+            color: #fff;
+            white-space: nowrap;
+            max-width: 220px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .badge-empty {
+            background: var(--surface-alt);
+            color: var(--text-muted);
+        }
+
+        /* ── Status dots ─────────────────────────────────────────── */
+        .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+
+        .dot-on  { background: var(--success); }
+        .dot-off { background: var(--text-muted); }
+
+        /* ── Stat summary boxes ──────────────────────────────────── */
+        .stat-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-box {
+            flex: 1 1 120px;
+            background: var(--surface-alt);
+            border-radius: var(--radius);
+            padding: 14px 16px;
+            text-align: center;
+        }
+
+        .stat-box .stat-val {
+            font-size: 1.6rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .stat-box .stat-lbl {
+            font-size: .75rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .stat-running { color: var(--warning); }
+        .stat-done    { color: var(--success); }
+        .stat-error   { color: var(--error); }
+        .stat-tokens  { color: var(--accent); }
+
+        /* ── Add/edit form ───────────────────────────────────────── */
+        .ep-form-section {
+            margin-top: 24px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        .ep-form-section h3 { margin-top: 0; }
+
+        /* ── Action row for forms ────────────────────────────────── */
+        .action-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        /* ── User table ──────────────────────────────────────────── */
         .badge-you {
             font-size: .7rem;
             background: var(--accent);
@@ -295,6 +504,9 @@ $users = $db->query(
             margin-left: 6px;
             vertical-align: middle;
         }
+
+        /* ── Separator ───────────────────────────────────────────── */
+        .sep { color: var(--text-muted); }
     </style>
 </head>
 <body>
@@ -319,58 +531,218 @@ $users = $db->query(
         <div class="flash-error">✗ <?= htmlspecialchars($flashError) ?></div>
     <?php endif; ?>
 
-    <!-- ── Endpoint / model settings ─────────────────────────────────────── -->
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Endpoint Management
+    ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card">
-        <h2>🔗 Endpunkt- und Verbindungseinstellungen</h2>
-        <form method="POST" action="">
-            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
-            <input type="hidden" name="action" value="save_settings">
+        <h2>🔗 Endpunkte</h2>
 
-            <div class="form-group">
-                <label for="lmstudio_base_url">LM Studio API-Endpunkt (Base URL)</label>
-                <input type="url" id="lmstudio_base_url" name="lmstudio_base_url"
-                       value="<?= htmlspecialchars($currentBaseUrl) ?>"
-                       placeholder="http://localhost:1234/v1" required>
-                <p class="hint">Vollständige Base URL der LM Studio REST API, z. B. http://192.168.1.10:1234/v1</p>
-            </div>
+        <?php if (empty($endpoints)): ?>
+            <p style="color:var(--text-muted);margin-bottom:16px;">Noch keine Endpunkte konfiguriert. Füge unten einen hinzu.</p>
+        <?php else: ?>
 
-            <div class="form-group" style="max-width:200px">
-                <label for="lmstudio_timeout">Anfrage-Timeout (Sekunden)</label>
-                <input type="number" id="lmstudio_timeout" name="lmstudio_timeout"
-                       value="<?= htmlspecialchars($currentTimeout) ?>"
-                       min="1" max="600" required>
-                <p class="hint">Maximale Wartezeit pro Anfrage (1–600 s).</p>
-            </div>
-
-            <div class="form-group">
-                <label for="default_model">Standardmodell</label>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                    <select id="default_model" name="default_model"
-                            style="flex:1 1 260px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.88rem;">
-                        <option value="">– Modelle laden –</option>
-                        <?php if ($currentDefaultModel !== ''): ?>
-                            <option value="<?= htmlspecialchars($currentDefaultModel) ?>" selected>
-                                <?= htmlspecialchars($currentDefaultModel) ?>
-                            </option>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>URL</th>
+                    <th>Timeout</th>
+                    <th>Standard-Modell</th>
+                    <th>Status</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($endpoints as $ep): ?>
+                <tr>
+                    <td style="color:var(--text-muted)"><?= $ep['id'] ?></td>
+                    <td style="font-family:monospace;font-size:.8rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($ep['base_url']) ?>">
+                        <?= htmlspecialchars($ep['base_url']) ?>
+                    </td>
+                    <td><?= (int) $ep['timeout'] ?>s</td>
+                    <td>
+                        <?php if ($ep['default_model'] !== ''): ?>
+                            <span class="model-badge"
+                                  style="background:<?= htmlspecialchars($modelColorMap[$ep['default_model']] ?? '#555') ?>"
+                                  title="<?= htmlspecialchars($ep['default_model']) ?>">
+                                <?= htmlspecialchars($ep['default_model']) ?>
+                            </span>
+                        <?php else: ?>
+                            <span class="model-badge badge-empty">–</span>
                         <?php endif; ?>
-                    </select>
-                    <button type="button" id="load-models-btn"
-                            style="padding:8px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.85rem;cursor:pointer;">
-                        ⟳ Modelle laden
-                    </button>
-                </div>
-                <p class="hint">Das vom Nutzer verwendete Modell. Dieses wird automatisch beim Chat eingesetzt.</p>
-            </div>
+                    </td>
+                    <td>
+                        <span class="dot <?= $ep['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= $ep['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
+                    </td>
+                    <td>
+                        <button type="button" class="btn btn-sm"
+                                onclick="startEdit(<?= htmlspecialchars(json_encode($ep), ENT_QUOTES) ?>)">
+                            ✏ Bearbeiten
+                        </button>
+                        <span class="sep"> </span>
+                        <form method="POST" style="display:inline"
+                              onsubmit="return confirm('Endpunkt #<?= $ep['id'] ?> wirklich löschen?')">
+                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                            <input type="hidden" name="action"     value="delete_endpoint">
+                            <input type="hidden" name="ep_id"      value="<?= (int) $ep['id'] ?>">
+                            <button type="submit" class="btn btn-sm btn-danger">🗑 Löschen</button>
+                        </form>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
 
-            <button type="submit" class="btn btn-primary">Einstellungen speichern</button>
-        </form>
+        <?php endif; ?>
+
+        <!-- ── Add / Edit form ─────────────────────────────────────────────── -->
+        <div class="ep-form-section">
+            <h3 id="ep-form-title">➕ Endpunkt hinzufügen</h3>
+
+            <form method="POST" id="ep-form">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action"     id="ep-action" value="add_endpoint">
+                <input type="hidden" name="ep_id"      id="ep-id"     value="">
+
+                <div class="form-row">
+                    <div class="form-group" style="flex:4">
+                        <label for="ep-url">API-Endpunkt (Base URL) *</label>
+                        <input type="url" id="ep-url" name="ep_base_url"
+                               placeholder="http://192.168.1.10:1234/v1" required
+                               value="<?= $editEp ? htmlspecialchars($editEp['base_url']) : '' ?>">
+                        <p class="hint">Vollständige Base URL der LM Studio REST API.</p>
+                    </div>
+                    <div class="form-group" style="flex:1;min-width:140px">
+                        <label for="ep-timeout">Timeout (Sekunden) *</label>
+                        <input type="number" id="ep-timeout" name="ep_timeout"
+                               min="1" max="600" required
+                               value="<?= $editEp ? (int) $editEp['timeout'] : 120 ?>">
+                        <p class="hint">1 – 600 s</p>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="ep-model-input">Standard-Modell</label>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                        <input type="text" list="ep-model-list" id="ep-model-input"
+                               name="ep_default_model"
+                               placeholder="Modell-ID eingeben oder Modelle laden …"
+                               style="flex:1 1 260px"
+                               value="<?= $editEp ? htmlspecialchars($editEp['default_model']) : '' ?>">
+                        <datalist id="ep-model-list"></datalist>
+                        <button type="button" id="ep-load-btn" class="btn">
+                            ⟳ Modelle laden
+                        </button>
+                    </div>
+                    <p class="hint">
+                        Endpunkte mit identischem Standard-Modell bilden automatisch eine Load-Balancing-Gruppe.
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label class="inline">
+                        <input type="checkbox" id="ep-active" name="ep_is_active"
+                               <?= (!$editEp || $editEp['is_active']) ? 'checked' : '' ?>>
+                        Endpunkt aktiv (nimmt Anfragen entgegen)
+                    </label>
+                </div>
+
+                <div class="action-row">
+                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                    <button type="button" class="btn" onclick="resetForm()">✕ Abbrechen</button>
+                </div>
+            </form>
+        </div>
     </div>
 
-    <!-- ── User info / change password ───────────────────────────────────── -->
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Statistics
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card">
+        <h2>📊 Statistik &amp; Verteilung</h2>
+
+        <!-- Summary boxes -->
+        <div class="stat-grid">
+            <div class="stat-box">
+                <div class="stat-val stat-running"><?= number_format((int) $totals['total_running']) ?></div>
+                <div class="stat-lbl">Laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done"><?= number_format((int) $totals['total_done_24h']) ?></div>
+                <div class="stat-lbl">Erledigt (24 h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done"><?= number_format((int) $totals['total_done']) ?></div>
+                <div class="stat-lbl">Erledigt (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-error"><?= number_format((int) $totals['total_error']) ?></div>
+                <div class="stat-lbl">Fehler (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_tokens']) ?></div>
+                <div class="stat-lbl">Token (gesamt)</div>
+            </div>
+        </div>
+
+        <?php if (empty($epStats)): ?>
+            <p style="color:var(--text-muted)">Noch keine Aufgaben verarbeitet.</p>
+        <?php else: ?>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Endpunkt</th>
+                    <th>Modell-Gruppe</th>
+                    <th style="text-align:right">Laufend</th>
+                    <th style="text-align:right">Erledigt (24 h)</th>
+                    <th style="text-align:right">Erledigt (gesamt)</th>
+                    <th style="text-align:right">Fehler</th>
+                    <th style="text-align:right">⌀ Token</th>
+                    <th style="text-align:right">Token gesamt</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($epStats as $s): ?>
+                <tr>
+                    <td style="font-family:monospace;font-size:.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($s['base_url']) ?>">
+                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= htmlspecialchars($s['base_url']) ?>
+                    </td>
+                    <td>
+                        <?php if ($s['default_model'] !== ''): ?>
+                            <span class="model-badge"
+                                  style="background:<?= htmlspecialchars($modelColorMap[$s['default_model']] ?? '#555') ?>">
+                                <?= htmlspecialchars($s['default_model']) ?>
+                            </span>
+                        <?php else: ?>
+                            <span class="model-badge badge-empty">–</span>
+                        <?php endif; ?>
+                    </td>
+                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
+                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
+                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
+                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
+                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['avg_tokens']) ?></td>
+                    <td style="text-align:right;color:var(--accent)"><?= number_format((int) $s['sum_tokens']) ?></td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <?php endif; ?>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         User accounts
+    ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card">
         <h2>👤 Benutzerkonten</h2>
 
-        <table class="user-table">
+        <table class="data-table">
             <thead>
                 <tr>
                     <th>Benutzername</th>
@@ -397,10 +769,12 @@ $users = $db->query(
         </table>
     </div>
 
-    <!-- ── Change password ────────────────────────────────────────────────── -->
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Change password
+    ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card">
         <h2>🔑 Passwort ändern</h2>
-        <form method="POST" action="">
+        <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
             <input type="hidden" name="action" value="change_password">
 
@@ -432,31 +806,99 @@ $users = $db->query(
 
 <script>
 (function () {
-    const loadBtn  = document.getElementById('load-models-btn');
-    const modelSel = document.getElementById('default_model');
-    const baseUrl  = <?= json_encode($currentBaseUrl) ?>;
-    const current  = <?= json_encode($currentDefaultModel) ?>;
+    'use strict';
 
+    const formTitle    = document.getElementById('ep-form-title');
+    const actionInput  = document.getElementById('ep-action');
+    const idInput      = document.getElementById('ep-id');
+    const urlInput     = document.getElementById('ep-url');
+    const timeoutInput = document.getElementById('ep-timeout');
+    const modelInput   = document.getElementById('ep-model-input');
+    const modelList    = document.getElementById('ep-model-list');
+    const activeCheck  = document.getElementById('ep-active');
+    const loadBtn      = document.getElementById('ep-load-btn');
+
+    // Pre-fill the form when the page loaded with ?edit=<id>
+    <?php if ($editEp): ?>
+    document.getElementById('ep-form-title').textContent = '✏ Endpunkt bearbeiten';
+    document.getElementById('ep-action').value = 'update_endpoint';
+    document.getElementById('ep-id').value     = <?= (int) $editEp['id'] ?>;
+    document.querySelector('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
+    <?php endif; ?>
+
+    /**
+     * Populate the add/edit form with an existing endpoint's values.
+     * Called by the "Edit" button in each table row.
+     */
+    window.startEdit = function (ep) {
+        formTitle.textContent  = '✏ Endpunkt bearbeiten';
+        actionInput.value      = 'update_endpoint';
+        idInput.value          = ep.id;
+        urlInput.value         = ep.base_url;
+        timeoutInput.value     = ep.timeout;
+        modelInput.value       = ep.default_model || '';
+        activeCheck.checked    = ep.is_active == 1;
+        // Clear datalist options from a previous load-models call.
+        modelList.innerHTML    = '';
+        document.querySelector('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
+    };
+
+    /** Reset form back to "add" mode. */
+    window.resetForm = function () {
+        formTitle.textContent = '➕ Endpunkt hinzufügen';
+        actionInput.value     = 'add_endpoint';
+        idInput.value         = '';
+        urlInput.value        = '';
+        timeoutInput.value    = '120';
+        modelInput.value      = '';
+        activeCheck.checked   = true;
+        modelList.innerHTML   = '';
+    };
+
+    /** Load available models from the URL currently typed in the form. */
     loadBtn.addEventListener('click', async function () {
-        loadBtn.disabled = true;
+        const url = urlInput.value.trim();
+        if (!url) {
+            alert('Bitte zuerst eine URL eingeben.');
+            return;
+        }
+
+        loadBtn.disabled    = true;
         loadBtn.textContent = '⟳ Laden …';
+
         try {
-            const res  = await fetch('../api/models.php');
+            const res  = await fetch('../api/models.php?endpoint_url=' + encodeURIComponent(url) + '&timeout=10');
             const data = await res.json();
-            if (data.error) { alert('Fehler: ' + data.error); return; }
+
+            if (data.error) {
+                alert('Fehler: ' + data.error);
+                return;
+            }
+
             const models = data.models || [];
-            if (models.length === 0) { alert('Keine Modelle gefunden.'); return; }
-            modelSel.innerHTML = models
-                .map(m => `<option value="${m.id}"${m.id === current ? ' selected' : ''}>${m.id}</option>`)
+            if (models.length === 0) {
+                alert('Keine Modelle gefunden.');
+                return;
+            }
+
+            // Populate the <datalist> so the text input offers autocomplete.
+            modelList.innerHTML = models
+                .map(m => `<option value="${m.id.replace(/"/g, '&quot;')}">`)
                 .join('');
+
+            // If the input is empty, pre-fill with the first model.
+            if (!modelInput.value && models[0]) {
+                modelInput.value = models[0].id;
+            }
         } catch (e) {
             alert('Netzwerkfehler: ' + e.message);
         } finally {
-            loadBtn.disabled = false;
+            loadBtn.disabled    = false;
             loadBtn.textContent = '⟳ Modelle laden';
         }
     });
 })();
 </script>
+
 </body>
 </html>

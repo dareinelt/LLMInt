@@ -43,6 +43,42 @@ $db->exec("
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 
+// Endpoints: each row represents one LM Studio (or compatible) API instance.
+// Endpoints sharing the same default_model form a load-balancing group.
+$db->exec("
+    CREATE TABLE IF NOT EXISTS endpoints (
+        id            INT          NOT NULL AUTO_INCREMENT,
+        base_url      VARCHAR(500) NOT NULL,
+        timeout       INT          NOT NULL DEFAULT 120,
+        default_model VARCHAR(255) NOT NULL DEFAULT '',
+        is_active     TINYINT(1)   NOT NULL DEFAULT 1,
+        sort_order    INT          NOT NULL DEFAULT 0,
+        created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                   ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+");
+
+// Tasks: records every chat request dispatched to an endpoint.
+// Used for load-balancing capacity tracking and later statistical analysis.
+$db->exec("
+    CREATE TABLE IF NOT EXISTS tasks (
+        id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        endpoint_id       INT             NOT NULL,
+        model             VARCHAR(255)    NOT NULL,
+        status            ENUM('running','done','error') NOT NULL DEFAULT 'running',
+        prompt_tokens     INT UNSIGNED    NULL,
+        completion_tokens INT UNSIGNED    NULL,
+        total_tokens      INT UNSIGNED    NULL,
+        started_at        TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        finished_at       TIMESTAMP(3)    NULL,
+        PRIMARY KEY (id),
+        KEY idx_endpoint_status (endpoint_id, status),
+        KEY idx_model_started   (model, started_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+");
+
 echo "Tables created (or already exist).\n";
 
 // ── Seed default settings ────────────────────────────────────────────────────
@@ -61,6 +97,33 @@ foreach ($defaults as $key => $value) {
 }
 
 echo "Default settings seeded.\n";
+
+// ── Migrate / seed endpoints table ───────────────────────────────────────────
+
+$epCount = (int) $db->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
+
+if ($epCount === 0) {
+    // Carry over the old single-endpoint settings if they were customised.
+    $oldUrl     = getSetting('lmstudio_base_url', '');
+    $oldTimeout = max(1, (int) getSetting('lmstudio_timeout', '120'));
+    $oldModel   = getSetting('default_model', '');
+
+    $seedUrl = ($oldUrl !== '' && $oldUrl !== 'http://localhost:1234/v1')
+        ? $oldUrl
+        : 'http://localhost:1234/v1';
+
+    $db->prepare(
+        'INSERT INTO endpoints (base_url, timeout, default_model, is_active, sort_order) VALUES (?, ?, ?, 1, 0)'
+    )->execute([$seedUrl, $oldTimeout, $oldModel]);
+
+    if ($seedUrl !== 'http://localhost:1234/v1') {
+        echo "Existing endpoint migrated to endpoints table.\n";
+    } else {
+        echo "Default endpoint seeded.\n";
+    }
+} else {
+    echo "Endpoints already configured – skipping seed.\n";
+}
 
 // ── Seed default admin user (only when no users exist) ───────────────────────
 
