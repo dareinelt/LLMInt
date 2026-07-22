@@ -22,8 +22,9 @@ $db = getDb();
 
 // ── Load current values ───────────────────────────────────────────────────────
 
-$currentBaseUrl = getSetting('lmstudio_base_url', 'http://localhost:1234/v1');
-$currentTimeout = getSetting('lmstudio_timeout', '120');
+$currentBaseUrl    = getSetting('lmstudio_base_url', 'http://localhost:1234/v1');
+$currentTimeout    = getSetting('lmstudio_timeout', '120');
+$currentDefaultModel = getSetting('default_model', '');
 
 // ── Generate CSRF token ───────────────────────────────────────────────────────
 
@@ -44,8 +45,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
 
         if ($action === 'save_settings') {
-            $newUrl     = trim($_POST['lmstudio_base_url'] ?? '');
-            $newTimeout = (int) ($_POST['lmstudio_timeout'] ?? 120);
+            $newUrl          = trim($_POST['lmstudio_base_url'] ?? '');
+            $newTimeout      = (int) ($_POST['lmstudio_timeout'] ?? 120);
+            $newDefaultModel = trim($_POST['default_model'] ?? '');
 
             if ($newUrl === '') {
                 $flashError = 'Die Endpunkt-URL darf nicht leer sein.';
@@ -53,11 +55,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashError = 'Bitte eine gültige URL eingeben.';
             } elseif ($newTimeout < 1 || $newTimeout > 600) {
                 $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
+            } elseif ($newDefaultModel === '') {
+                $flashError = 'Bitte ein Standardmodell auswählen.';
             } else {
                 setSetting('lmstudio_base_url', rtrim($newUrl, '/'));
                 setSetting('lmstudio_timeout',  (string) $newTimeout);
-                $currentBaseUrl = rtrim($newUrl, '/');
-                $currentTimeout = (string) $newTimeout;
+                setSetting('default_model',     $newDefaultModel);
+                $currentBaseUrl       = rtrim($newUrl, '/');
+                $currentTimeout       = (string) $newTimeout;
+                $currentDefaultModel  = $newDefaultModel;
                 $flashOk = 'Einstellungen gespeichert.';
             }
 
@@ -336,6 +342,26 @@ $users = $db->query(
                 <p class="hint">Maximale Wartezeit pro Anfrage (1–600 s).</p>
             </div>
 
+            <div class="form-group">
+                <label for="default_model">Standardmodell</label>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <select id="default_model" name="default_model"
+                            style="flex:1 1 260px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.88rem;">
+                        <option value="">– Modelle laden –</option>
+                        <?php if ($currentDefaultModel !== ''): ?>
+                            <option value="<?= htmlspecialchars($currentDefaultModel) ?>" selected>
+                                <?= htmlspecialchars($currentDefaultModel) ?>
+                            </option>
+                        <?php endif; ?>
+                    </select>
+                    <button type="button" id="load-models-btn"
+                            style="padding:8px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.85rem;cursor:pointer;">
+                        ⟳ Modelle laden
+                    </button>
+                </div>
+                <p class="hint">Das vom Nutzer verwendete Modell. Dieses wird automatisch beim Chat eingesetzt.</p>
+            </div>
+
             <button type="submit" class="btn btn-primary">Einstellungen speichern</button>
         </form>
     </div>
@@ -403,5 +429,34 @@ $users = $db->query(
     </div>
 
 </main>
+
+<script>
+(function () {
+    const loadBtn  = document.getElementById('load-models-btn');
+    const modelSel = document.getElementById('default_model');
+    const baseUrl  = <?= json_encode($currentBaseUrl) ?>;
+    const current  = <?= json_encode($currentDefaultModel) ?>;
+
+    loadBtn.addEventListener('click', async function () {
+        loadBtn.disabled = true;
+        loadBtn.textContent = '⟳ Laden …';
+        try {
+            const res  = await fetch('../api/models.php');
+            const data = await res.json();
+            if (data.error) { alert('Fehler: ' + data.error); return; }
+            const models = data.models || [];
+            if (models.length === 0) { alert('Keine Modelle gefunden.'); return; }
+            modelSel.innerHTML = models
+                .map(m => `<option value="${m.id}"${m.id === current ? ' selected' : ''}>${m.id}</option>`)
+                .join('');
+        } catch (e) {
+            alert('Netzwerkfehler: ' + e.message);
+        } finally {
+            loadBtn.disabled = false;
+            loadBtn.textContent = '⟳ Modelle laden';
+        }
+    });
+})();
+</script>
 </body>
 </html>

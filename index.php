@@ -1,4 +1,8 @@
 <!DOCTYPE html>
+<?php
+require_once __DIR__ . '/db.php';
+$defaultModel = getSetting('default_model', '');
+?>
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -70,14 +74,7 @@
 
         /* ── Config bar ───────────────────────────────────────────── */
         #config-bar {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 20px;
-            background: var(--surface-alt);
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
+            display: none;
         }
 
         #config-bar label {
@@ -318,7 +315,7 @@
 </div>
 
 <!-- ── Status bar ─────────────────────────────────────────── -->
-<div id="status-bar" class="info">Bereit. Bitte zuerst Modelle laden.</div>
+<div id="status-bar" class="info">Bereit. Nachricht schreiben und los!</div>
 
 <!-- ── Chat messages ──────────────────────────────────────── -->
 <div id="chat-area"></div>
@@ -351,6 +348,9 @@
     const systemPromptWrap = document.getElementById('system-prompt-wrap');
     const systemPromptTA  = document.getElementById('system-prompt');
 
+    /* Default model set by the admin */
+    const defaultModel = <?= json_encode($defaultModel) ?>;
+
     /* Chat history (role / content pairs sent to the API) */
     let history = [];
     let isStreaming = false;
@@ -376,46 +376,6 @@
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 180) + 'px';
     }
-
-    /* ── Model loading ───────────────────────────────────── */
-
-    async function loadModels() {
-        refreshBtn.disabled = true;
-        setStatus('Modelle werden geladen …', 'info');
-        modelSelect.innerHTML = '<option value="">– Laden … –</option>';
-
-        try {
-            const res  = await fetch('api/models.php');
-            const data = await res.json();
-
-            if (data.error) {
-                setStatus('Fehler: ' + data.error, 'error');
-                modelSelect.innerHTML = '<option value="">– Fehler –</option>';
-                return;
-            }
-
-            const models = data.models || [];
-
-            if (models.length === 0) {
-                setStatus('Keine Modelle gefunden. Ist LM Studio gestartet?', 'error');
-                modelSelect.innerHTML = '<option value="">– Keine Modelle –</option>';
-                return;
-            }
-
-            modelSelect.innerHTML = models
-                .map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)}</option>`)
-                .join('');
-
-            setStatus(`${models.length} Modell(e) geladen. Modell auswählen und chatten!`, 'ok');
-        } catch (err) {
-            setStatus('Netzwerkfehler: ' + err.message, 'error');
-            modelSelect.innerHTML = '<option value="">– Fehler –</option>';
-        } finally {
-            refreshBtn.disabled = false;
-        }
-    }
-
-    refreshBtn.addEventListener('click', loadModels);
 
     /* ── Render a message bubble ─────────────────────────── */
 
@@ -454,10 +414,10 @@
 
     async function sendMessage() {
         const text  = userInput.value.trim();
-        const model = modelSelect.value;
+        const model = defaultModel;
 
         if (!text)  { userInput.focus(); return; }
-        if (!model) { setStatus('Bitte zuerst ein Modell auswählen.', 'error'); return; }
+        if (!model) { setStatus('Kein Standardmodell konfiguriert. Bitte im Admin-Bereich ein Modell festlegen.', 'error'); return; }
         if (isStreaming) return;
 
         // Add user message to UI + history.
@@ -584,8 +544,8 @@
         systemPromptWrap.style.display = hidden ? 'block' : 'none';
     });
 
-    /* ── Auto-load models on start ───────────────────────── */
-    loadModels();
+    /* ── Auto-focus input on start ───────────────────────── */
+    userInput.focus();
 })();
 </script>
 </body>
