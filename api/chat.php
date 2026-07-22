@@ -82,11 +82,9 @@ $url = $baseUrl . '/chat/completions';
 
 $ch = curl_init($url);
 curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => !$stream,
-    CURLOPT_POST           => true,
-    CURLOPT_POSTFIELDS     => json_encode($forwardPayload),
-    CURLOPT_TIMEOUT        => LMSTUDIO_TIMEOUT,
-    CURLOPT_HTTPHEADER     => [
+    CURLOPT_POST        => true,
+    CURLOPT_POSTFIELDS  => json_encode($forwardPayload),
+    CURLOPT_HTTPHEADER  => [
         'Content-Type: application/json',
         'Accept: application/json',
     ],
@@ -94,9 +92,17 @@ curl_setopt_array($ch, [
 
 if ($stream) {
     // Stream the Server-Sent Events from LM Studio directly to the client.
+    ignore_user_abort(true);
+    @set_time_limit(0);
     header('Content-Type: text/event-stream; charset=utf-8');
     header('Cache-Control: no-cache');
     header('X-Accel-Buffering: no');
+
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => false,
+        CURLOPT_CONNECTTIMEOUT => LMSTUDIO_TIMEOUT,
+        CURLOPT_TIMEOUT        => 0,
+    ]);
 
     curl_setopt($ch, CURLOPT_WRITEFUNCTION, static function ($ch, $data): int {
         echo $data;
@@ -119,6 +125,11 @@ if ($stream) {
 }
 
 // Non-streaming path.
+curl_setopt_array($ch, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_TIMEOUT        => LMSTUDIO_TIMEOUT,
+]);
+
 $body     = curl_exec($ch);
 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $curlErr  = curl_error($ch);

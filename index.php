@@ -461,8 +461,30 @@ $defaultModel = getSetting('default_model', '');
             const reader  = res.body.getReader();
             const decoder = new TextDecoder('utf-8');
             let   buffer  = '';
+            let   streamEnded = false;
 
-            while (true) {
+            function processSseLine(line) {
+                const match = line.match(/^data:\s?(.*)$/);
+                if (!match) return;
+                const raw = match[1].trim();
+                if (!raw) return;
+                if (raw === '[DONE]') {
+                    streamEnded = true;
+                    return;
+                }
+
+                let obj;
+                try { obj = JSON.parse(raw); } catch { return; }
+
+                if (obj.error) throw new Error(obj.error);
+
+                const delta = obj.choices?.[0]?.delta?.content ?? '';
+                accumulated += delta;
+                bubble.textContent = accumulated;
+                scrollToBottom();
+            }
+
+            while (!streamEnded) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
@@ -471,32 +493,17 @@ $defaultModel = getSetting('default_model', '');
                 buffer = lines.pop(); // keep incomplete line
 
                 for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    const raw = line.slice(6).trim();
-                    if (raw === '[DONE]') continue;
-
-                    let obj;
-                    try { obj = JSON.parse(raw); } catch { continue; }
-
-                    if (obj.error) throw new Error(obj.error);
-
-                    const delta = obj.choices?.[0]?.delta?.content ?? '';
-                    accumulated += delta;
-                    bubble.textContent = accumulated;
-                    scrollToBottom();
+                    processSseLine(line.trimEnd());
+                    if (streamEnded) break;
                 }
             }
 
+            buffer += decoder.decode();
+
             // Flush remaining buffer.
-            if (buffer.startsWith('data: ')) {
-                const raw = buffer.slice(6).trim();
-                if (raw && raw !== '[DONE]') {
-                    try {
-                        const obj   = JSON.parse(raw);
-                        const delta = obj.choices?.[0]?.delta?.content ?? '';
-                        accumulated += delta;
-                    } catch { /* ignore */ }
-                }
+            const remaining = buffer.trim();
+            if (remaining !== '' && !streamEnded) {
+                processSseLine(remaining);
             }
 
             bubble.textContent = accumulated || '(Leere Antwort)';
