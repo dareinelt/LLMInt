@@ -150,7 +150,12 @@ try {
                          THEN 1 ELSE 0 END), 0) AS cnt_done_24h,
             COALESCE(SUM(t.total_tokens), 0) AS sum_tokens,
             COALESCE(ROUND(AVG(CASE WHEN t.total_tokens IS NOT NULL
-                                    THEN t.total_tokens END)), 0) AS avg_tokens
+                                    THEN t.total_tokens END)), 0) AS avg_tokens,
+            COALESCE(SUM(CASE WHEN t.status = \'done\'
+                              AND DATE(t.started_at) = CURDATE()
+                         THEN 1 ELSE 0 END), 0) AS today_jobs,
+            COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
+                         THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0) AS today_tokens
         FROM endpoints e
         LEFT JOIN tasks t ON t.endpoint_id = e.id
         GROUP BY e.id, e.base_url, e.default_model, e.is_active
@@ -507,6 +512,68 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         /* ── Separator ───────────────────────────────────────────── */
         .sep { color: var(--text-muted); }
+
+        /* ── Load-distribution tree ──────────────────────────────── */
+        #load-tree-container {
+            overflow-x: auto;
+            padding: 8px 0 4px;
+        }
+
+        #load-tree-svg {
+            display: block;
+            width: 100%;
+        }
+
+        .tree-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 18px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tree-header-row h2 { margin: 0; padding: 0; border: none; }
+
+        .tree-refresh-info {
+            font-size: .75rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .tree-refresh-dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        @keyframes tree-pulse {
+            0%,100% { transform: scale(1); opacity: 1; }
+            50%      { transform: scale(1.8); opacity: .35; }
+        }
+
+        .pulse-dot {
+            animation: tree-pulse 1.4s ease-in-out infinite;
+            transform-origin: center;
+        }
+
+        @keyframes tree-fade-in {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+
+        .tree-refresh-spin {
+            display: inline-block;
+            animation: spin .8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -737,6 +804,25 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
+         Load distribution tree
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="load-tree-card">
+        <div class="tree-header-row">
+            <h2 style="margin-bottom:0;padding-bottom:0;border:none">🌐 Lastverteilung – Live</h2>
+            <div class="tree-refresh-info">
+                <span class="tree-refresh-dot" id="tree-live-dot"></span>
+                <span id="tree-status">Initialisierung …</span>
+            </div>
+        </div>
+        <div id="load-tree-container">
+            <svg id="load-tree-svg"
+                 xmlns="http://www.w3.org/2000/svg"
+                 aria-label="Horizontale Lastverteilung der Endpunkte">
+            </svg>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
          User accounts
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card">
@@ -897,6 +983,389 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             loadBtn.textContent = '⟳ Modelle laden';
         }
     });
+})();
+
+// ── Load-distribution tree ────────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    // Initial data injected from PHP (avoids an extra round-trip on first load).
+    const INITIAL_DATA = <?= json_encode(
+        array_map(function ($s) {
+            return [
+                'id'            => (int) $s['id'],
+                'base_url'      => $s['base_url'],
+                'default_model' => $s['default_model'],
+                'is_active'     => (int) $s['is_active'],
+                'running'       => (int) $s['cnt_running'],
+                'today_jobs'    => (int) $s['today_jobs'],
+                'today_tokens'  => (int) $s['today_tokens'],
+            ];
+        }, $epStats),
+        JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
+    ) ?>;
+
+    const MODEL_COLORS = <?= json_encode($modelColorMap,
+        JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    const PALETTE = ['#6c63ff','#22c55e','#f59e0b','#ef4444',
+                     '#06b6d4','#a855f7','#f97316','#84cc16'];
+
+    const svg      = document.getElementById('load-tree-svg');
+    const statusEl = document.getElementById('tree-status');
+    const liveDot  = document.getElementById('tree-live-dot');
+    const NS       = 'http://www.w3.org/2000/svg';
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    function mk(tag, attrs) {
+        const e = document.createElementNS(NS, tag);
+        if (attrs) {
+            for (const [k, v] of Object.entries(attrs)) {
+                e.setAttribute(k, v);
+            }
+        }
+        return e;
+    }
+
+    function txt(parent, text, attrs) {
+        const e = mk('text', attrs);
+        e.textContent = text;
+        parent.appendChild(e);
+        return e;
+    }
+
+    function formatNum(n) {
+        if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+        if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+        return String(n);
+    }
+
+    function shortUrl(url) {
+        try {
+            const u = new URL(url);
+            return u.hostname + (u.port ? ':' + u.port : '');
+        } catch (_) {
+            return url.length > 28 ? url.slice(0, 26) + '…' : url;
+        }
+    }
+
+    function truncate(str, max) {
+        return str.length > max ? str.slice(0, max - 1) + '…' : str;
+    }
+
+    // ── Tree renderer ─────────────────────────────────────────────────────────
+
+    function renderLoadTree(endpoints) {
+        svg.innerHTML = '';
+
+        if (!endpoints || endpoints.length === 0) {
+            svg.setAttribute('viewBox', '0 0 400 60');
+            svg.setAttribute('height', '60');
+            txt(svg, 'Keine Endpunkte konfiguriert.', {
+                x: 16, y: 38,
+                fill: '#8e8ea0',
+                'font-size': 13,
+                'font-family': 'sans-serif',
+            });
+            return;
+        }
+
+        // Group endpoints by model
+        const groups = new Map();
+        const colorMap = {};
+        let ci = 0;
+        for (const ep of endpoints) {
+            const key = ep.default_model || '–';
+            if (!groups.has(key)) {
+                groups.set(key, []);
+                colorMap[key] = MODEL_COLORS[key] || PALETTE[ci % PALETTE.length];
+                ci++;
+            }
+            groups.get(key).push(ep);
+        }
+
+        // ── Layout constants ──────────────────────────────────────────────────
+        const PAD    = 22;
+        const ROOT_W = 112, ROOT_H = 82;
+        const MOD_W  = 178, MOD_H  = 64;
+        const EP_W   = 218, EP_H   = 104;
+        const H_GAP  = 60;
+        const V_GAP  = 14;
+
+        const COL1_X = PAD;
+        const COL2_X = COL1_X + ROOT_W + H_GAP;
+        const COL3_X = COL2_X + MOD_W  + H_GAP;
+        const TOTAL_W = COL3_X + EP_W + PAD;
+
+        // Vertical layout: one slot per endpoint
+        const totalEps = endpoints.length;
+        const TOTAL_H  = PAD * 2 + totalEps * EP_H + (totalEps - 1) * V_GAP;
+
+        let curY = PAD;
+        const epCY  = {}; // ep.id → center Y
+        const modCY = {}; // model  → center Y
+
+        for (const [model, eps] of groups) {
+            const startY = curY;
+            for (const ep of eps) {
+                epCY[ep.id] = curY + EP_H / 2;
+                curY += EP_H + V_GAP;
+            }
+            curY -= V_GAP;
+            modCY[model] = startY + (curY - startY) / 2;
+            curY += V_GAP;
+        }
+
+        const rootCY = TOTAL_H / 2;
+
+        svg.setAttribute('viewBox', `0 0 ${TOTAL_W} ${TOTAL_H}`);
+        svg.setAttribute('height', TOTAL_H);
+
+        // ── Connector curves ──────────────────────────────────────────────────
+
+        const CURVE_CTRL = H_GAP * 0.65;
+
+        // Root → each model group
+        for (const [model] of groups) {
+            const mY = modCY[model];
+            const rX = COL1_X + ROOT_W;
+            svg.appendChild(mk('path', {
+                d: `M ${rX},${rootCY} C ${rX + CURVE_CTRL},${rootCY} ${COL2_X - CURVE_CTRL},${mY} ${COL2_X},${mY}`,
+                fill: 'none',
+                stroke: 'rgba(255,255,255,0.11)',
+                'stroke-width': 1.5,
+            }));
+        }
+
+        // Each model group → its endpoints
+        for (const [model, eps] of groups) {
+            const mY = modCY[model];
+            const mX = COL2_X + MOD_W;
+            for (const ep of eps) {
+                const eY = epCY[ep.id];
+                svg.appendChild(mk('path', {
+                    d: `M ${mX},${mY} C ${mX + CURVE_CTRL},${mY} ${COL3_X - CURVE_CTRL},${eY} ${COL3_X},${eY}`,
+                    fill: 'none',
+                    stroke: 'rgba(255,255,255,0.11)',
+                    'stroke-width': 1.5,
+                }));
+            }
+        }
+
+        // ── Root node ─────────────────────────────────────────────────────────
+        {
+            const g = mk('g', { transform: `translate(${COL1_X},${rootCY - ROOT_H / 2})` });
+
+            g.appendChild(mk('rect', {
+                x: 0, y: 0, width: ROOT_W, height: ROOT_H,
+                rx: 11,
+                fill: '#2a2a3a',
+                stroke: 'rgba(108,99,255,0.55)',
+                'stroke-width': 1.5,
+            }));
+            txt(g, '⚡', {
+                x: ROOT_W / 2, y: 30,
+                'text-anchor': 'middle',
+                fill: '#ececf1',
+                'font-size': 22,
+                'font-family': 'sans-serif',
+            });
+            txt(g, 'LLMInt', {
+                x: ROOT_W / 2, y: 50,
+                'text-anchor': 'middle',
+                fill: '#ececf1',
+                'font-size': 12,
+                'font-weight': 700,
+                'font-family': 'sans-serif',
+            });
+            txt(g, 'System', {
+                x: ROOT_W / 2, y: 66,
+                'text-anchor': 'middle',
+                fill: '#8e8ea0',
+                'font-size': 10,
+                'font-family': 'sans-serif',
+            });
+
+            svg.appendChild(g);
+        }
+
+        // ── Model group nodes ─────────────────────────────────────────────────
+        for (const [model, eps] of groups) {
+            const color = colorMap[model];
+            const mY = modCY[model];
+            const g  = mk('g', { transform: `translate(${COL2_X},${mY - MOD_H / 2})` });
+
+            g.appendChild(mk('rect', {
+                x: 0, y: 0, width: MOD_W, height: MOD_H,
+                rx: 10,
+                fill: '#2f2f2f',
+                stroke: color + '55',
+                'stroke-width': 1.5,
+            }));
+            // Coloured left accent bar
+            g.appendChild(mk('rect', {
+                x: 0, y: 8, width: 4, height: MOD_H - 16,
+                rx: 2,
+                fill: color,
+            }));
+
+            const groupRunning = eps.reduce((s, e) => s + e.running, 0);
+            const modelLabel   = truncate(model, 22);
+
+            txt(g, modelLabel, {
+                x: 16, y: 24,
+                fill: '#ececf1',
+                'font-size': 11,
+                'font-weight': 700,
+                'font-family': 'sans-serif',
+            });
+            txt(g, `${eps.length} Endpunkt${eps.length !== 1 ? 'e' : ''}`, {
+                x: 16, y: 40,
+                fill: '#8e8ea0',
+                'font-size': 10,
+                'font-family': 'sans-serif',
+            });
+
+            if (groupRunning > 0) {
+                txt(g, `▶ ${groupRunning} laufend`, {
+                    x: 16, y: 56,
+                    fill: '#f59e0b',
+                    'font-size': 10,
+                    'font-family': 'sans-serif',
+                });
+                // Animated pulse ring at top-right corner
+                const dot = mk('circle', {
+                    class: 'pulse-dot',
+                    cx: MOD_W - 14,
+                    cy: 14,
+                    r: 5,
+                    fill: '#f59e0b',
+                });
+                g.appendChild(dot);
+            }
+
+            svg.appendChild(g);
+        }
+
+        // ── Endpoint nodes ────────────────────────────────────────────────────
+        for (const ep of endpoints) {
+            const model = ep.default_model || '–';
+            const color = colorMap[model] || '#555';
+            const eY    = epCY[ep.id];
+            const g     = mk('g', { transform: `translate(${COL3_X},${eY - EP_H / 2})` });
+
+            const isActive = ep.is_active === 1;
+
+            g.appendChild(mk('rect', {
+                x: 0, y: 0, width: EP_W, height: EP_H,
+                rx: 10,
+                fill: '#2f2f2f',
+                stroke: isActive ? 'rgba(255,255,255,0.10)' : 'rgba(239,68,68,0.35)',
+                'stroke-width': 1.5,
+            }));
+
+            // Animated running-task pulse ring (drawn first, behind status dot)
+            if (ep.running > 0 && isActive) {
+                const pDot = mk('circle', {
+                    class: 'pulse-dot',
+                    cx: 14, cy: 18,
+                    r: 4,
+                    fill: '#f59e0b',
+                });
+                g.appendChild(pDot);
+            }
+
+            // Status dot (drawn on top of pulse ring)
+            g.appendChild(mk('circle', {
+                cx: 14, cy: 18,
+                r: 4,
+                fill: isActive ? '#22c55e' : '#8e8ea0',
+            }));
+
+            txt(g, truncate(shortUrl(ep.base_url), 26), {
+                x: 26, y: 22,
+                fill: '#ececf1',
+                'font-size': 10.5,
+                'font-weight': 700,
+                'font-family': 'monospace, sans-serif',
+            });
+
+            // Divider
+            g.appendChild(mk('line', {
+                x1: 10, y1: 32, x2: EP_W - 10, y2: 32,
+                stroke: 'rgba(255,255,255,0.07)',
+                'stroke-width': 1,
+            }));
+
+            // Running count
+            const runColor = ep.running > 0 ? '#f59e0b' : '#8e8ea0';
+            txt(g, `▶  Laufend: ${ep.running}`, {
+                x: 12, y: 50,
+                fill: runColor,
+                'font-size': 11,
+                'font-family': 'sans-serif',
+            });
+
+            // Jobs today
+            txt(g, `✓  Jobs heute: ${formatNum(ep.today_jobs)}`, {
+                x: 12, y: 68,
+                fill: '#22c55e',
+                'font-size': 11,
+                'font-family': 'sans-serif',
+            });
+
+            // Tokens today
+            txt(g, `⬡  Token heute: ${formatNum(ep.today_tokens)}`, {
+                x: 12, y: 86,
+                fill: '#6c63ff',
+                'font-size': 11,
+                'font-family': 'sans-serif',
+            });
+
+            svg.appendChild(g);
+        }
+    }
+
+    // ── Status bar ────────────────────────────────────────────────────────────
+
+    function setStatus(label, loading) {
+        if (statusEl) statusEl.textContent = label;
+        if (liveDot) {
+            liveDot.style.background = loading ? '#f59e0b' : '#22c55e';
+        }
+    }
+
+    function tsLabel(ts) {
+        const d = new Date(ts * 1000);
+        return 'Aktualisiert ' + d.toLocaleTimeString('de-DE');
+    }
+
+    // ── Auto-refresh ──────────────────────────────────────────────────────────
+
+    async function refreshTree() {
+        setStatus('⟳ Aktualisiere …', true);
+        try {
+            const res  = await fetch('load_stats.php', { cache: 'no-store' });
+            const data = await res.json();
+            if (data.ok && Array.isArray(data.endpoints)) {
+                renderLoadTree(data.endpoints);
+                setStatus(tsLabel(data.ts), false);
+            } else {
+                setStatus('Fehler beim Laden', false);
+            }
+        } catch (err) {
+            setStatus('Netzwerkfehler', false);
+        }
+    }
+
+    // Initial render using PHP-injected data
+    renderLoadTree(INITIAL_DATA);
+    setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
+
+    // Refresh every 15 seconds
+    setInterval(refreshTree, 15000);
+
 })();
 </script>
 
