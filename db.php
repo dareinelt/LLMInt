@@ -137,6 +137,36 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    // ComfyUI endpoints.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS comfy_endpoints (
+            id                 INT          NOT NULL AUTO_INCREMENT,
+            base_url           VARCHAR(500) NOT NULL,
+            timeout            INT          NOT NULL DEFAULT 120,
+            default_checkpoint VARCHAR(255) NOT NULL DEFAULT '',
+            is_active          TINYINT(1)   NOT NULL DEFAULT 1,
+            sort_order         INT          NOT NULL DEFAULT 0,
+            created_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                            ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // ComfyUI generation tasks: one row per generate request.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS comfy_tasks (
+            id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            endpoint_id INT             NOT NULL,
+            status      ENUM('running','done','error') NOT NULL DEFAULT 'running',
+            started_at  TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            finished_at TIMESTAMP(3)    NULL,
+            PRIMARY KEY (id),
+            KEY idx_comfy_ep_status    (endpoint_id, status),
+            KEY idx_comfy_status_start (status, started_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
         return;

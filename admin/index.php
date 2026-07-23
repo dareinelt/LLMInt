@@ -162,6 +162,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashOk = 'SD-Endpunkt gelöscht.';
             }
 
+        // ── Add ComfyUI endpoint ──────────────────────────────────────────────
+        } elseif ($action === 'add_comfy_endpoint') {
+            $newUrl        = trim($_POST['comfy_ep_base_url'] ?? '');
+            $newTimeout    = (int) ($_POST['comfy_ep_timeout'] ?? 120);
+            $newCheckpoint = trim($_POST['comfy_ep_default_checkpoint'] ?? '');
+            $isActive      = isset($_POST['comfy_ep_is_active']) ? 1 : 0;
+
+            if ($newUrl === '') {
+                $flashError = 'URL darf nicht leer sein.';
+            } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
+                $flashError = 'Bitte eine gültige URL eingeben.';
+            } elseif ($newTimeout < 1 || $newTimeout > 600) {
+                $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
+            } else {
+                $maxOrder = (int) $db->query(
+                    'SELECT COALESCE(MAX(sort_order), -1) FROM comfy_endpoints'
+                )->fetchColumn();
+                $db->prepare(
+                    'INSERT INTO comfy_endpoints (base_url, timeout, default_checkpoint, is_active, sort_order) VALUES (?, ?, ?, ?, ?)'
+                )->execute([rtrim($newUrl, '/'), $newTimeout, $newCheckpoint, $isActive, $maxOrder + 1]);
+                $flashOk = 'ComfyUI-Endpunkt hinzugefügt.';
+            }
+
+        // ── Update ComfyUI endpoint ───────────────────────────────────────────
+        } elseif ($action === 'update_comfy_endpoint') {
+            $epId          = (int) ($_POST['comfy_ep_id'] ?? 0);
+            $newUrl        = trim($_POST['comfy_ep_base_url'] ?? '');
+            $newTimeout    = (int) ($_POST['comfy_ep_timeout'] ?? 120);
+            $newCheckpoint = trim($_POST['comfy_ep_default_checkpoint'] ?? '');
+            $isActive      = isset($_POST['comfy_ep_is_active']) ? 1 : 0;
+
+            if ($epId <= 0) {
+                $flashError = 'Ungültige ComfyUI-Endpunkt-ID.';
+            } elseif ($newUrl === '') {
+                $flashError = 'URL darf nicht leer sein.';
+            } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
+                $flashError = 'Bitte eine gültige URL eingeben.';
+            } elseif ($newTimeout < 1 || $newTimeout > 600) {
+                $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
+            } else {
+                $db->prepare(
+                    'UPDATE comfy_endpoints SET base_url = ?, timeout = ?, default_checkpoint = ?, is_active = ? WHERE id = ?'
+                )->execute([rtrim($newUrl, '/'), $newTimeout, $newCheckpoint, $isActive, $epId]);
+                $flashOk = 'ComfyUI-Endpunkt gespeichert.';
+            }
+
+        // ── Delete ComfyUI endpoint ───────────────────────────────────────────
+        } elseif ($action === 'delete_comfy_endpoint') {
+            $epId = (int) ($_POST['comfy_ep_id'] ?? 0);
+            if ($epId > 0) {
+                $db->prepare('DELETE FROM comfy_endpoints WHERE id = ?')->execute([$epId]);
+                $flashOk = 'ComfyUI-Endpunkt gelöscht.';
+            }
+
         // ── Change password ───────────────────────────────────────────────────
         } elseif ($action === 'change_password') {
             $oldPass  = $_POST['old_password']         ?? '';
@@ -333,6 +387,72 @@ if (isset($_GET['edit_sd']) && (int) $_GET['edit_sd'] > 0) {
     foreach ($sdEndpoints as $sdEp) {
         if ((int) $sdEp['id'] === $editSdId) {
             $editSdEp = $sdEp;
+            break;
+        }
+    }
+}
+
+// ── ComfyUI endpoints and statistics ─────────────────────────────────────────
+
+$comfyEndpoints = [];
+$comfyStats     = [];
+$comfyTotals    = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
+$editComfyEp    = null;
+
+try {
+    $comfyEndpoints = $db->query(
+        'SELECT * FROM comfy_endpoints ORDER BY sort_order ASC, id ASC'
+    )->fetchAll();
+} catch (PDOException $e) {
+    // Table may not exist yet
+}
+
+try {
+    $comfyStats = $db->query("
+        SELECT
+            e.id,
+            e.base_url,
+            e.is_active,
+            COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0) AS cnt_running,
+            COALESCE(SUM(CASE WHEN t.status = 'done'    THEN 1 ELSE 0 END), 0) AS cnt_done,
+            COALESCE(SUM(CASE WHEN t.status = 'error'   THEN 1 ELSE 0 END), 0) AS cnt_error,
+            COALESCE(SUM(CASE WHEN t.status = 'done'
+                              AND t.started_at >= NOW() - INTERVAL 24 HOUR
+                         THEN 1 ELSE 0 END), 0) AS cnt_done_24h,
+            COALESCE(SUM(CASE WHEN t.status = 'done'
+                              AND DATE(t.started_at) = CURDATE()
+                         THEN 1 ELSE 0 END), 0) AS today_jobs,
+            COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE() THEN 1 ELSE 0 END), 0) AS today_tasks
+        FROM comfy_endpoints e
+        LEFT JOIN comfy_tasks t ON t.endpoint_id = e.id
+        GROUP BY e.id, e.base_url, e.is_active
+        ORDER BY e.sort_order ASC, e.id ASC
+    ")->fetchAll();
+
+    $comfyTotalsRow = $db->query("
+        SELECT
+            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
+            COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
+            COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
+            COALESCE(SUM(CASE WHEN status = 'done'
+                              AND started_at >= NOW() - INTERVAL 24 HOUR
+                         THEN 1 ELSE 0 END), 0) AS total_done_24h
+        FROM comfy_tasks
+    ")->fetch();
+
+    if ($comfyTotalsRow) {
+        $comfyTotals = $comfyTotalsRow;
+    }
+} catch (PDOException $e) {
+    // Tables may not exist yet
+}
+
+// Populate $editComfyEp if the URL requests editing a specific ComfyUI endpoint.
+if (isset($_GET['edit_comfy']) && (int) $_GET['edit_comfy'] > 0) {
+    $editComfyId = (int) $_GET['edit_comfy'];
+    foreach ($comfyEndpoints as $comfyEp) {
+        if ((int) $comfyEp['id'] === $editComfyId) {
+            $editComfyEp = $comfyEp;
             break;
         }
     }
@@ -1008,6 +1128,134 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
+         ComfyUI Endpoint Management
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card">
+        <h2>🖼️ Bildgenerierung (ComfyUI)</h2>
+
+        <?php if (empty($comfyEndpoints)): ?>
+            <p style="color:var(--text-muted);margin-bottom:16px;">Noch keine ComfyUI-Endpunkte konfiguriert. Füge unten einen hinzu.</p>
+        <?php else: ?>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>URL</th>
+                    <th>Timeout</th>
+                    <th>Default Checkpoint</th>
+                    <th>Status</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($comfyEndpoints as $comfyEp): ?>
+                <tr>
+                    <td style="color:var(--text-muted)"><?= (int) $comfyEp['id'] ?></td>
+                    <td style="font-family:monospace;font-size:.8rem;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($comfyEp['base_url']) ?>">
+                        <?= htmlspecialchars($comfyEp['base_url']) ?>
+                    </td>
+                    <td><?= (int) $comfyEp['timeout'] ?>s</td>
+                    <td style="font-size:.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($comfyEp['default_checkpoint']) ?>">
+                        <?php if ($comfyEp['default_checkpoint'] !== ''): ?>
+                            <?= htmlspecialchars($comfyEp['default_checkpoint']) ?>
+                        <?php else: ?>
+                            <span style="color:var(--text-muted)">–</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <span class="dot <?= $comfyEp['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= $comfyEp['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
+                    </td>
+                    <td>
+                        <button type="button" class="btn btn-sm"
+                                onclick="startComfyEdit(<?= htmlspecialchars(json_encode($comfyEp), ENT_QUOTES) ?>)">
+                            ✏ Bearbeiten
+                        </button>
+                        <span class="sep"> </span>
+                        <form method="POST" style="display:inline"
+                              onsubmit="return confirm('ComfyUI-Endpunkt #<?= (int) $comfyEp['id'] ?> wirklich löschen?')">
+                            <input type="hidden" name="csrf_token"   value="<?= htmlspecialchars($csrfToken) ?>">
+                            <input type="hidden" name="action"       value="delete_comfy_endpoint">
+                            <input type="hidden" name="comfy_ep_id"  value="<?= (int) $comfyEp['id'] ?>">
+                            <button type="submit" class="btn btn-sm btn-danger">🗑 Löschen</button>
+                        </form>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <?php endif; ?>
+
+        <!-- ── Add / Edit form ─────────────────────────────────────────────── -->
+        <div class="ep-form-section">
+            <h3 id="comfy-ep-form-title">➕ ComfyUI-Endpunkt hinzufügen</h3>
+
+            <form method="POST" id="comfy-ep-form">
+                <input type="hidden" name="csrf_token"  value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action"      id="comfy-ep-action" value="add_comfy_endpoint">
+                <input type="hidden" name="comfy_ep_id" id="comfy-ep-id"     value="">
+
+                <div class="form-row">
+                    <div class="form-group" style="flex:4">
+                        <label for="comfy-ep-url">ComfyUI Base URL *</label>
+                        <input type="url" id="comfy-ep-url" name="comfy_ep_base_url"
+                               placeholder="http://192.168.1.10:8188" required
+                               value="<?= $editComfyEp ? htmlspecialchars($editComfyEp['base_url']) : '' ?>">
+                        <p class="hint">
+                            Basis-URL der ComfyUI-Instanz (Standard-Port: 8188). API-Pfade werden automatisch ergänzt.
+                        </p>
+                    </div>
+                    <div class="form-group" style="flex:1;min-width:140px">
+                        <label for="comfy-ep-timeout">Timeout (Sekunden) *</label>
+                        <input type="number" id="comfy-ep-timeout" name="comfy_ep_timeout"
+                               min="1" max="600" required
+                               value="<?= $editComfyEp ? (int) $editComfyEp['timeout'] : 120 ?>">
+                        <p class="hint">1 – 600 s</p>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="comfy-ep-checkpoint-input">Default Checkpoint</label>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                        <input type="text" list="comfy-ep-checkpoint-list" id="comfy-ep-checkpoint-input"
+                               name="comfy_ep_default_checkpoint"
+                               placeholder="z. B. v1-5-pruned-emaonly.safetensors"
+                               style="flex:1 1 260px"
+                               value="<?= $editComfyEp ? htmlspecialchars($editComfyEp['default_checkpoint']) : '' ?>">
+                        <datalist id="comfy-ep-checkpoint-list"></datalist>
+                        <button type="button" id="comfy-ep-load-btn" class="btn">
+                            ⟳ Checkpoints laden
+                        </button>
+                    </div>
+                    <p class="hint">
+                        Dateiname des Checkpoints, das für txt2img verwendet werden soll.
+                        Leer lassen, um beim ersten Aufruf automatisch den ersten verfügbaren Checkpoint zu verwenden.
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label class="inline">
+                        <input type="checkbox" id="comfy-ep-active" name="comfy_ep_is_active"
+                               <?= (!$editComfyEp || $editComfyEp['is_active']) ? 'checked' : '' ?>>
+                        Endpunkt aktiv (nimmt Bildgenerierungsanfragen entgegen)
+                    </label>
+                </div>
+
+                <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
+                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                    <button type="button" class="btn" onclick="resetComfyForm()">✕ Abbrechen</button>
+                    <button type="button" id="comfy-test-btn" class="btn">🔌 Verbindung testen</button>
+                    <span id="comfy-test-result" style="font-size:.85rem"></span>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
          Statistics
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card">
@@ -1048,15 +1296,29 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             <?php if (!empty($sdEndpoints)): ?>
             <div class="stat-box">
                 <div class="stat-val stat-running"><?= number_format((int) $sdTotals['total_running']) ?></div>
-                <div class="stat-lbl">Bilder laufend</div>
+                <div class="stat-lbl">SD laufend</div>
             </div>
             <div class="stat-box">
                 <div class="stat-val stat-done"><?= number_format((int) $sdTotals['total_done_24h']) ?></div>
-                <div class="stat-lbl">Bilder (24 h)</div>
+                <div class="stat-lbl">SD Bilder (24 h)</div>
             </div>
             <div class="stat-box">
                 <div class="stat-val stat-done"><?= number_format((int) $sdTotals['total_done']) ?></div>
-                <div class="stat-lbl">Bilder (gesamt)</div>
+                <div class="stat-lbl">SD Bilder (gesamt)</div>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($comfyEndpoints)): ?>
+            <div class="stat-box">
+                <div class="stat-val stat-running"><?= number_format((int) $comfyTotals['total_running']) ?></div>
+                <div class="stat-lbl">ComfyUI laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done"><?= number_format((int) $comfyTotals['total_done_24h']) ?></div>
+                <div class="stat-lbl">ComfyUI (24 h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done"><?= number_format((int) $comfyTotals['total_done']) ?></div>
+                <div class="stat-lbl">ComfyUI (gesamt)</div>
             </div>
             <?php endif; ?>
         </div>
@@ -1110,7 +1372,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         <?php endif; ?>
 
         <?php if (!empty($sdStats)): ?>
-        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🎨 Bildgenerierung</h3>
+        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🎨 Bildgenerierung (AUTOMATIC1111)</h3>
         <table class="data-table">
             <thead>
                 <tr>
@@ -1123,6 +1385,36 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             </thead>
             <tbody>
                 <?php foreach ($sdStats as $s): ?>
+                <tr>
+                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($s['base_url']) ?>">
+                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= htmlspecialchars($s['base_url']) ?>
+                    </td>
+                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
+                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
+                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
+                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+
+        <?php if (!empty($comfyStats)): ?>
+        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🖼️ Bildgenerierung (ComfyUI)</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ComfyUI-Endpunkt</th>
+                    <th style="text-align:right">Laufend</th>
+                    <th style="text-align:right">Erledigt (24 h)</th>
+                    <th style="text-align:right">Erledigt (gesamt)</th>
+                    <th style="text-align:right">Fehler</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($comfyStats as $s): ?>
                 <tr>
                     <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
                         title="<?= htmlspecialchars($s['base_url']) ?>">
@@ -1450,6 +1742,141 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     });
 })();
 
+})();
+
+// ── ComfyUI endpoint form ─────────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    const comfyFormTitle    = document.getElementById('comfy-ep-form-title');
+    const comfyActionInput  = document.getElementById('comfy-ep-action');
+    const comfyIdInput      = document.getElementById('comfy-ep-id');
+    const comfyUrlInput     = document.getElementById('comfy-ep-url');
+    const comfyTimeoutInput = document.getElementById('comfy-ep-timeout');
+    const comfyActiveCheck  = document.getElementById('comfy-ep-active');
+    const comfyLoadBtn      = document.getElementById('comfy-ep-load-btn');
+    const comfyCheckpointInput = document.getElementById('comfy-ep-checkpoint-input');
+    const comfyCheckpointList  = document.getElementById('comfy-ep-checkpoint-list');
+
+    if (!comfyFormTitle) { return; }
+
+    // Pre-fill the form when the page loaded with ?edit_comfy=<id>
+    <?php if ($editComfyEp): ?>
+    comfyFormTitle.textContent = '✏ ComfyUI-Endpunkt bearbeiten';
+    comfyActionInput.value = 'update_comfy_endpoint';
+    comfyIdInput.value     = <?= (int) $editComfyEp['id'] ?>;
+    document.getElementById('comfy-ep-form').closest('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
+    <?php endif; ?>
+
+    window.startComfyEdit = function (ep) {
+        comfyFormTitle.textContent   = '✏ ComfyUI-Endpunkt bearbeiten';
+        comfyActionInput.value       = 'update_comfy_endpoint';
+        comfyIdInput.value           = ep.id;
+        comfyUrlInput.value          = ep.base_url;
+        comfyTimeoutInput.value      = ep.timeout;
+        comfyActiveCheck.checked     = ep.is_active == 1;
+        comfyCheckpointInput.value   = ep.default_checkpoint || '';
+        comfyCheckpointList.innerHTML = '';
+        document.getElementById('comfy-ep-form').closest('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
+    };
+
+    window.resetComfyForm = function () {
+        comfyFormTitle.textContent    = '➕ ComfyUI-Endpunkt hinzufügen';
+        comfyActionInput.value        = 'add_comfy_endpoint';
+        comfyIdInput.value            = '';
+        comfyUrlInput.value           = '';
+        comfyTimeoutInput.value       = '120';
+        comfyActiveCheck.checked      = true;
+        comfyCheckpointInput.value    = '';
+        comfyCheckpointList.innerHTML = '';
+        document.getElementById('comfy-test-result').textContent = '';
+    };
+
+    // Load checkpoints from ComfyUI
+    comfyLoadBtn.addEventListener('click', async function () {
+        const url = comfyUrlInput.value.trim();
+        if (!url) {
+            alert('Bitte zuerst eine URL eingeben.');
+            return;
+        }
+
+        comfyLoadBtn.disabled    = true;
+        comfyLoadBtn.textContent = '⟳ Laden …';
+
+        try {
+            const res  = await fetch('../api/comfy_checkpoints.php?endpoint_url=' + encodeURIComponent(url) + '&timeout=10');
+            const data = await res.json();
+
+            if (data.error) {
+                alert('Fehler: ' + data.error);
+                return;
+            }
+
+            const checkpoints = data.checkpoints || [];
+            if (checkpoints.length === 0) {
+                alert('Keine Checkpoints gefunden.');
+                return;
+            }
+
+            comfyCheckpointList.innerHTML = checkpoints
+                .map(c => `<option value="${c.replace(/"/g, '&quot;')}">`)
+                .join('');
+
+            if (!comfyCheckpointInput.value && checkpoints[0]) {
+                comfyCheckpointInput.value = checkpoints[0];
+            }
+        } catch (e) {
+            alert('Netzwerkfehler: ' + e.message);
+        } finally {
+            comfyLoadBtn.disabled    = false;
+            comfyLoadBtn.textContent = '⟳ Checkpoints laden';
+        }
+    });
+})();
+
+// ── ComfyUI connection test ───────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    const testBtn    = document.getElementById('comfy-test-btn');
+    const testResult = document.getElementById('comfy-test-result');
+    const urlInput   = document.getElementById('comfy-ep-url');
+
+    if (!testBtn) { return; }
+
+    testBtn.addEventListener('click', async function () {
+        const url = urlInput.value.trim();
+        if (!url) {
+            testResult.style.color = 'var(--error)';
+            testResult.textContent = '✗ Bitte zuerst eine URL eingeben.';
+            return;
+        }
+
+        testBtn.disabled    = true;
+        testBtn.textContent = '⟳ Teste …';
+        testResult.textContent = '';
+
+        try {
+            const res  = await fetch('../api/comfy_checkpoints.php?endpoint_url=' + encodeURIComponent(url) + '&timeout=10');
+            const data = await res.json();
+            if (data.error) {
+                testResult.style.color = 'var(--error)';
+                testResult.textContent = '✗ ' + data.error;
+            } else {
+                const count = (data.checkpoints || []).length;
+                testResult.style.color = 'var(--success)';
+                testResult.textContent = '✓ Verbunden – ' + count + ' Checkpoint(s) gefunden.';
+            }
+        } catch (e) {
+            testResult.style.color = 'var(--error)';
+            testResult.textContent = '✗ Netzwerkfehler: ' + e.message;
+        } finally {
+            testBtn.disabled    = false;
+            testBtn.textContent = '🔌 Verbindung testen';
+        }
+    });
+})();
+
 // ── Load-distribution tree ────────────────────────────────────────────────────
 (function () {
     'use strict';
@@ -1487,6 +1914,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'today_jobs' => (int) $s['today_jobs'],
             ];
         }, $sdStats),
+        JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
+    ) ?>;
+
+    const INITIAL_COMFY = <?= json_encode(
+        array_map(function ($s) {
+            return [
+                'id'         => (int) $s['id'],
+                'base_url'   => $s['base_url'],
+                'is_active'  => (int) $s['is_active'],
+                'running'    => (int) $s['cnt_running'],
+                'today_jobs' => (int) $s['today_jobs'],
+            ];
+        }, $comfyStats),
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
     ) ?>;
 
@@ -1541,13 +1981,14 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     // ── Tree renderer ─────────────────────────────────────────────────────────
 
-    function renderLoadTree(endpoints, searxng, sdEndpoints) {
+    function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints) {
         svg.innerHTML = '';
 
         const hasSearxng  = searxng && searxng.enabled;
         const hasSd       = Array.isArray(sdEndpoints) && sdEndpoints.length > 0;
+        const hasComfy    = Array.isArray(comfyEndpoints) && comfyEndpoints.length > 0;
 
-        if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasSd) {
+        if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasSd && !hasComfy) {
             svg.setAttribute('viewBox', '0 0 400 60');
             svg.setAttribute('height', '60');
             txt(svg, 'Keine Endpunkte konfiguriert.', {
@@ -1582,6 +2023,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const V_GAP  = 14;
         const SRXNG_W = EP_W, SRXNG_H = 90;
         const SD_W    = EP_W, SD_H    = 90;
+        const COMFY_W = EP_W, COMFY_H = 90;
 
         const COL1_X = PAD;
         const COL2_X = COL1_X + ROOT_W + H_GAP;
@@ -1602,6 +2044,10 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         if (hasSd) {
             const sdTileH = sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP;
             TOTAL_H += SRXNG_V_GAP + sdTileH;
+        }
+        if (hasComfy) {
+            const comfyTileH = comfyEndpoints.length * COMFY_H + (comfyEndpoints.length - 1) * V_GAP;
+            TOTAL_H += SRXNG_V_GAP + comfyTileH;
         }
         TOTAL_H += PAD;
 
@@ -1637,6 +2083,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         for (const sdEp of (sdEndpoints || [])) {
             sdCY[sdEp.id] = sdCurY + SD_H / 2;
             sdCurY += SD_H + V_GAP;
+        }
+        let afterSdY = afterLlmY;
+        if (hasSd) {
+            afterSdY += SRXNG_V_GAP + sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP;
+        }
+
+        // ComfyUI tiles start below SD (or below SearXNG if no SD)
+        const comfyStartY = afterSdY + SRXNG_V_GAP;
+        const comfyCY = {}; // comfy endpoint id → center Y
+        let comfyCurY = comfyStartY;
+        for (const comfyEp of (comfyEndpoints || [])) {
+            comfyCY[comfyEp.id] = comfyCurY + COMFY_H / 2;
+            comfyCurY += COMFY_H + V_GAP;
         }
 
         svg.setAttribute('viewBox', `0 0 ${TOTAL_W} ${TOTAL_H}`);
@@ -1696,6 +2155,22 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
                     fill: 'none',
                     stroke: 'rgba(249,115,22,0.3)',
+                    'stroke-width': 1.5,
+                    'stroke-dasharray': '4 3',
+                }));
+            }
+        }
+
+        // Root → ComfyUI endpoint tiles (direct, bypassing model groups)
+        if (hasComfy) {
+            for (const comfyEp of comfyEndpoints) {
+                const rX   = COL1_X + ROOT_W;
+                const eY   = comfyCY[comfyEp.id];
+                const ctrl = (COL3_X - rX) * 0.55;
+                svg.appendChild(mk('path', {
+                    d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
+                    fill: 'none',
+                    stroke: 'rgba(168,85,247,0.3)',
                     'stroke-width': 1.5,
                     'stroke-dasharray': '4 3',
                 }));
@@ -2012,6 +2487,75 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 svg.appendChild(g);
             }
         }
+
+        // ── ComfyUI endpoint tiles ─────────────────────────────────────────────
+        if (hasComfy) {
+            const COMFY_COLOR = '#a855f7';
+            for (const comfyEp of comfyEndpoints) {
+                const eY       = comfyCY[comfyEp.id];
+                const isActive = comfyEp.is_active === 1;
+                const g        = mk('g', { transform: `translate(${COL3_X},${eY - COMFY_H / 2})` });
+
+                g.appendChild(mk('rect', {
+                    x: 0, y: 0, width: COMFY_W, height: COMFY_H,
+                    rx: 10,
+                    fill: '#1e1626',
+                    stroke: isActive ? COMFY_COLOR + '66' : 'rgba(239,68,68,0.35)',
+                    'stroke-width': 1.5,
+                }));
+
+                // Animated pulse ring when tasks are running
+                if (comfyEp.running > 0 && isActive) {
+                    g.appendChild(mk('circle', {
+                        class: 'pulse-dot',
+                        cx: 14, cy: 18,
+                        r: 4,
+                        fill: '#f59e0b',
+                    }));
+                }
+
+                // Status dot
+                g.appendChild(mk('circle', {
+                    cx: 14, cy: 18,
+                    r: 4,
+                    fill: isActive ? COMFY_COLOR : '#8e8ea0',
+                }));
+
+                txt(g, truncate(shortUrl(comfyEp.base_url), 26), {
+                    x: 26, y: 22,
+                    fill: '#ececf1',
+                    'font-size': 10.5,
+                    'font-weight': 700,
+                    'font-family': 'monospace, sans-serif',
+                });
+
+                // Divider
+                g.appendChild(mk('line', {
+                    x1: 10, y1: 32, x2: COMFY_W - 10, y2: 32,
+                    stroke: 'rgba(255,255,255,0.07)',
+                    'stroke-width': 1,
+                }));
+
+                // Running count
+                const runColor = comfyEp.running > 0 ? '#f59e0b' : '#8e8ea0';
+                txt(g, `▶  Laufend: ${comfyEp.running}`, {
+                    x: 12, y: 52,
+                    fill: runColor,
+                    'font-size': 11,
+                    'font-family': 'sans-serif',
+                });
+
+                // Jobs today
+                txt(g, `🖼  Bilder heute: ${formatNum(comfyEp.today_jobs)}`, {
+                    x: 12, y: 72,
+                    fill: '#22c55e',
+                    'font-size': 11,
+                    'font-family': 'sans-serif',
+                });
+
+                svg.appendChild(g);
+            }
+        }
     }
 
     // ── Status bar ────────────────────────────────────────────────────────────
@@ -2036,7 +2580,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const res  = await fetch('load_stats.php', { cache: 'no-store' });
             const data = await res.json();
             if (data.ok && Array.isArray(data.endpoints)) {
-                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || []);
+                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || []);
                 setStatus(tsLabel(data.ts), false);
             } else {
                 setStatus('Fehler beim Laden', false);
@@ -2047,7 +2591,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     }
 
     // Initial render using PHP-injected data
-    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD);
+    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD, INITIAL_COMFY);
     setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
 
     // Refresh every 15 seconds
