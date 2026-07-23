@@ -196,6 +196,30 @@ try {
     ];
 }
 
+// ── SearXNG search statistics ─────────────────────────────────────────────────
+
+$searxngStats = ['running' => 0, 'today_jobs' => 0, 'total_done' => 0];
+if ($searxngBaseUrl !== '') {
+    try {
+        $sRow = $db->query("
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+                COALESCE(SUM(CASE WHEN status = 'done'
+                                  AND DATE(started_at) = CURDATE()
+                             THEN 1 ELSE 0 END), 0) AS today_jobs,
+                COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS total_done
+            FROM search_logs
+        ")->fetch();
+        $searxngStats = [
+            'running'    => (int) $sRow['running'],
+            'today_jobs' => (int) $sRow['today_jobs'],
+            'total_done' => (int) $sRow['total_done'],
+        ];
+    } catch (PDOException $e) {
+        // search_logs table may not exist on older installations
+    }
+}
+
 // Assign a stable colour to each distinct model name.
 $palette       = ['#6c63ff', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#f97316', '#84cc16'];
 $modelColorMap = [];
@@ -787,6 +811,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_tokens']) ?></div>
                 <div class="stat-lbl">Token (gesamt)</div>
             </div>
+            <?php if ($searxngBaseUrl !== ''): ?>
+            <div class="stat-box">
+                <div class="stat-val stat-running"><?= number_format($searxngStats['running']) ?></div>
+                <div class="stat-lbl">Suchen laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done"><?= number_format($searxngStats['today_jobs']) ?></div>
+                <div class="stat-lbl">Suchen heute</div>
+            </div>
+            <?php endif; ?>
         </div>
 
         <?php if (empty($epStats)): ?>
@@ -1040,6 +1074,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
     ) ?>;
 
+    const INITIAL_SEARXNG = <?= json_encode([
+        'enabled'    => $searxngBaseUrl !== '',
+        'base_url'   => $searxngBaseUrl,
+        'running'    => $searxngStats['running'],
+        'today_jobs' => $searxngStats['today_jobs'],
+    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
     const MODEL_COLORS = <?= json_encode($modelColorMap,
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
@@ -1091,10 +1132,12 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     // ── Tree renderer ─────────────────────────────────────────────────────────
 
-    function renderLoadTree(endpoints) {
+    function renderLoadTree(endpoints, searxng) {
         svg.innerHTML = '';
 
-        if (!endpoints || endpoints.length === 0) {
+        const hasSearxng = searxng && searxng.enabled;
+
+        if ((!endpoints || endpoints.length === 0) && !hasSearxng) {
             svg.setAttribute('viewBox', '0 0 400 60');
             svg.setAttribute('height', '60');
             txt(svg, 'Keine Endpunkte konfiguriert.', {
@@ -1110,7 +1153,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const groups = new Map();
         const colorMap = {};
         let ci = 0;
-        for (const ep of endpoints) {
+        for (const ep of (endpoints || [])) {
             const key = ep.default_model || '–';
             if (!groups.has(key)) {
                 groups.set(key, []);
@@ -1127,6 +1170,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const EP_W   = 218, EP_H   = 104;
         const H_GAP  = 60;
         const V_GAP  = 14;
+        const SRXNG_W = EP_W, SRXNG_H = 90;
 
         const COL1_X = PAD;
         const COL2_X = COL1_X + ROOT_W + H_GAP;
@@ -1134,8 +1178,15 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const TOTAL_W = COL3_X + EP_W + PAD;
 
         // Vertical layout: one slot per endpoint
-        const totalEps = endpoints.length;
-        const TOTAL_H  = PAD * 2 + totalEps * EP_H + (totalEps - 1) * V_GAP;
+        const totalEps = (endpoints || []).length;
+        const LLM_H = totalEps > 0
+            ? PAD * 2 + totalEps * EP_H + (totalEps - 1) * V_GAP
+            : PAD * 2 + ROOT_H; // minimum height when no endpoints
+
+        const SRXNG_V_GAP = 20;
+        const TOTAL_H = hasSearxng
+            ? LLM_H + SRXNG_V_GAP + SRXNG_H + PAD
+            : LLM_H;
 
         let curY = PAD;
         const epCY  = {}; // ep.id → center Y
@@ -1152,7 +1203,11 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             curY += V_GAP;
         }
 
-        const rootCY = TOTAL_H / 2;
+        // Root is centered on the LLM content area only
+        const rootCY = LLM_H / 2;
+
+        // SearXNG tile center Y (below all LLM content)
+        const searxngCY = LLM_H + SRXNG_V_GAP + SRXNG_H / 2;
 
         svg.setAttribute('viewBox', `0 0 ${TOTAL_W} ${TOTAL_H}`);
         svg.setAttribute('height', TOTAL_H);
@@ -1186,6 +1241,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     'stroke-width': 1.5,
                 }));
             }
+        }
+
+        // Root → SearXNG tile (direct, bypassing model groups)
+        if (hasSearxng) {
+            const rX = COL1_X + ROOT_W;
+            const ctrl = (COL3_X - rX) * 0.55;
+            svg.appendChild(mk('path', {
+                d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${searxngCY} ${COL3_X},${searxngCY}`,
+                fill: 'none',
+                stroke: 'rgba(6,182,212,0.3)',
+                'stroke-width': 1.5,
+                'stroke-dasharray': '4 3',
+            }));
         }
 
         // ── Root node ─────────────────────────────────────────────────────────
@@ -1360,6 +1428,75 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             svg.appendChild(g);
         }
+
+        // ── SearXNG tile ──────────────────────────────────────────────────────
+        if (hasSearxng) {
+            const SRXNG_COLOR = '#06b6d4';
+            const g = mk('g', { transform: `translate(${COL3_X},${searxngCY - SRXNG_H / 2})` });
+
+            g.appendChild(mk('rect', {
+                x: 0, y: 0, width: SRXNG_W, height: SRXNG_H,
+                rx: 10,
+                fill: '#1e2f35',
+                stroke: SRXNG_COLOR + '66',
+                'stroke-width': 1.5,
+            }));
+
+            // Animated pulse ring when searches are running
+            if (searxng.running > 0) {
+                g.appendChild(mk('circle', {
+                    class: 'pulse-dot',
+                    cx: 14, cy: 18,
+                    r: 4,
+                    fill: SRXNG_COLOR,
+                }));
+            }
+
+            // Status dot
+            g.appendChild(mk('circle', {
+                cx: 14, cy: 18,
+                r: 4,
+                fill: SRXNG_COLOR,
+            }));
+
+            // SearXNG label / URL
+            const srxngLabel = searxng.base_url
+                ? truncate(shortUrl(searxng.base_url), 26)
+                : 'SearXNG';
+            txt(g, srxngLabel, {
+                x: 26, y: 22,
+                fill: '#ececf1',
+                'font-size': 10.5,
+                'font-weight': 700,
+                'font-family': 'monospace, sans-serif',
+            });
+
+            // Divider
+            g.appendChild(mk('line', {
+                x1: 10, y1: 32, x2: SRXNG_W - 10, y2: 32,
+                stroke: 'rgba(255,255,255,0.07)',
+                'stroke-width': 1,
+            }));
+
+            // Running count
+            const runColor = searxng.running > 0 ? '#f59e0b' : '#8e8ea0';
+            txt(g, `▶  Laufend: ${searxng.running}`, {
+                x: 12, y: 52,
+                fill: runColor,
+                'font-size': 11,
+                'font-family': 'sans-serif',
+            });
+
+            // Jobs today
+            txt(g, `✓  Jobs heute: ${formatNum(searxng.today_jobs)}`, {
+                x: 12, y: 72,
+                fill: '#22c55e',
+                'font-size': 11,
+                'font-family': 'sans-serif',
+            });
+
+            svg.appendChild(g);
+        }
     }
 
     // ── Status bar ────────────────────────────────────────────────────────────
@@ -1384,7 +1521,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const res  = await fetch('load_stats.php', { cache: 'no-store' });
             const data = await res.json();
             if (data.ok && Array.isArray(data.endpoints)) {
-                renderLoadTree(data.endpoints);
+                renderLoadTree(data.endpoints, data.searxng || null);
                 setStatus(tsLabel(data.ts), false);
             } else {
                 setStatus('Fehler beim Laden', false);
@@ -1395,7 +1532,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     }
 
     // Initial render using PHP-injected data
-    renderLoadTree(INITIAL_DATA);
+    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG);
     setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
 
     // Refresh every 15 seconds
