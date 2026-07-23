@@ -367,7 +367,7 @@ if ($useSearchTool) {
                     $toolResult = ['error' => 'Leere Suchanfrage.'];
                 } else {
                     try {
-                        $toolResult = runSearxngSearch($searxngBaseUrl, mb_substr($query, 0, 400), min($timeout, 15));
+                        $toolResult = runSearxngSearch($searxngBaseUrl, substr($query, 0, 400), min($timeout, 15));
                     } catch (Throwable $e) {
                         $toolResult = ['error' => $e->getMessage()];
                     }
