@@ -100,6 +100,33 @@ function runSearxngSearch(string $baseUrl, string $query, int $timeout = 15): ar
     ];
 }
 
+function startSearchLog(string $query): int
+{
+    try {
+        $db = getDb();
+        $db->prepare(
+            "INSERT INTO search_logs (query, status, started_at) VALUES (?, 'running', NOW(3))"
+        )->execute([$query]);
+        return (int) $db->lastInsertId();
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+function completeSearchLog(int $id, string $status): void
+{
+    if ($id <= 0) {
+        return;
+    }
+    try {
+        getDb()->prepare(
+            'UPDATE search_logs SET status = ?, finished_at = NOW(3) WHERE id = ?'
+        )->execute([$status, $id]);
+    } catch (Throwable $e) {
+        // Best-effort
+    }
+}
+
 function createSearchToolDefinition(): array
 {
     return [[
@@ -366,9 +393,12 @@ if ($useSearchTool) {
                 if ($query === '') {
                     $toolResult = ['error' => 'Leere Suchanfrage.'];
                 } else {
+                    $searchLogId = startSearchLog(substr($query, 0, 400));
                     try {
                         $toolResult = runSearxngSearch($searxngBaseUrl, substr($query, 0, 400), min($timeout, 15));
+                        completeSearchLog($searchLogId, 'done');
                     } catch (Throwable $e) {
+                        completeSearchLog($searchLogId, 'error');
                         $toolResult = ['error' => $e->getMessage()];
                     }
                 }

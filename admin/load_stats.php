@@ -8,7 +8,8 @@
  *
  * Response shape:
  *   { ok: true, ts: <unix seconds>, endpoints: [ { id, base_url,
- *     default_model, is_active, running, today_jobs, today_tokens }, … ] }
+ *     default_model, is_active, running, today_jobs, today_tokens }, … ],
+ *     searxng: { enabled, running, today_jobs } }
  */
 
 session_start();
@@ -55,8 +56,30 @@ try {
     }
     unset($r);
 
-    echo json_encode(['ok' => true, 'ts' => time(), 'endpoints' => $rows],
-                     JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $searxngEnabled = trim(getSetting('searxng_base_url', '')) !== '';
+    $searxng = ['enabled' => $searxngEnabled, 'running' => 0, 'today_jobs' => 0];
+
+    if ($searxngEnabled) {
+        try {
+            $sRow = getDb()->query("
+                SELECT
+                    COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+                    COALESCE(SUM(CASE WHEN status = 'done'
+                                      AND DATE(started_at) = CURDATE()
+                                 THEN 1 ELSE 0 END), 0) AS today_jobs
+                FROM search_logs
+            ")->fetch(PDO::FETCH_ASSOC);
+            $searxng['running']    = (int) $sRow['running'];
+            $searxng['today_jobs'] = (int) $sRow['today_jobs'];
+        } catch (PDOException $e) {
+            // search_logs table may not exist on older installations
+        }
+    }
+
+    echo json_encode(
+        ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng],
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+    );
 
 } catch (PDOException $e) {
     http_response_code(500);
