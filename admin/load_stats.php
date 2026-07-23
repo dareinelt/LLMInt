@@ -76,8 +76,40 @@ try {
         }
     }
 
+    // ── SD endpoint stats ─────────────────────────────────────────────────────
+
+    $sdRows = [];
+    try {
+        $sdRows = getDb()->query("
+            SELECT
+                e.id,
+                e.base_url,
+                e.is_active,
+                COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0)
+                    AS running,
+                COALESCE(SUM(CASE WHEN t.status = 'done'
+                                  AND DATE(t.started_at) = CURDATE()
+                             THEN 1 ELSE 0 END), 0)
+                    AS today_jobs
+            FROM sd_endpoints e
+            LEFT JOIN sd_tasks t ON t.endpoint_id = e.id
+            GROUP BY e.id, e.base_url, e.is_active
+            ORDER BY e.sort_order ASC, e.id ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($sdRows as &$r) {
+            $r['id']         = (int) $r['id'];
+            $r['is_active']  = (int) $r['is_active'];
+            $r['running']    = (int) $r['running'];
+            $r['today_jobs'] = (int) $r['today_jobs'];
+        }
+        unset($r);
+    } catch (PDOException $e) {
+        // sd_endpoints / sd_tasks tables may not exist yet
+    }
+
     echo json_encode(
-        ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng],
+        ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng, 'sd_endpoints' => $sdRows],
         JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     );
 

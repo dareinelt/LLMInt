@@ -92,6 +92,36 @@ $db->exec("
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 
+// AUTOMATIC1111 / Stable Diffusion endpoints.
+$db->exec("
+    CREATE TABLE IF NOT EXISTS sd_endpoints (
+        id          INT          NOT NULL AUTO_INCREMENT,
+        base_url    VARCHAR(500) NOT NULL,
+        timeout     INT          NOT NULL DEFAULT 120,
+        is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+        sort_order  INT          NOT NULL DEFAULT 0,
+        created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                 ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+");
+
+// Image-generation tasks: one row per txt2img / img2img request.
+$db->exec("
+    CREATE TABLE IF NOT EXISTS sd_tasks (
+        id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        endpoint_id INT             NOT NULL,
+        mode        ENUM('txt2img','img2img') NOT NULL DEFAULT 'txt2img',
+        status      ENUM('running','done','error') NOT NULL DEFAULT 'running',
+        started_at  TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        finished_at TIMESTAMP(3)    NULL,
+        PRIMARY KEY (id),
+        KEY idx_sd_ep_status    (endpoint_id, status),
+        KEY idx_sd_status_start (status, started_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+");
+
 echo "Tables created (or already exist).\n";
 
 // ── Seed default settings ────────────────────────────────────────────────────
