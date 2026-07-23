@@ -509,6 +509,17 @@ if ($defaultModel === '') {
         str = str.replace(/_([^_\n]+?)_/g, '<em>$1</em>');
         // Inline code `code`
         str = str.replace(/`([^`]+)`/g, '<code>$1</code>');
+        // Image ![alt](url) – must come before link processing
+        str = str.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (_, alt, url) {
+            const safeAlt = alt.replace(/"/g, '&quot;');
+            const safeUrl = url.replace(/"/g, '&quot;');
+            return '<img src="' + safeUrl + '" alt="' + safeAlt + '" style="max-width:100%;border-radius:8px;margin:.4em 0;">';
+        });
+        // Link [text](url)
+        str = str.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, text, url) {
+            const safeUrl = url.replace(/"/g, '&quot;');
+            return '<a href="' + safeUrl + '" target="_blank" rel="noopener noreferrer">' + text + '</a>';
+        });
         return str;
     }
 

@@ -1,0 +1,9 @@
+# Only allow image files to be served directly.
+# PHP scripts and directory listings are blocked.
+
+Options -Indexes
+
+<FilesMatch "\.php$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>

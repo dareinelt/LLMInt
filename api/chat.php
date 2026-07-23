@@ -19,6 +19,7 @@
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/balancer.php';
+require_once __DIR__ . '/sd_balancer.php';
 
 function buildSearxngSearchUrl(string $baseUrl, string $query): string
 {
@@ -146,6 +147,173 @@ function createSearchToolDefinition(): array
             ],
         ],
     ]];
+}
+
+function createImageGenerationToolDefinition(): array
+{
+    return [[
+        'type' => 'function',
+        'function' => [
+            'name' => 'generate_image',
+            'description' => 'Generiert ein Bild mit Stable Diffusion (AUTOMATIC1111) anhand eines Text-Prompts.',
+            'parameters' => [
+                'type' => 'object',
+                'properties' => [
+                    'prompt' => [
+                        'type' => 'string',
+                        'description' => 'Englischer Text-Prompt, der das zu generierende Bild beschreibt.',
+                    ],
+                    'negative_prompt' => [
+                        'type' => 'string',
+                        'description' => 'Optionaler negativer Prompt – Elemente, die im Bild vermieden werden sollen.',
+                    ],
+                    'width' => [
+                        'type' => 'integer',
+                        'description' => 'Breite des Bildes in Pixeln (64–2048, Standard: 512).',
+                    ],
+                    'height' => [
+                        'type' => 'integer',
+                        'description' => 'Höhe des Bildes in Pixeln (64–2048, Standard: 512).',
+                    ],
+                ],
+                'required' => ['prompt'],
+            ],
+        ],
+    ]];
+}
+
+/**
+ * Returns true when at least one active SD endpoint is configured.
+ */
+function hasSdEndpoints(): bool
+{
+    try {
+        $count = (int) getDb()->query(
+            "SELECT COUNT(*) FROM sd_endpoints WHERE is_active = 1"
+        )->fetchColumn();
+        return $count > 0;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/**
+ * Calls api/sd_generate.php internally by performing a loopback HTTP request.
+ * Returns an associative array with either 'image_url' (success) or 'error'.
+ */
+function callSdGenerate(array $params, int $timeout = 120): array
+{
+    $outputDir = __DIR__ . '/../sd_output';
+    if (!is_dir($outputDir)) {
+        mkdir($outputDir, 0755, true);
+    }
+
+    // Resolve a slot directly instead of doing an HTTP round-trip.
+    $mode = in_array($params['mode'] ?? '', ['img2img'], true) ? 'img2img' : 'txt2img';
+
+    try {
+        $slot = pickSdEndpoint($mode);
+    } catch (Throwable $e) {
+        return ['error' => 'Interner Fehler beim SD-Endpunkt-Routing.'];
+    }
+
+    if ($slot === null) {
+        return ['error' => 'Kein SD-Endpunkt verfügbar.'];
+    }
+
+    $endpoint = $slot['endpoint'];
+    $taskId   = $slot['task_id'];
+    $baseUrl  = rtrim($endpoint['base_url'], '/');
+    $epTimeout = max(1, (int) $endpoint['timeout']);
+
+    $prompt          = trim((string) ($params['prompt'] ?? ''));
+    $negativePrompt  = (string) ($params['negative_prompt'] ?? '');
+    $width           = max(64, min(2048, (int) ($params['width']  ?? 512)));
+    $height          = max(64, min(2048, (int) ($params['height'] ?? 512)));
+    $steps           = max(1,  min(150,  (int) ($params['steps']  ?? 20)));
+    $cfgScale        = max(1.0, min(30.0, (float) ($params['cfg_scale'] ?? 7.0)));
+
+    $sdPayload = [
+        'prompt'          => $prompt,
+        'negative_prompt' => $negativePrompt,
+        'width'           => $width,
+        'height'          => $height,
+        'steps'           => $steps,
+        'cfg_scale'       => $cfgScale,
+        'save_images'     => false,
+        'send_images'     => true,
+    ];
+
+    $apiPath = $mode === 'img2img' ? '/sdapi/v1/img2img' : '/sdapi/v1/txt2img';
+    $url     = $baseUrl . $apiPath;
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($sdPayload),
+        CURLOPT_HTTPHEADER     => [
+            'Content-Type: application/json',
+            'Accept: application/json',
+        ],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $epTimeout,
+    ]);
+
+    $body     = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr  = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlErr !== '') {
+        completeSdTask($taskId, 'error');
+        return ['error' => 'AUTOMATIC1111 nicht erreichbar: ' . $curlErr];
+    }
+
+    $data = json_decode($body, true);
+
+    if ($httpCode !== 200 || !is_array($data)) {
+        completeSdTask($taskId, 'error');
+        $msg = isset($data['detail']) ? (string) $data['detail'] : 'AUTOMATIC1111 Fehler (HTTP ' . $httpCode . ')';
+        return ['error' => $msg];
+    }
+
+    $images = $data['images'] ?? [];
+    if (!is_array($images) || count($images) === 0) {
+        completeSdTask($taskId, 'error');
+        return ['error' => 'AUTOMATIC1111 hat kein Bild zurückgegeben.'];
+    }
+
+    $imageData = base64_decode($images[0], true);
+    if ($imageData === false) {
+        completeSdTask($taskId, 'error');
+        return ['error' => 'Ungültige Bilddaten von AUTOMATIC1111.'];
+    }
+
+    $filename = 'sd_' . bin2hex(random_bytes(12)) . '.png';
+    $filePath = $outputDir . '/' . $filename;
+
+    if (file_put_contents($filePath, $imageData) === false) {
+        completeSdTask($taskId, 'error');
+        return ['error' => 'Bild konnte nicht gespeichert werden.'];
+    }
+
+    completeSdTask($taskId, 'done');
+
+    $seed = null;
+    if (isset($data['info'])) {
+        $info = json_decode((string) $data['info'], true);
+        if (is_array($info) && isset($info['seed'])) {
+            $seed = (int) $info['seed'];
+        }
+    }
+
+    return [
+        'image_url' => 'sd_output/' . $filename,
+        'width'     => $width,
+        'height'    => $height,
+        'prompt'    => $prompt,
+        'seed'      => $seed,
+    ];
 }
 
 function extractUsage(array $data): array
@@ -301,7 +469,9 @@ register_shutdown_function(static function () use ($taskId, &$taskFinished): voi
 
 $clientRequestedStream = isset($payload['stream']) && $payload['stream'] === true;
 $useSearchTool = $searxngBaseUrl !== '';
-$stream = $clientRequestedStream && !$useSearchTool;
+$useSdTool     = hasSdEndpoints();
+$useTools      = $useSearchTool || $useSdTool;
+$stream = $clientRequestedStream && !$useTools;
 
 // Forward only the fields LM Studio expects.
 $forwardPayload = [
@@ -314,22 +484,31 @@ $forwardPayload = [
 
 $url = $baseUrl . '/chat/completions';
 
-if ($useSearchTool) {
+if ($useTools) {
     $messages = $payload['messages'];
     $usage = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     $finalData = null;
 
-    for ($iteration = 0; $iteration < 4; $iteration++) {
-        $searchPayload = $forwardPayload;
-        $searchPayload['messages'] = $messages;
-        $searchPayload['stream'] = false;
-        $searchPayload['tools'] = createSearchToolDefinition();
-        $searchPayload['tool_choice'] = 'auto';
+    // Build the tool list from active integrations.
+    $tools = [];
+    if ($useSearchTool) {
+        $tools = array_merge($tools, createSearchToolDefinition());
+    }
+    if ($useSdTool) {
+        $tools = array_merge($tools, createImageGenerationToolDefinition());
+    }
+
+    for ($iteration = 0; $iteration < 6; $iteration++) {
+        $toolPayload = $forwardPayload;
+        $toolPayload['messages'] = $messages;
+        $toolPayload['stream'] = false;
+        $toolPayload['tools'] = $tools;
+        $toolPayload['tool_choice'] = 'auto';
 
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => json_encode($searchPayload),
+            CURLOPT_POSTFIELDS     => json_encode($toolPayload),
             CURLOPT_HTTPHEADER     => [
                 'Content-Type: application/json',
                 'Accept: application/json',
@@ -385,8 +564,9 @@ if ($useSearchTool) {
 
         foreach ($toolCalls as $toolCall) {
             $toolResult = ['error' => 'Unbekannter Tool-Aufruf.'];
+            $toolName   = $toolCall['function']['name'] ?? '';
 
-            if (($toolCall['function']['name'] ?? '') === 'search_web') {
+            if ($toolName === 'search_web' && $useSearchTool) {
                 $args = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
                 $query = trim((string) ($args['query'] ?? ''));
 
@@ -401,6 +581,16 @@ if ($useSearchTool) {
                         completeSearchLog($searchLogId, 'error');
                         $toolResult = ['error' => $e->getMessage()];
                     }
+                }
+            } elseif ($toolName === 'generate_image' && $useSdTool) {
+                $args = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
+                if (!is_array($args)) {
+                    $args = [];
+                }
+                $toolResult = callSdGenerate($args, $timeout);
+                // Include a markdown image in the result so the LLM can reference it.
+                if (isset($toolResult['image_url'])) {
+                    $toolResult['markdown'] = '![Generiertes Bild](' . $toolResult['image_url'] . ')';
                 }
             }
 
@@ -417,7 +607,7 @@ if ($useSearchTool) {
         completeTask($taskId, 'error');
         http_response_code(502);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['error' => 'Der Suchdialog mit dem Modell konnte nicht abgeschlossen werden.']);
+        echo json_encode(['error' => 'Der Tool-Dialog mit dem Modell konnte nicht abgeschlossen werden.']);
         exit;
     }
 

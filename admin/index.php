@@ -110,6 +110,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     : 'SearXNG-URL gespeichert.';
             }
 
+        // ── Add SD endpoint ───────────────────────────────────────────────────
+        } elseif ($action === 'add_sd_endpoint') {
+            $newUrl     = trim($_POST['sd_ep_base_url'] ?? '');
+            $newTimeout = (int) ($_POST['sd_ep_timeout'] ?? 120);
+            $isActive   = isset($_POST['sd_ep_is_active']) ? 1 : 0;
+
+            if ($newUrl === '') {
+                $flashError = 'URL darf nicht leer sein.';
+            } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
+                $flashError = 'Bitte eine gültige URL eingeben.';
+            } elseif ($newTimeout < 1 || $newTimeout > 600) {
+                $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
+            } else {
+                $maxOrder = (int) $db->query(
+                    'SELECT COALESCE(MAX(sort_order), -1) FROM sd_endpoints'
+                )->fetchColumn();
+                $db->prepare(
+                    'INSERT INTO sd_endpoints (base_url, timeout, is_active, sort_order) VALUES (?, ?, ?, ?)'
+                )->execute([rtrim($newUrl, '/'), $newTimeout, $isActive, $maxOrder + 1]);
+                $flashOk = 'SD-Endpunkt hinzugefügt.';
+            }
+
+        // ── Update SD endpoint ────────────────────────────────────────────────
+        } elseif ($action === 'update_sd_endpoint') {
+            $epId       = (int) ($_POST['sd_ep_id'] ?? 0);
+            $newUrl     = trim($_POST['sd_ep_base_url'] ?? '');
+            $newTimeout = (int) ($_POST['sd_ep_timeout'] ?? 120);
+            $isActive   = isset($_POST['sd_ep_is_active']) ? 1 : 0;
+
+            if ($epId <= 0) {
+                $flashError = 'Ungültige SD-Endpunkt-ID.';
+            } elseif ($newUrl === '') {
+                $flashError = 'URL darf nicht leer sein.';
+            } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
+                $flashError = 'Bitte eine gültige URL eingeben.';
+            } elseif ($newTimeout < 1 || $newTimeout > 600) {
+                $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
+            } else {
+                $db->prepare(
+                    'UPDATE sd_endpoints SET base_url = ?, timeout = ?, is_active = ? WHERE id = ?'
+                )->execute([rtrim($newUrl, '/'), $newTimeout, $isActive, $epId]);
+                $flashOk = 'SD-Endpunkt gespeichert.';
+            }
+
+        // ── Delete SD endpoint ────────────────────────────────────────────────
+        } elseif ($action === 'delete_sd_endpoint') {
+            $epId = (int) ($_POST['sd_ep_id'] ?? 0);
+            if ($epId > 0) {
+                $db->prepare('DELETE FROM sd_endpoints WHERE id = ?')->execute([$epId]);
+                $flashOk = 'SD-Endpunkt gelöscht.';
+            }
+
         // ── Change password ───────────────────────────────────────────────────
         } elseif ($action === 'change_password') {
             $oldPass  = $_POST['old_password']         ?? '';
@@ -217,6 +269,72 @@ if ($searxngBaseUrl !== '') {
         ];
     } catch (PDOException $e) {
         // search_logs table may not exist on older installations
+    }
+}
+
+// ── SD endpoints and statistics ───────────────────────────────────────────────
+
+$sdEndpoints = [];
+$sdStats     = [];
+$sdTotals    = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
+$editSdEp    = null;
+
+try {
+    $sdEndpoints = $db->query(
+        'SELECT * FROM sd_endpoints ORDER BY sort_order ASC, id ASC'
+    )->fetchAll();
+} catch (PDOException $e) {
+    // Table may not exist yet
+}
+
+try {
+    $sdStats = $db->query("
+        SELECT
+            e.id,
+            e.base_url,
+            e.is_active,
+            COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0) AS cnt_running,
+            COALESCE(SUM(CASE WHEN t.status = 'done'    THEN 1 ELSE 0 END), 0) AS cnt_done,
+            COALESCE(SUM(CASE WHEN t.status = 'error'   THEN 1 ELSE 0 END), 0) AS cnt_error,
+            COALESCE(SUM(CASE WHEN t.status = 'done'
+                              AND t.started_at >= NOW() - INTERVAL 24 HOUR
+                         THEN 1 ELSE 0 END), 0) AS cnt_done_24h,
+            COALESCE(SUM(CASE WHEN t.status = 'done'
+                              AND DATE(t.started_at) = CURDATE()
+                         THEN 1 ELSE 0 END), 0) AS today_jobs,
+            COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE() THEN 1 ELSE 0 END), 0) AS today_tasks
+        FROM sd_endpoints e
+        LEFT JOIN sd_tasks t ON t.endpoint_id = e.id
+        GROUP BY e.id, e.base_url, e.is_active
+        ORDER BY e.sort_order ASC, e.id ASC
+    ")->fetchAll();
+
+    $sdTotalsRow = $db->query("
+        SELECT
+            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
+            COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
+            COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
+            COALESCE(SUM(CASE WHEN status = 'done'
+                              AND started_at >= NOW() - INTERVAL 24 HOUR
+                         THEN 1 ELSE 0 END), 0) AS total_done_24h
+        FROM sd_tasks
+    ")->fetch();
+
+    if ($sdTotalsRow) {
+        $sdTotals = $sdTotalsRow;
+    }
+} catch (PDOException $e) {
+    // Tables may not exist yet
+}
+
+// Populate $editSdEp if the URL requests editing a specific SD endpoint.
+if (isset($_GET['edit_sd']) && (int) $_GET['edit_sd'] > 0) {
+    $editSdId = (int) $_GET['edit_sd'];
+    foreach ($sdEndpoints as $sdEp) {
+        if ((int) $sdEp['id'] === $editSdId) {
+            $editSdEp = $sdEp;
+            break;
+        }
     }
 }
 
@@ -790,6 +908,106 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
+         SD / AUTOMATIC1111 Endpoint Management
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card">
+        <h2>🎨 Bildgenerierung (AUTOMATIC1111)</h2>
+
+        <?php if (empty($sdEndpoints)): ?>
+            <p style="color:var(--text-muted);margin-bottom:16px;">Noch keine SD-Endpunkte konfiguriert. Füge unten einen hinzu.</p>
+        <?php else: ?>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>URL</th>
+                    <th>Timeout</th>
+                    <th>Status</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($sdEndpoints as $sdEp): ?>
+                <tr>
+                    <td style="color:var(--text-muted)"><?= (int) $sdEp['id'] ?></td>
+                    <td style="font-family:monospace;font-size:.8rem;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($sdEp['base_url']) ?>">
+                        <?= htmlspecialchars($sdEp['base_url']) ?>
+                    </td>
+                    <td><?= (int) $sdEp['timeout'] ?>s</td>
+                    <td>
+                        <span class="dot <?= $sdEp['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= $sdEp['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
+                    </td>
+                    <td>
+                        <button type="button" class="btn btn-sm"
+                                onclick="startSdEdit(<?= htmlspecialchars(json_encode($sdEp), ENT_QUOTES) ?>)">
+                            ✏ Bearbeiten
+                        </button>
+                        <span class="sep"> </span>
+                        <form method="POST" style="display:inline"
+                              onsubmit="return confirm('SD-Endpunkt #<?= (int) $sdEp['id'] ?> wirklich löschen?')">
+                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                            <input type="hidden" name="action"     value="delete_sd_endpoint">
+                            <input type="hidden" name="sd_ep_id"   value="<?= (int) $sdEp['id'] ?>">
+                            <button type="submit" class="btn btn-sm btn-danger">🗑 Löschen</button>
+                        </form>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <?php endif; ?>
+
+        <!-- ── Add / Edit form ─────────────────────────────────────────────── -->
+        <div class="ep-form-section">
+            <h3 id="sd-ep-form-title">➕ SD-Endpunkt hinzufügen</h3>
+
+            <form method="POST" id="sd-ep-form">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action"     id="sd-ep-action" value="add_sd_endpoint">
+                <input type="hidden" name="sd_ep_id"   id="sd-ep-id"     value="">
+
+                <div class="form-row">
+                    <div class="form-group" style="flex:4">
+                        <label for="sd-ep-url">AUTOMATIC1111 Base URL *</label>
+                        <input type="url" id="sd-ep-url" name="sd_ep_base_url"
+                               placeholder="http://192.168.1.10:7860" required
+                               value="<?= $editSdEp ? htmlspecialchars($editSdEp['base_url']) : '' ?>">
+                        <p class="hint">
+                            Basis-URL der AUTOMATIC1111 Web-UI. Die API-Pfade (<code>/sdapi/v1/…</code>) werden automatisch ergänzt.
+                        </p>
+                    </div>
+                    <div class="form-group" style="flex:1;min-width:140px">
+                        <label for="sd-ep-timeout">Timeout (Sekunden) *</label>
+                        <input type="number" id="sd-ep-timeout" name="sd_ep_timeout"
+                               min="1" max="600" required
+                               value="<?= $editSdEp ? (int) $editSdEp['timeout'] : 120 ?>">
+                        <p class="hint">1 – 600 s</p>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="inline">
+                        <input type="checkbox" id="sd-ep-active" name="sd_ep_is_active"
+                               <?= (!$editSdEp || $editSdEp['is_active']) ? 'checked' : '' ?>>
+                        Endpunkt aktiv (nimmt Bildgenerierungsanfragen entgegen)
+                    </label>
+                </div>
+
+                <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
+                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                    <button type="button" class="btn" onclick="resetSdForm()">✕ Abbrechen</button>
+                    <button type="button" id="sd-test-btn" class="btn">🔌 Verbindung testen</button>
+                    <span id="sd-test-result" style="font-size:.85rem"></span>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
          Statistics
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card">
@@ -799,19 +1017,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         <div class="stat-grid">
             <div class="stat-box">
                 <div class="stat-val stat-running"><?= number_format((int) $totals['total_running']) ?></div>
-                <div class="stat-lbl">Laufend</div>
+                <div class="stat-lbl">LLM laufend</div>
             </div>
             <div class="stat-box">
                 <div class="stat-val stat-done"><?= number_format((int) $totals['total_done_24h']) ?></div>
-                <div class="stat-lbl">Erledigt (24 h)</div>
+                <div class="stat-lbl">LLM erledigt (24 h)</div>
             </div>
             <div class="stat-box">
                 <div class="stat-val stat-done"><?= number_format((int) $totals['total_done']) ?></div>
-                <div class="stat-lbl">Erledigt (gesamt)</div>
+                <div class="stat-lbl">LLM erledigt (gesamt)</div>
             </div>
             <div class="stat-box">
                 <div class="stat-val stat-error"><?= number_format((int) $totals['total_error']) ?></div>
-                <div class="stat-lbl">Fehler (gesamt)</div>
+                <div class="stat-lbl">LLM Fehler (gesamt)</div>
             </div>
             <div class="stat-box">
                 <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_tokens']) ?></div>
@@ -825,6 +1043,20 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             <div class="stat-box">
                 <div class="stat-val stat-done"><?= number_format($searxngStats['today_jobs']) ?></div>
                 <div class="stat-lbl">Suchen heute</div>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($sdEndpoints)): ?>
+            <div class="stat-box">
+                <div class="stat-val stat-running"><?= number_format((int) $sdTotals['total_running']) ?></div>
+                <div class="stat-lbl">Bilder laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done"><?= number_format((int) $sdTotals['total_done_24h']) ?></div>
+                <div class="stat-lbl">Bilder (24 h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done"><?= number_format((int) $sdTotals['total_done']) ?></div>
+                <div class="stat-lbl">Bilder (gesamt)</div>
             </div>
             <?php endif; ?>
         </div>
@@ -876,6 +1108,37 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         </table>
 
         <?php endif; ?>
+
+        <?php if (!empty($sdStats)): ?>
+        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🎨 Bildgenerierung</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>SD-Endpunkt</th>
+                    <th style="text-align:right">Laufend</th>
+                    <th style="text-align:right">Erledigt (24 h)</th>
+                    <th style="text-align:right">Erledigt (gesamt)</th>
+                    <th style="text-align:right">Fehler</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($sdStats as $s): ?>
+                <tr>
+                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($s['base_url']) ?>">
+                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= htmlspecialchars($s['base_url']) ?>
+                    </td>
+                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
+                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
+                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
+                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
@@ -1060,6 +1323,91 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     });
 })();
 
+// ── SD endpoint form ──────────────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    const sdFormTitle    = document.getElementById('sd-ep-form-title');
+    const sdActionInput  = document.getElementById('sd-ep-action');
+    const sdIdInput      = document.getElementById('sd-ep-id');
+    const sdUrlInput     = document.getElementById('sd-ep-url');
+    const sdTimeoutInput = document.getElementById('sd-ep-timeout');
+    const sdActiveCheck  = document.getElementById('sd-ep-active');
+
+    if (!sdFormTitle) { return; }
+
+    // Pre-fill the form when the page loaded with ?edit_sd=<id>
+    <?php if ($editSdEp): ?>
+    sdFormTitle.textContent = '✏ SD-Endpunkt bearbeiten';
+    sdActionInput.value = 'update_sd_endpoint';
+    sdIdInput.value     = <?= (int) $editSdEp['id'] ?>;
+    document.getElementById('sd-ep-form').closest('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
+    <?php endif; ?>
+
+    window.startSdEdit = function (ep) {
+        sdFormTitle.textContent  = '✏ SD-Endpunkt bearbeiten';
+        sdActionInput.value      = 'update_sd_endpoint';
+        sdIdInput.value          = ep.id;
+        sdUrlInput.value         = ep.base_url;
+        sdTimeoutInput.value     = ep.timeout;
+        sdActiveCheck.checked    = ep.is_active == 1;
+        document.getElementById('sd-ep-form').closest('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
+    };
+
+    window.resetSdForm = function () {
+        sdFormTitle.textContent = '➕ SD-Endpunkt hinzufügen';
+        sdActionInput.value     = 'add_sd_endpoint';
+        sdIdInput.value         = '';
+        sdUrlInput.value        = '';
+        sdTimeoutInput.value    = '120';
+        sdActiveCheck.checked   = true;
+        document.getElementById('sd-test-result').textContent = '';
+    };
+})();
+
+// ── SD connection test ────────────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    const testBtn    = document.getElementById('sd-test-btn');
+    const testResult = document.getElementById('sd-test-result');
+    const urlInput   = document.getElementById('sd-ep-url');
+
+    if (!testBtn) { return; }
+
+    testBtn.addEventListener('click', async function () {
+        const url = urlInput.value.trim();
+        if (!url) {
+            testResult.style.color = 'var(--error)';
+            testResult.textContent = '✗ Bitte zuerst eine URL eingeben.';
+            return;
+        }
+
+        testBtn.disabled    = true;
+        testBtn.textContent = '⟳ Teste …';
+        testResult.textContent = '';
+
+        try {
+            const res  = await fetch('../api/sd_checkpoints.php?endpoint_url=' + encodeURIComponent(url) + '&timeout=10');
+            const data = await res.json();
+            if (data.error) {
+                testResult.style.color = 'var(--error)';
+                testResult.textContent = '✗ ' + data.error;
+            } else {
+                const count = (data.checkpoints || []).length;
+                testResult.style.color = 'var(--success)';
+                testResult.textContent = '✓ Verbunden – ' + count + ' Checkpoint(s) gefunden.';
+            }
+        } catch (e) {
+            testResult.style.color = 'var(--error)';
+            testResult.textContent = '✗ Netzwerkfehler: ' + e.message;
+        } finally {
+            testBtn.disabled    = false;
+            testBtn.textContent = '🔌 Verbindung testen';
+        }
+    });
+})();
+
 // ── SearXNG connection test ───────────────────────────────────────────────────
 (function () {
     'use strict';
@@ -1129,6 +1477,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         'today_jobs' => $searxngStats['today_jobs'],
     ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
+    const INITIAL_SD = <?= json_encode(
+        array_map(function ($s) {
+            return [
+                'id'         => (int) $s['id'],
+                'base_url'   => $s['base_url'],
+                'is_active'  => (int) $s['is_active'],
+                'running'    => (int) $s['cnt_running'],
+                'today_jobs' => (int) $s['today_jobs'],
+            ];
+        }, $sdStats),
+        JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
+    ) ?>;
+
     const MODEL_COLORS = <?= json_encode($modelColorMap,
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
@@ -1180,12 +1541,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     // ── Tree renderer ─────────────────────────────────────────────────────────
 
-    function renderLoadTree(endpoints, searxng) {
+    function renderLoadTree(endpoints, searxng, sdEndpoints) {
         svg.innerHTML = '';
 
-        const hasSearxng = searxng && searxng.enabled;
+        const hasSearxng  = searxng && searxng.enabled;
+        const hasSd       = Array.isArray(sdEndpoints) && sdEndpoints.length > 0;
 
-        if ((!endpoints || endpoints.length === 0) && !hasSearxng) {
+        if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasSd) {
             svg.setAttribute('viewBox', '0 0 400 60');
             svg.setAttribute('height', '60');
             txt(svg, 'Keine Endpunkte konfiguriert.', {
@@ -1197,7 +1559,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             return;
         }
 
-        // Group endpoints by model
+        // Group LLM endpoints by model
         const groups = new Map();
         const colorMap = {};
         let ci = 0;
@@ -1219,22 +1581,29 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const H_GAP  = 60;
         const V_GAP  = 14;
         const SRXNG_W = EP_W, SRXNG_H = 90;
+        const SD_W    = EP_W, SD_H    = 90;
 
         const COL1_X = PAD;
         const COL2_X = COL1_X + ROOT_W + H_GAP;
         const COL3_X = COL2_X + MOD_W  + H_GAP;
         const TOTAL_W = COL3_X + EP_W + PAD;
 
-        // Vertical layout: one slot per endpoint
+        // Vertical layout: one slot per LLM endpoint
         const totalEps = (endpoints || []).length;
         const LLM_H = totalEps > 0
             ? PAD * 2 + totalEps * EP_H + (totalEps - 1) * V_GAP
             : PAD * 2 + ROOT_H; // minimum height when no endpoints
 
         const SRXNG_V_GAP = 20;
-        const TOTAL_H = hasSearxng
-            ? LLM_H + SRXNG_V_GAP + SRXNG_H + PAD
-            : LLM_H;
+        let TOTAL_H = LLM_H;
+        if (hasSearxng) {
+            TOTAL_H += SRXNG_V_GAP + SRXNG_H;
+        }
+        if (hasSd) {
+            const sdTileH = sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP;
+            TOTAL_H += SRXNG_V_GAP + sdTileH;
+        }
+        TOTAL_H += PAD;
 
         let curY = PAD;
         const epCY  = {}; // ep.id → center Y
@@ -1255,7 +1624,20 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const rootCY = LLM_H / 2;
 
         // SearXNG tile center Y (below all LLM content)
-        const searxngCY = LLM_H + SRXNG_V_GAP + SRXNG_H / 2;
+        let afterLlmY = LLM_H;
+        const searxngCY = afterLlmY + SRXNG_V_GAP + SRXNG_H / 2;
+        if (hasSearxng) {
+            afterLlmY += SRXNG_V_GAP + SRXNG_H;
+        }
+
+        // SD tiles start below SearXNG (or below LLM if no SearXNG)
+        const sdStartY = afterLlmY + SRXNG_V_GAP;
+        const sdCY = {}; // sd endpoint id → center Y
+        let sdCurY = sdStartY;
+        for (const sdEp of (sdEndpoints || [])) {
+            sdCY[sdEp.id] = sdCurY + SD_H / 2;
+            sdCurY += SD_H + V_GAP;
+        }
 
         svg.setAttribute('viewBox', `0 0 ${TOTAL_W} ${TOTAL_H}`);
         svg.setAttribute('height', TOTAL_H);
@@ -1302,6 +1684,22 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'stroke-width': 1.5,
                 'stroke-dasharray': '4 3',
             }));
+        }
+
+        // Root → SD endpoint tiles (direct, bypassing model groups)
+        if (hasSd) {
+            for (const sdEp of sdEndpoints) {
+                const rX   = COL1_X + ROOT_W;
+                const eY   = sdCY[sdEp.id];
+                const ctrl = (COL3_X - rX) * 0.55;
+                svg.appendChild(mk('path', {
+                    d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
+                    fill: 'none',
+                    stroke: 'rgba(249,115,22,0.3)',
+                    'stroke-width': 1.5,
+                    'stroke-dasharray': '4 3',
+                }));
+            }
         }
 
         // ── Root node ─────────────────────────────────────────────────────────
@@ -1545,6 +1943,75 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             svg.appendChild(g);
         }
+
+        // ── SD endpoint tiles ─────────────────────────────────────────────────
+        if (hasSd) {
+            const SD_COLOR = '#f97316';
+            for (const sdEp of sdEndpoints) {
+                const eY      = sdCY[sdEp.id];
+                const isActive = sdEp.is_active === 1;
+                const g       = mk('g', { transform: `translate(${COL3_X},${eY - SD_H / 2})` });
+
+                g.appendChild(mk('rect', {
+                    x: 0, y: 0, width: SD_W, height: SD_H,
+                    rx: 10,
+                    fill: '#2b1e0f',
+                    stroke: isActive ? SD_COLOR + '66' : 'rgba(239,68,68,0.35)',
+                    'stroke-width': 1.5,
+                }));
+
+                // Animated pulse ring when tasks are running
+                if (sdEp.running > 0 && isActive) {
+                    g.appendChild(mk('circle', {
+                        class: 'pulse-dot',
+                        cx: 14, cy: 18,
+                        r: 4,
+                        fill: '#f59e0b',
+                    }));
+                }
+
+                // Status dot
+                g.appendChild(mk('circle', {
+                    cx: 14, cy: 18,
+                    r: 4,
+                    fill: isActive ? SD_COLOR : '#8e8ea0',
+                }));
+
+                txt(g, truncate(shortUrl(sdEp.base_url), 26), {
+                    x: 26, y: 22,
+                    fill: '#ececf1',
+                    'font-size': 10.5,
+                    'font-weight': 700,
+                    'font-family': 'monospace, sans-serif',
+                });
+
+                // Divider
+                g.appendChild(mk('line', {
+                    x1: 10, y1: 32, x2: SD_W - 10, y2: 32,
+                    stroke: 'rgba(255,255,255,0.07)',
+                    'stroke-width': 1,
+                }));
+
+                // Running count
+                const runColor = sdEp.running > 0 ? '#f59e0b' : '#8e8ea0';
+                txt(g, `▶  Laufend: ${sdEp.running}`, {
+                    x: 12, y: 52,
+                    fill: runColor,
+                    'font-size': 11,
+                    'font-family': 'sans-serif',
+                });
+
+                // Jobs today
+                txt(g, `🖼  Bilder heute: ${formatNum(sdEp.today_jobs)}`, {
+                    x: 12, y: 72,
+                    fill: '#22c55e',
+                    'font-size': 11,
+                    'font-family': 'sans-serif',
+                });
+
+                svg.appendChild(g);
+            }
+        }
     }
 
     // ── Status bar ────────────────────────────────────────────────────────────
@@ -1569,7 +2036,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const res  = await fetch('load_stats.php', { cache: 'no-store' });
             const data = await res.json();
             if (data.ok && Array.isArray(data.endpoints)) {
-                renderLoadTree(data.endpoints, data.searxng || null);
+                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || []);
                 setStatus(tsLabel(data.ts), false);
             } else {
                 setStatus('Fehler beim Laden', false);
@@ -1580,7 +2047,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     }
 
     // Initial render using PHP-injected data
-    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG);
+    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD);
     setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
 
     // Refresh every 15 seconds
