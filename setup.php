@@ -86,6 +86,7 @@ echo "Tables created (or already exist).\n";
 $defaults = [
     'lmstudio_base_url' => 'http://localhost:1234/v1',
     'lmstudio_timeout'  => '120',
+    'searxng_base_url'  => '',
 ];
 
 $insert = $db->prepare(

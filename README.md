@@ -7,6 +7,7 @@ Eine schlanke PHP-Webanwendung, die über die [LM Studio REST API](https://lmstu
 - **Modellauswahl** – erkennt automatisch alle am Endpunkt verfügbaren Modelle
 - **Chat-Interface** – vollständige Gesprächshistorie mit Streaming-Unterstützung (SSE)
 - **System-Prompt** – optionaler System-Prompt konfigurierbar per Klick
+- **Aktuelle Websuche** – optionaler SearXNG-Zugriff für Modelle, zentral im Adminbereich konfigurierbar
 - **Konfigurierbarer Endpunkt** – API-URL direkt im Browser änderbar (wird im `localStorage` gespeichert)
 - **Kein Framework nötig** – reines PHP + Vanilla JavaScript
 
@@ -72,6 +73,12 @@ LMSTUDIO_BASE_URL=http://192.168.1.100:1234/v1 php -S localhost:8080
 |---|---|---|
 | `api/models.php?endpoint=…` | GET | Listet verfügbare LM Studio Modelle auf |
 | `api/chat.php` | POST | Sendet eine Chat-Anfrage (Streaming per SSE) |
+
+---
+
+## SearXNG-Integration
+
+Im Adminbereich kann optional eine SearXNG-URL hinterlegt werden. Wenn eine URL gesetzt ist, stellt der Chat-Proxy dem Modell automatisch ein Websuch-Tool bereit, damit Antworten mit aktuellen Informationen angereichert werden können. Ein leeres Feld deaktiviert die Suche wieder.
 
 ---
 
