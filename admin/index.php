@@ -18,6 +18,7 @@ if (!isset($_SESSION['admin_user'])) {
 require_once __DIR__ . '/../db.php';
 
 $db = getDb();
+$searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
 
 // ── Generate CSRF token ───────────────────────────────────────────────────────
 
@@ -93,6 +94,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($epId > 0) {
                 $db->prepare('DELETE FROM endpoints WHERE id = ?')->execute([$epId]);
                 $flashOk = 'Endpunkt gelöscht.';
+            }
+
+        // ── Save search settings ──────────────────────────────────────────────
+        } elseif ($action === 'save_search_settings') {
+            $newSearxngUrl = trim($_POST['searxng_base_url'] ?? '');
+
+            if ($newSearxngUrl !== '' && filter_var($newSearxngUrl, FILTER_VALIDATE_URL) === false) {
+                $flashError = 'Bitte eine gültige SearXNG-URL eingeben oder das Feld leer lassen.';
+            } else {
+                $searxngBaseUrl = $newSearxngUrl === '' ? '' : rtrim($newSearxngUrl, '/');
+                setSetting('searxng_base_url', $searxngBaseUrl);
+                $flashOk = $searxngBaseUrl === ''
+                    ? 'SearXNG-Suche deaktiviert.'
+                    : 'SearXNG-URL gespeichert.';
             }
 
         // ── Change password ───────────────────────────────────────────────────
@@ -597,6 +612,26 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <?php if ($flashError !== ''): ?>
         <div class="flash-error">✗ <?= htmlspecialchars($flashError) ?></div>
     <?php endif; ?>
+
+    <div class="card">
+        <h2>🔎 Websuche</h2>
+        <form method="POST">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+            <input type="hidden" name="action" value="save_search_settings">
+
+            <div class="form-group">
+                <label for="searxng-base-url">SearXNG-URL</label>
+                <input type="url" id="searxng-base-url" name="searxng_base_url"
+                       placeholder="https://search.example.org"
+                       value="<?= htmlspecialchars($searxngBaseUrl) ?>">
+                <p class="hint">
+                    Leer lassen, um die Websuche zu deaktivieren. Wenn gesetzt, können Modelle aktuelle Informationen über SearXNG abrufen.
+                </p>
+            </div>
+
+            <button type="submit" class="btn btn-primary">💾 Speichern</button>
+        </form>
+    </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
          Endpoint Management
