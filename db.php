@@ -95,6 +95,17 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS search_jobs (
+            id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            status      ENUM('running','done','error') NOT NULL DEFAULT 'running',
+            started_at  TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            finished_at TIMESTAMP(3)    NULL,
+            PRIMARY KEY (id),
+            KEY idx_started_at (started_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
         return;

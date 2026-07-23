@@ -8,7 +8,8 @@
  *
  * Response shape:
  *   { ok: true, ts: <unix seconds>, endpoints: [ { id, base_url,
- *     default_model, is_active, running, today_jobs, today_tokens }, … ] }
+ *     default_model, is_active, running, today_jobs, today_tokens }, … ],
+ *     search: { configured: bool, running: int, today_jobs: int } }
  */
 
 session_start();
@@ -25,7 +26,9 @@ header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 
 try {
-    $rows = getDb()->query("
+    $db = getDb();
+
+    $rows = $db->query("
         SELECT
             e.id,
             e.base_url,
@@ -55,8 +58,30 @@ try {
     }
     unset($r);
 
-    echo json_encode(['ok' => true, 'ts' => time(), 'endpoints' => $rows],
-                     JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $searxngConfigured = trim(getSetting('searxng_base_url', '')) !== '';
+    $searchData = ['configured' => false, 'running' => 0, 'today_jobs' => 0];
+    if ($searxngConfigured) {
+        $sRow = $db->query("
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0)
+                    AS running,
+                COALESCE(SUM(CASE WHEN status = 'done'
+                                  AND DATE(started_at) = CURDATE()
+                             THEN 1 ELSE 0 END), 0)
+                    AS today_jobs
+            FROM search_jobs
+        ")->fetch(PDO::FETCH_ASSOC);
+        $searchData = [
+            'configured' => true,
+            'running'    => (int) $sRow['running'],
+            'today_jobs' => (int) $sRow['today_jobs'],
+        ];
+    }
+
+    echo json_encode(
+        ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'search' => $searchData],
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+    );
 
 } catch (PDOException $e) {
     http_response_code(500);

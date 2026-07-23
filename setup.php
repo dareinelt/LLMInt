@@ -79,6 +79,18 @@ $db->exec("
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 
+// Search jobs: records every SearXNG web-search call made during a chat.
+$db->exec("
+    CREATE TABLE IF NOT EXISTS search_jobs (
+        id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        status      ENUM('running','done','error') NOT NULL DEFAULT 'running',
+        started_at  TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        finished_at TIMESTAMP(3)    NULL,
+        PRIMARY KEY (id),
+        KEY idx_started_at (started_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+");
+
 echo "Tables created (or already exist).\n";
 
 // ── Seed default settings ────────────────────────────────────────────────────

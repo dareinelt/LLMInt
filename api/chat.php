@@ -366,9 +366,18 @@ if ($useSearchTool) {
                 if ($query === '') {
                     $toolResult = ['error' => 'Leere Suchanfrage.'];
                 } else {
+                    $searchDb = getDb();
+                    $searchDb->exec("INSERT INTO search_jobs (status) VALUES ('running')");
+                    $searchJobId = (int) $searchDb->lastInsertId();
                     try {
                         $toolResult = runSearxngSearch($searxngBaseUrl, substr($query, 0, 400), min($timeout, 15));
+                        $searchDb->prepare(
+                            "UPDATE search_jobs SET status = 'done', finished_at = NOW(3) WHERE id = ?"
+                        )->execute([$searchJobId]);
                     } catch (Throwable $e) {
+                        $searchDb->prepare(
+                            "UPDATE search_jobs SET status = 'error', finished_at = NOW(3) WHERE id = ?"
+                        )->execute([$searchJobId]);
                         $toolResult = ['error' => $e->getMessage()];
                     }
                 }
