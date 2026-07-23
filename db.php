@@ -34,7 +34,84 @@ function getDb(): PDO
         PDO::ATTR_EMULATE_PREPARES   => false,
     ]);
 
+    ensureRuntimeSchema($pdo);
+
     return $pdo;
+}
+
+/**
+ * Creates core tables that newer app versions require, if they are missing.
+ * This keeps legacy databases compatible without requiring a manual setup run.
+ */
+function ensureRuntimeSchema(PDO $pdo): void
+{
+    static $bootstrapped = false;
+    if ($bootstrapped) {
+        return;
+    }
+    $bootstrapped = true;
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS endpoints (
+            id            INT          NOT NULL AUTO_INCREMENT,
+            base_url      VARCHAR(500) NOT NULL,
+            timeout       INT          NOT NULL DEFAULT 120,
+            default_model VARCHAR(255) NOT NULL DEFAULT '',
+            is_active     TINYINT(1)   NOT NULL DEFAULT 1,
+            sort_order    INT          NOT NULL DEFAULT 0,
+            created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                   ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS tasks (
+            id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            endpoint_id       INT             NOT NULL,
+            model             VARCHAR(255)    NOT NULL,
+            status            ENUM('running','done','error') NOT NULL DEFAULT 'running',
+            prompt_tokens     INT UNSIGNED    NULL,
+            completion_tokens INT UNSIGNED    NULL,
+            total_tokens      INT UNSIGNED    NULL,
+            started_at        TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            finished_at       TIMESTAMP(3)    NULL,
+            PRIMARY KEY (id),
+            KEY idx_endpoint_status (endpoint_id, status),
+            KEY idx_model_started   (model, started_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
+    if ($epCount > 0) {
+        return;
+    }
+
+    $seedUrl = 'http://localhost:1234/v1';
+    $seedTimeout = 120;
+
+    try {
+        $stmt = $pdo->query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('lmstudio_base_url', 'lmstudio_timeout', 'default_model')");
+        $settings = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $settings[$row['setting_key']] = (string) ($row['setting_value'] ?? '');
+        }
+
+        if (!empty($settings['lmstudio_base_url'])) {
+            $seedUrl = rtrim($settings['lmstudio_base_url'], '/');
+        }
+        if (!empty($settings['lmstudio_timeout'])) {
+            $seedTimeout = max(1, (int) $settings['lmstudio_timeout']);
+        }
+        $seedModel = $settings['default_model'] ?? '';
+    } catch (Throwable $e) {
+        $seedModel = '';
+    }
+
+    $pdo->prepare(
+        'INSERT INTO endpoints (base_url, timeout, default_model, is_active, sort_order) VALUES (?, ?, ?, 1, 0)'
+    )->execute([$seedUrl, $seedTimeout, $seedModel]);
 }
 
 /**
