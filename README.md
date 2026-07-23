@@ -243,7 +243,7 @@ Das Routing erfolgt über:
 
 ## Optionale Integrationen
 
-## SearXNG
+### SearXNG
 
 Wenn im Admin-Bereich eine SearXNG-Basis-URL hinterlegt ist:
 
@@ -262,7 +262,7 @@ Beispiel:
 https://search.example.org
 ```
 
-## AUTOMATIC1111
+### AUTOMATIC1111
 
 Wenn mindestens ein aktiver SD-Endpunkt konfiguriert ist, kann das Chat-System das Tool `generate_image` bereitstellen.
 
@@ -273,7 +273,7 @@ Die eigentliche Bildgenerierung läuft über:
 
 Gespeicherte Bilder landen unter `sd_output/`.
 
-## ComfyUI
+### ComfyUI
 
 Wenn mindestens ein aktiver ComfyUI-Endpunkt konfiguriert ist, kann das Chat-System das Tool `generate_image_comfy` bereitstellen.
 
