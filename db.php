@@ -169,6 +169,18 @@ function ensureRuntimeSchema(PDO $pdo): void
 
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
+        $pdo->prepare(
+            'INSERT INTO settings (setting_key, setting_value)
+             VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()'
+        )->execute(['endpoints_bootstrapped', '1']);
+        return;
+    }
+
+    $seededState = $pdo->prepare('SELECT setting_value FROM settings WHERE setting_key = ? LIMIT 1');
+    $seededState->execute(['endpoints_bootstrapped']);
+    $seededValue = $seededState->fetchColumn();
+    if ($seededValue !== false && $seededValue !== null && (string) $seededValue !== '') {
         return;
     }
 
@@ -196,6 +208,11 @@ function ensureRuntimeSchema(PDO $pdo): void
     $pdo->prepare(
         'INSERT INTO endpoints (base_url, timeout, default_model, is_active, sort_order) VALUES (?, ?, ?, 1, 0)'
     )->execute([$seedUrl, $seedTimeout, $seedModel]);
+    $pdo->prepare(
+        'INSERT INTO settings (setting_key, setting_value)
+         VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()'
+    )->execute(['endpoints_bootstrapped', '1']);
 }
 
 /**
