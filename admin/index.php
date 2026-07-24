@@ -1742,8 +1742,6 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     });
 })();
 
-})();
-
 // ── ComfyUI endpoint form ─────────────────────────────────────────────────────
 (function () {
     'use strict';
