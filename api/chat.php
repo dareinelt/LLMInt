@@ -583,6 +583,7 @@ function callComfyGenerate(array $params, int $timeout = 120): array
         'seed'      => $seed,
     ];
 }
+function extractUsage(array $data): array
 {
     return [
         'prompt' => max(0, (int) ($data['usage']['prompt_tokens'] ?? 0)),
