@@ -199,6 +199,8 @@ if ($epCount === 0) {
     echo "Endpoints already configured – skipping seed.\n";
 }
 
+setSetting('endpoints_bootstrapped', '1');
+
 // ── Seed default admin user (only when no users exist) ───────────────────────
 
 $count = (int) $db->query('SELECT COUNT(*) FROM users')->fetchColumn();
