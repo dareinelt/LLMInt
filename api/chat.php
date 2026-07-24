@@ -23,6 +23,7 @@ require_once __DIR__ . '/sd_balancer.php';
 require_once __DIR__ . '/comfy_balancer.php';
 
 function buildSearxngSearchUrl(string $baseUrl, string $query): string
+function extractUsage(array $data): array
 {
     $parts = parse_url($baseUrl);
     if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
