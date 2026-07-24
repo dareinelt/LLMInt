@@ -23,7 +23,6 @@ require_once __DIR__ . '/sd_balancer.php';
 require_once __DIR__ . '/comfy_balancer.php';
 
 function buildSearxngSearchUrl(string $baseUrl, string $query): string
-function extractUsage(array $data): array
 {
     $parts = parse_url($baseUrl);
     if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
@@ -584,6 +583,7 @@ function callComfyGenerate(array $params, int $timeout = 120): array
         'seed'      => $seed,
     ];
 }
+function extractUsage(array $data): array
 {
     return [
         'prompt' => max(0, (int) ($data['usage']['prompt_tokens'] ?? 0)),
