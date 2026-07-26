@@ -42,12 +42,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // ── Add endpoint ──────────────────────────────────────────────────────
         if ($action === 'add_endpoint') {
+            $newAlias   = trim($_POST['ep_alias'] ?? '');
             $newUrl     = trim($_POST['ep_base_url'] ?? '');
             $newTimeout = (int) ($_POST['ep_timeout'] ?? 120);
             $newModel   = trim($_POST['ep_default_model'] ?? '');
             $isActive   = isset($_POST['ep_is_active']) ? 1 : 0;
 
-            if ($newUrl === '') {
+            if (strlen($newAlias) > 120) {
+                $flashError = 'Alias darf maximal 120 Zeichen lang sein.';
+            } elseif ($newUrl === '') {
                 $flashError = 'URL darf nicht leer sein.';
             } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
                 $flashError = 'Bitte eine gültige URL eingeben.';
@@ -58,15 +61,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'SELECT COALESCE(MAX(sort_order), -1) FROM endpoints'
                 )->fetchColumn();
                 $db->prepare(
-                    'INSERT INTO endpoints (base_url, timeout, default_model, is_active, sort_order)
-                     VALUES (?, ?, ?, ?, ?)'
-                )->execute([rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $maxOrder + 1]);
+                    'INSERT INTO endpoints (alias, base_url, timeout, default_model, is_active, sort_order)
+                     VALUES (?, ?, ?, ?, ?, ?)'
+                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $maxOrder + 1]);
                 $flashOk = 'Endpunkt hinzugefügt.';
             }
 
         // ── Update endpoint ───────────────────────────────────────────────────
         } elseif ($action === 'update_endpoint') {
             $epId       = (int) ($_POST['ep_id'] ?? 0);
+            $newAlias   = trim($_POST['ep_alias'] ?? '');
             $newUrl     = trim($_POST['ep_base_url'] ?? '');
             $newTimeout = (int) ($_POST['ep_timeout'] ?? 120);
             $newModel   = trim($_POST['ep_default_model'] ?? '');
@@ -74,6 +78,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if ($epId <= 0) {
                 $flashError = 'Ungültige Endpunkt-ID.';
+            } elseif (strlen($newAlias) > 120) {
+                $flashError = 'Alias darf maximal 120 Zeichen lang sein.';
             } elseif ($newUrl === '') {
                 $flashError = 'URL darf nicht leer sein.';
             } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
@@ -83,9 +89,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $db->prepare(
                     'UPDATE endpoints
-                        SET base_url = ?, timeout = ?, default_model = ?, is_active = ?
+                        SET alias = ?, base_url = ?, timeout = ?, default_model = ?, is_active = ?
                       WHERE id = ?'
-                )->execute([rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $epId]);
+                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $epId]);
                 $flashOk = 'Endpunkt gespeichert.';
             }
 
@@ -287,6 +293,7 @@ try {
     $epStats = $db->query('
         SELECT
             e.id,
+            e.alias,
             e.base_url,
             e.default_model,
             e.is_active,
@@ -306,7 +313,7 @@ try {
                          THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0) AS today_tokens
         FROM endpoints e
         LEFT JOIN tasks t ON t.endpoint_id = e.id
-        GROUP BY e.id, e.base_url, e.default_model, e.is_active
+        GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active
         ORDER BY e.sort_order ASC, e.id ASC
     ')->fetchAll();
 
@@ -1015,6 +1022,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             <thead>
                 <tr>
                     <th>#</th>
+                    <th>Alias</th>
                     <th>URL</th>
                     <th>Timeout</th>
                     <th>Standard-Modell</th>
@@ -1027,6 +1035,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <?php foreach ($endpoints as $ep): ?>
                 <tr>
                     <td style="color:var(--text-muted)"><?= $ep['id'] ?></td>
+                    <td><?= $ep['alias'] !== '' ? htmlspecialchars($ep['alias']) : '<span style="color:var(--text-muted)">–</span>' ?></td>
                     <td style="font-family:monospace;font-size:.8rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
                         title="<?= htmlspecialchars($ep['base_url']) ?>">
                         <?= htmlspecialchars($ep['base_url']) ?>
@@ -1077,6 +1086,14 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                 <input type="hidden" name="action"     id="ep-action" value="add_endpoint">
                 <input type="hidden" name="ep_id"      id="ep-id"     value="">
+
+                <div class="form-group">
+                    <label for="ep-alias">Alias (optional)</label>
+                    <input type="text" id="ep-alias" name="ep_alias" maxlength="120"
+                           placeholder="z. B. GPU-Server 1"
+                           value="<?= $editEp ? htmlspecialchars($editEp['alias']) : '' ?>">
+                    <p class="hint">Kurzname für den Endpunkt, wird später in Antwortdetails angezeigt.</p>
+                </div>
 
                 <div class="form-row">
                     <div class="form-group" style="flex:4">
@@ -1498,7 +1515,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <td style="font-family:monospace;font-size:.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
                         title="<?= htmlspecialchars($s['base_url']) ?>">
                         <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= htmlspecialchars($s['base_url']) ?>
+                        <?= htmlspecialchars($s['alias'] !== '' ? $s['alias'] : $s['base_url']) ?>
                     </td>
                     <td>
                         <?php if ($s['default_model'] !== ''): ?>
@@ -1679,6 +1696,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const formTitle    = document.getElementById('ep-form-title');
     const actionInput  = document.getElementById('ep-action');
     const idInput      = document.getElementById('ep-id');
+    const aliasInput   = document.getElementById('ep-alias');
     const urlInput     = document.getElementById('ep-url');
     const timeoutInput = document.getElementById('ep-timeout');
     const modelInput   = document.getElementById('ep-model-input');
@@ -1704,6 +1722,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         formTitle.textContent  = '✏ Endpunkt bearbeiten';
         actionInput.value      = 'update_endpoint';
         idInput.value          = ep.id;
+        aliasInput.value       = ep.alias || '';
         urlInput.value         = ep.base_url;
         timeoutInput.value     = ep.timeout;
         modelInput.value       = ep.default_model || '';
@@ -1719,6 +1738,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         formTitle.textContent = '➕ Endpunkt hinzufügen';
         actionInput.value     = 'add_endpoint';
         idInput.value         = '';
+        aliasInput.value      = '';
         urlInput.value        = '';
         timeoutInput.value    = '120';
         modelInput.value      = '';
@@ -2045,6 +2065,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         array_map(function ($s) {
             return [
                 'id'            => (int) $s['id'],
+                'alias'         => (string) ($s['alias'] ?? ''),
                 'base_url'      => $s['base_url'],
                 'default_model' => $s['default_model'],
                 'is_active'     => (int) $s['is_active'],
@@ -2483,7 +2504,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 fill: isActive ? '#22c55e' : '#8e8ea0',
             }));
 
-            txt(g, truncate(shortUrl(ep.base_url), 26), {
+            const endpointLabel = ep.alias ? ep.alias : shortUrl(ep.base_url);
+            txt(g, truncate(endpointLabel, 26), {
                 x: 26, y: 22,
                 fill: '#ececf1',
                 'font-size': 10.5,

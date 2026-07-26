@@ -7,7 +7,7 @@
  * for the live load-distribution tree visualization.
  *
  * Response shape:
- *   { ok: true, ts: <unix seconds>, endpoints: [ { id, base_url,
+ *   { ok: true, ts: <unix seconds>, endpoints: [ { id, alias, base_url,
  *     default_model, is_active, running, today_jobs, today_tokens }, … ],
  *     searxng: { enabled, running, today_jobs } }
  */
@@ -29,6 +29,7 @@ try {
     $rows = getDb()->query("
         SELECT
             e.id,
+            e.alias,
             e.base_url,
             e.default_model,
             e.is_active,
@@ -43,7 +44,7 @@ try {
                 AS today_tokens
         FROM endpoints e
         LEFT JOIN tasks t ON t.endpoint_id = e.id
-        GROUP BY e.id, e.base_url, e.default_model, e.is_active
+        GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active
         ORDER BY e.sort_order ASC, e.id ASC
     ")->fetchAll(PDO::FETCH_ASSOC);
 

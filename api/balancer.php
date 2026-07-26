@@ -35,7 +35,7 @@ function pickEndpointForModel(string $model): ?array
     $db->beginTransaction();
     try {
         $stmt = $db->prepare('
-            SELECT e.id, e.base_url, e.timeout, e.default_model,
+            SELECT e.id, e.alias, e.base_url, e.timeout, e.default_model,
                    COALESCE(r.running_count, 0) AS running_count,
                    r.last_task_at
             FROM endpoints e
