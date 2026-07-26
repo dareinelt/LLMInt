@@ -167,6 +167,20 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    // Conversation sessions: persists chat history so a failed endpoint can be
+    // replaced transparently. Rows expire 30 minutes after the last activity.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS conversation_sessions (
+            session_id  CHAR(64)     NOT NULL,
+            model       VARCHAR(255) NOT NULL DEFAULT '',
+            messages    MEDIUMTEXT   NOT NULL,
+            updated_at  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                     ON UPDATE CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (session_id),
+            KEY idx_conv_updated (updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
         $pdo->prepare(
@@ -243,4 +257,83 @@ function setSetting(string $key, string $value): void
          VALUES (?, ?)
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()'
     )->execute([$key, $value]);
+}
+
+/**
+ * Save (upsert) a conversation session's message history.
+ * The row's updated_at timestamp is refreshed on every save,
+ * which resets the 30-minute expiry window.
+ *
+ * @param string   $sessionId Hex session token (8–128 chars).
+ * @param string   $model     Model name used for this session.
+ * @param array    $messages  Full messages array (role/content pairs).
+ */
+function saveConversationSession(string $sessionId, string $model, array $messages): void
+{
+    if ($sessionId === '') {
+        return;
+    }
+    try {
+        getDb()->prepare(
+            'INSERT INTO conversation_sessions (session_id, model, messages, updated_at)
+             VALUES (?, ?, ?, NOW(3))
+             ON DUPLICATE KEY UPDATE
+                model      = VALUES(model),
+                messages   = VALUES(messages),
+                updated_at = NOW(3)'
+        )->execute([
+            $sessionId,
+            $model,
+            json_encode($messages, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+    } catch (Throwable $e) {
+        // Best-effort – do not break the chat response on a save failure.
+    }
+}
+
+/**
+ * Load a conversation session from the database.
+ * Returns null when the session does not exist or is expired.
+ *
+ * @return array{model: string, messages: array}|null
+ */
+function loadConversationSession(string $sessionId): ?array
+{
+    if ($sessionId === '') {
+        return null;
+    }
+    try {
+        $stmt = getDb()->prepare(
+            'SELECT model, messages FROM conversation_sessions WHERE session_id = ?'
+        );
+        $stmt->execute([$sessionId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+        $messages = json_decode((string) $row['messages'], true);
+        if (!is_array($messages)) {
+            return null;
+        }
+        return ['model' => (string) $row['model'], 'messages' => $messages];
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+/**
+ * Delete all conversation sessions that have been inactive for more than
+ * 30 minutes. Call this periodically (e.g., with a small probability on
+ * each request) to keep the table tidy.
+ */
+function purgeExpiredConversationSessions(): void
+{
+    try {
+        getDb()->exec(
+            "DELETE FROM conversation_sessions
+              WHERE updated_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)"
+        );
+    } catch (Throwable $e) {
+        // Best-effort
+    }
 }

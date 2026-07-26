@@ -700,6 +700,20 @@ foreach ($payload['messages'] as $msg) {
 
 $model = $payload['model'];
 
+// Extract and validate the optional session ID for conversation persistence.
+$sessionId = '';
+if (isset($payload['session_id']) && is_string($payload['session_id'])) {
+    $rawSessionId = $payload['session_id'];
+    if (preg_match('/^[a-f0-9]{8,128}$/', $rawSessionId)) {
+        $sessionId = $rawSessionId;
+    }
+}
+
+// Occasionally purge expired conversation sessions (5 % probability).
+if (mt_rand(1, 20) === 1) {
+    purgeExpiredConversationSessions();
+}
+
 try {
     $slot = pickEndpointForModel($model);
 } catch (Throwable $e) {
@@ -724,7 +738,7 @@ $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
 
 // Ensure the task is always marked finished, even on unexpected PHP termination.
 $taskFinished = false;
-register_shutdown_function(static function () use ($taskId, &$taskFinished): void {
+register_shutdown_function(static function () use (&$taskId, &$taskFinished): void {
     if (!$taskFinished) {
         try {
             completeTask($taskId, 'error');
@@ -733,6 +747,42 @@ register_shutdown_function(static function () use ($taskId, &$taskFinished): voi
         }
     }
 });
+
+// Maximum number of additional endpoints to try when the primary one fails.
+$endpointRetries = 2;
+
+/**
+ * Marks the current task as failed, picks a new endpoint for $model,
+ * and updates the shared $endpoint / $taskId / $baseUrl / $timeout / $url
+ * variables in the outer scope. Returns false when no further endpoint
+ * is available or the retry budget is exhausted.
+ */
+$switchEndpoint = function () use (
+    $model,
+    &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries
+): bool {
+    if ($endpointRetries <= 0) {
+        return false;
+    }
+    $endpointRetries--;
+    try {
+        completeTask($taskId, 'error');
+    } catch (Throwable $e) {}
+    try {
+        $newSlot = pickEndpointForModel($model);
+    } catch (Throwable $e) {
+        return false;
+    }
+    if ($newSlot === null) {
+        return false;
+    }
+    $endpoint = $newSlot['endpoint'];
+    $taskId   = $newSlot['task_id'];
+    $baseUrl  = rtrim($endpoint['base_url'], '/');
+    $timeout  = max(1, (int) $endpoint['timeout']);
+    $url      = $baseUrl . '/chat/completions';
+    return true;
+};
 
 $clientRequestedStream = isset($payload['stream']) && $payload['stream'] === true;
 $useSearchTool = $searxngBaseUrl !== '';
@@ -796,6 +846,11 @@ if ($useTools) {
         header('Content-Type: application/json; charset=utf-8');
 
         if ($curlErr !== '') {
+            if ($switchEndpoint()) {
+                $url = $baseUrl . '/chat/completions';
+                $iteration--;  // redo this iteration with the new endpoint
+                continue;
+            }
             $taskFinished = true;
             completeTask($taskId, 'error');
             http_response_code(502);
@@ -808,6 +863,11 @@ if ($useTools) {
             $msg = isset($data['error']['message'])
                 ? $data['error']['message']
                 : 'LM Studio Fehler (HTTP ' . $httpCode . ')';
+            if ($switchEndpoint()) {
+                $url = $baseUrl . '/chat/completions';
+                $iteration--;  // redo this iteration with the new endpoint
+                continue;
+            }
             $taskFinished = true;
             completeTask($taskId, 'error');
             http_response_code(502);
@@ -900,6 +960,18 @@ if ($useTools) {
     $taskFinished = true;
     completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total']);
 
+    // Persist the conversation so it survives future endpoint failures.
+    if ($sessionId !== '') {
+        $assistantContent = normalizeAssistantContent(
+            $finalData['choices'][0]['message']['content'] ?? ''
+        );
+        $sessionMessages = array_merge(
+            $payload['messages'],
+            [['role' => 'assistant', 'content' => $assistantContent]]
+        );
+        saveConversationSession($sessionId, $model, $sessionMessages);
+    }
+
     if ($clientRequestedStream) {
         emitSyntheticStream($finalData);
     } else {
@@ -911,12 +983,14 @@ if ($useTools) {
 
 $ch = curl_init($url);
 curl_setopt_array($ch, [
-    CURLOPT_POST       => true,
-    CURLOPT_POSTFIELDS => json_encode($forwardPayload),
-    CURLOPT_HTTPHEADER => [
+    CURLOPT_POST           => true,
+    CURLOPT_POSTFIELDS     => json_encode($forwardPayload),
+    CURLOPT_HTTPHEADER     => [
         'Content-Type: application/json',
         'Accept: application/json',
     ],
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_TIMEOUT        => $timeout,
 ]);
 
 // ── Streaming path ────────────────────────────────────────────────────────────
@@ -924,44 +998,85 @@ curl_setopt_array($ch, [
 if ($stream) {
     ignore_user_abort(true);
     @set_time_limit(0);
-    header('Content-Type: text/event-stream; charset=utf-8');
-    header('Cache-Control: no-cache');
-    header('X-Accel-Buffering: no');
 
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => false,
-        CURLOPT_CONNECTTIMEOUT => $timeout,
-        CURLOPT_TIMEOUT        => 0,
-    ]);
+    // Attempt the stream; retry with a different endpoint if it fails before
+    // any data has been written to the client.
+    $dataWritten      = false;
+    $tailBuffer       = '';
+    $accumulatedText  = '';  // for session persistence
+    $streamCurlErr    = '';
+    $streamHttpCode   = 0;
 
-    // Tail buffer: keep the last 8 KB of SSE data so we can extract usage
-    // information from the final event(s) once the stream has completed.
-    $tailBuffer = '';
+    do {
+        $tailBuffer      = '';
+        $accumulatedText = '';
+        $dataWritten     = false;
 
-    curl_setopt($ch, CURLOPT_WRITEFUNCTION, static function ($ch, $data) use (&$tailBuffer): int {
-        echo $data;
-        if (ob_get_level() > 0) {
-            ob_flush();
+        $chStream = curl_init($url);
+        curl_setopt_array($chStream, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => json_encode($forwardPayload),
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Accept: application/json'],
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_CONNECTTIMEOUT => $timeout,
+            CURLOPT_TIMEOUT        => 0,
+        ]);
+
+        curl_setopt($chStream, CURLOPT_WRITEFUNCTION,
+            static function ($ch, $data) use (&$tailBuffer, &$accumulatedText, &$dataWritten): int {
+                if (!$dataWritten) {
+                    // Emit SSE headers on first data chunk (deferred so we can
+                    // still switch the endpoint if the connection was refused).
+                    header('Content-Type: text/event-stream; charset=utf-8');
+                    header('Cache-Control: no-cache');
+                    header('X-Accel-Buffering: no');
+                    $dataWritten = true;
+                }
+                echo $data;
+                if (ob_get_level() > 0) {
+                    ob_flush();
+                }
+                flush();
+                $tailBuffer .= $data;
+                if (strlen($tailBuffer) > 8192) {
+                    $tailBuffer = substr($tailBuffer, -8192);
+                }
+                // Accumulate assistant content from delta events.
+                if (preg_match_all('/^data:\s*(\{.+\})$/m', $data, $dm)) {
+                    foreach ($dm[1] as $djson) {
+                        $dobj = json_decode($djson, true);
+                        if (is_array($dobj) && isset($dobj['choices'][0]['delta']['content'])) {
+                            $accumulatedText .= (string) $dobj['choices'][0]['delta']['content'];
+                        }
+                    }
+                }
+                return strlen($data);
+            }
+        );
+
+        curl_exec($chStream);
+        $streamCurlErr  = curl_error($chStream);
+        $streamHttpCode = (int) curl_getinfo($chStream, CURLINFO_HTTP_CODE);
+        curl_close($chStream);
+
+        // Retry with a different endpoint only if the failure occurred before
+        // we sent anything to the client (headers not yet committed).
+        if (($streamCurlErr !== '' || ($streamHttpCode !== 0 && $streamHttpCode !== 200)) && !$dataWritten) {
+            if ($switchEndpoint()) {
+                $forwardPayload['stream'] = true;
+                continue;
+            }
         }
-        flush();
-        $tailBuffer .= $data;
-        if (strlen($tailBuffer) > 8192) {
-            $tailBuffer = substr($tailBuffer, -8192);
-        }
-        return strlen($data);
-    });
+        break;
+    } while (true);
 
-    curl_exec($ch);
-    $curlErr = curl_error($ch);
-    curl_close($ch);
-
-    // Extract token usage from the last SSE data events.
+    // Extract token usage from the tail of the SSE stream.
     $promptTokens     = null;
     $completionTokens = null;
     $totalTokens      = null;
     if (preg_match_all('/^data:\s*(\{.+\})$/m', $tailBuffer, $matches)) {
-        foreach (array_reverse($matches[1]) as $raw) {
-            $obj = json_decode($raw, true);
+        foreach (array_reverse($matches[1]) as $rawEvt) {
+            $obj = json_decode($rawEvt, true);
             if (is_array($obj) && isset($obj['usage']['total_tokens'])) {
                 $promptTokens     = isset($obj['usage']['prompt_tokens'])     ? (int) $obj['usage']['prompt_tokens']     : null;
                 $completionTokens = isset($obj['usage']['completion_tokens']) ? (int) $obj['usage']['completion_tokens'] : null;
@@ -972,48 +1087,86 @@ if ($stream) {
     }
 
     $taskFinished = true;
-    completeTask($taskId, $curlErr !== '' ? 'error' : 'done', $promptTokens, $completionTokens, $totalTokens);
+    $streamStatus = ($streamCurlErr === '' && ($streamHttpCode === 0 || $streamHttpCode === 200))
+        ? 'done' : 'error';
+    completeTask($taskId, $streamStatus, $promptTokens, $completionTokens, $totalTokens);
 
-    if ($curlErr !== '') {
-        echo "data: " . json_encode(['error' => $curlErr]) . "\n\n";
-        flush();
+    // Persist conversation on success.
+    if ($streamStatus === 'done' && $sessionId !== '' && $accumulatedText !== '') {
+        $sessionMessages = array_merge(
+            $payload['messages'],
+            [['role' => 'assistant', 'content' => $accumulatedText]]
+        );
+        saveConversationSession($sessionId, $model, $sessionMessages);
+    }
+
+    if ($streamCurlErr !== '') {
+        if ($dataWritten) {
+            echo "data: " . json_encode(['error' => $streamCurlErr]) . "\n\n";
+            flush();
+        } else {
+            // Nothing sent yet – return a plain JSON error.
+            http_response_code(502);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['error' => 'LM Studio nicht erreichbar: ' . $streamCurlErr]);
+        }
     }
     exit;
 }
 
 // ── Non-streaming path ────────────────────────────────────────────────────────
 
-curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_TIMEOUT        => $timeout,
-]);
+do {
+    $body     = curl_exec($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr  = curl_error($ch);
+    curl_close($ch);
 
-$body     = curl_exec($ch);
-$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-$curlErr  = curl_error($ch);
-curl_close($ch);
+    header('Content-Type: application/json; charset=utf-8');
 
-header('Content-Type: application/json; charset=utf-8');
+    if ($curlErr !== '') {
+        if ($switchEndpoint()) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => json_encode($forwardPayload),
+                CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Accept: application/json'],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => $timeout,
+            ]);
+            continue;
+        }
+        $taskFinished = true;
+        completeTask($taskId, 'error');
+        http_response_code(502);
+        echo json_encode(['error' => 'LM Studio nicht erreichbar: ' . $curlErr]);
+        exit;
+    }
 
-if ($curlErr !== '') {
-    $taskFinished = true;
-    completeTask($taskId, 'error');
-    http_response_code(502);
-    echo json_encode(['error' => 'LM Studio nicht erreichbar: ' . $curlErr]);
-    exit;
-}
-
-if ($httpCode !== 200) {
-    $data = json_decode($body, true);
-    $msg  = isset($data['error']['message'])
-        ? $data['error']['message']
-        : 'LM Studio Fehler (HTTP ' . $httpCode . ')';
-    $taskFinished = true;
-    completeTask($taskId, 'error');
-    http_response_code(502);
-    echo json_encode(['error' => $msg]);
-    exit;
-}
+    if ($httpCode !== 200) {
+        $data = json_decode($body, true);
+        $msg  = isset($data['error']['message'])
+            ? $data['error']['message']
+            : 'LM Studio Fehler (HTTP ' . $httpCode . ')';
+        if ($switchEndpoint()) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => json_encode($forwardPayload),
+                CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Accept: application/json'],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => $timeout,
+            ]);
+            continue;
+        }
+        $taskFinished = true;
+        completeTask($taskId, 'error');
+        http_response_code(502);
+        echo json_encode(['error' => $msg]);
+        exit;
+    }
+    break;
+} while (true);
 
 // Extract token usage and complete the task.
 $data             = json_decode($body, true);
@@ -1023,6 +1176,16 @@ $totalTokens      = isset($data['usage']['total_tokens'])      ? (int) $data['us
 
 $taskFinished = true;
 completeTask($taskId, 'done', $promptTokens, $completionTokens, $totalTokens);
+
+// Persist conversation on success.
+if ($sessionId !== '' && is_array($data)) {
+    $assistantContent = normalizeAssistantContent($data['choices'][0]['message']['content'] ?? '');
+    $sessionMessages  = array_merge(
+        $payload['messages'],
+        [['role' => 'assistant', 'content' => $assistantContent]]
+    );
+    saveConversationSession($sessionId, $model, $sessionMessages);
+}
 
 // Forward the raw LM Studio response.
 echo $body;
