@@ -178,7 +178,8 @@ function ensureRuntimeSchema(PDO $pdo): void
     ");
 
     // Conversation sessions: persists chat history so a failed endpoint can be
-    // replaced transparently. Rows expire 30 minutes after the last activity.
+    // replaced transparently. Anonymous rows expire 30 minutes after the last
+    // activity; user-linked rows are kept indefinitely.
     // Extend users table with email-verification, password-reset and per-user model columns.
     foreach ([
         "ALTER TABLE users ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0 AFTER email",
@@ -195,14 +196,26 @@ function ensureRuntimeSchema(PDO $pdo): void
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS conversation_sessions (
             session_id  CHAR(64)     NOT NULL,
+            user_id     INT          NULL,
+            title       VARCHAR(200) NOT NULL DEFAULT '',
             model       VARCHAR(255) NOT NULL DEFAULT '',
             messages    MEDIUMTEXT   NOT NULL,
             updated_at  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
                                      ON UPDATE CURRENT_TIMESTAMP(3),
             PRIMARY KEY (session_id),
-            KEY idx_conv_updated (updated_at)
+            KEY idx_conv_updated (updated_at),
+            KEY idx_conv_user    (user_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
+
+    // Add user_id / title columns if this is an older database without them.
+    foreach ([
+        "ALTER TABLE conversation_sessions ADD COLUMN user_id INT NULL AFTER session_id",
+        "ALTER TABLE conversation_sessions ADD COLUMN title VARCHAR(200) NOT NULL DEFAULT '' AFTER user_id",
+        "ALTER TABLE conversation_sessions ADD KEY idx_conv_user (user_id)",
+    ] as $alter) {
+        try { $pdo->exec($alter); } catch (Throwable $_e) { /* already exists */ }
+    }
 
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
@@ -285,27 +298,52 @@ function setSetting(string $key, string $value): void
 /**
  * Save (upsert) a conversation session's message history.
  * The row's updated_at timestamp is refreshed on every save,
- * which resets the 30-minute expiry window.
+ * which resets the expiry window for anonymous sessions.
+ *
+ * When $userId is provided the session is linked to that user and the
+ * title is derived from the first user message (set once, never overwritten).
  *
  * @param string   $sessionId Hex session token (8–128 chars).
  * @param string   $model     Model name used for this session.
  * @param array    $messages  Full messages array (role/content pairs).
+ * @param int|null $userId    ID of the logged-in user, or null for anonymous.
  */
-function saveConversationSession(string $sessionId, string $model, array $messages): void
+function saveConversationSession(string $sessionId, string $model, array $messages, ?int $userId = null): void
 {
     if ($sessionId === '') {
         return;
     }
+
+    // Derive a one-line title from the first user message (only used when
+    // userId is set and no title has been stored yet).
+    $title = '';
+    if ($userId !== null) {
+        foreach ($messages as $msg) {
+            if (is_array($msg) && ($msg['role'] ?? '') === 'user') {
+                $raw   = is_string($msg['content']) ? $msg['content'] : '';
+                $title = mb_substr(trim($raw), 0, 80, 'UTF-8');
+                if (mb_strlen($raw, 'UTF-8') > 80) {
+                    $title .= '…';
+                }
+                break;
+            }
+        }
+    }
+
     try {
         getDb()->prepare(
-            'INSERT INTO conversation_sessions (session_id, model, messages, updated_at)
-             VALUES (?, ?, ?, NOW(3))
+            'INSERT INTO conversation_sessions (session_id, user_id, title, model, messages, updated_at)
+             VALUES (?, ?, ?, ?, ?, NOW(3))
              ON DUPLICATE KEY UPDATE
+                user_id    = COALESCE(user_id, VALUES(user_id)),
+                title      = IF(title = \'\', VALUES(title), title),
                 model      = VALUES(model),
                 messages   = VALUES(messages),
                 updated_at = NOW(3)'
         )->execute([
             $sessionId,
+            $userId,
+            $title,
             $model,
             json_encode($messages, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ]);
@@ -345,16 +383,17 @@ function loadConversationSession(string $sessionId): ?array
 }
 
 /**
- * Delete all conversation sessions that have been inactive for more than
- * 30 minutes. Call this periodically (e.g., with a small probability on
- * each request) to keep the table tidy.
+ * Delete anonymous conversation sessions that have been inactive for more
+ * than 30 minutes. User-linked sessions are kept indefinitely.
+ * Call this periodically (e.g., with a small probability on each request).
  */
 function purgeExpiredConversationSessions(): void
 {
     try {
         getDb()->exec(
             "DELETE FROM conversation_sessions
-              WHERE updated_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)"
+              WHERE user_id IS NULL
+                AND updated_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)"
         );
     } catch (Throwable $e) {
         // Best-effort
@@ -362,7 +401,30 @@ function purgeExpiredConversationSessions(): void
 }
 
 /**
- * Extract the highest "Xb" parameter count from a model name.
+ * Return a list of conversation sessions belonging to a user.
+ * Each row contains session_id, title, model and updated_at.
+ * Results are ordered newest-first.
+ *
+ * @return array<int,array{session_id:string,title:string,model:string,updated_at:string}>
+ */
+function listUserConversations(int $userId): array
+{
+    try {
+        $stmt = getDb()->prepare(
+            'SELECT session_id, title, model, updated_at
+               FROM conversation_sessions
+              WHERE user_id = ?
+              ORDER BY updated_at DESC
+              LIMIT 200'
+        );
+        $stmt->execute([$userId]);
+        return $stmt->fetchAll();
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
  * Returns null when no numeric "Xb" label is found.
  */
 function modelIntelligenceScore(string $modelName): ?float

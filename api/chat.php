@@ -17,6 +17,12 @@
  * as Server-Sent Events (text/event-stream).
  */
 
+// Start the PHP session so that $_SESSION['admin_id'] is available for
+// linking conversation sessions to registered users.
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/balancer.php';
 require_once __DIR__ . '/sd_balancer.php';
@@ -790,6 +796,9 @@ if (isset($payload['session_id']) && is_string($payload['session_id'])) {
     }
 }
 
+// Resolve the currently logged-in user for session ownership.
+$sessionUserId = isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null;
+
 // Occasionally purge expired conversation sessions (5 % probability).
 if (mt_rand(1, 20) === 1) {
     purgeExpiredConversationSessions();
@@ -1130,7 +1139,7 @@ if ($useTools) {
             $payload['messages'],
             [['role' => 'assistant', 'content' => $assistantContent]]
         );
-        saveConversationSession($sessionId, $model, $sessionMessages);
+        saveConversationSession($sessionId, $model, $sessionMessages, $sessionUserId);
     }
 
     if ($clientRequestedStream) {
@@ -1256,7 +1265,7 @@ if ($stream) {
             $payload['messages'],
             [['role' => 'assistant', 'content' => $accumulatedText]]
         );
-        saveConversationSession($sessionId, $model, $sessionMessages);
+        saveConversationSession($sessionId, $model, $sessionMessages, $sessionUserId);
     }
     if ($streamStatus === 'done' && ($dataWritten || headers_sent())) {
         $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
@@ -1347,7 +1356,7 @@ if ($sessionId !== '' && is_array($data)) {
         $payload['messages'],
         [['role' => 'assistant', 'content' => $assistantContent]]
     );
-    saveConversationSession($sessionId, $model, $sessionMessages);
+    saveConversationSession($sessionId, $model, $sessionMessages, $sessionUserId);
 }
 
 // Forward the raw LM Studio response.
