@@ -756,7 +756,7 @@ if ($defaultModel === '') {
 
             const body = document.createElement('div');
             body.className = 'response-details-body';
-            body.innerHTML = 'Antwort bearbeitet durch: <strong>Unbekannt</strong>';
+            body.innerHTML = 'Bearbeitet durch <strong>Unbekannt</strong>';
 
             const editorEl = body.querySelector('strong');
             bubble._responseDetailsEditorEl = editorEl;
