@@ -26,7 +26,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         try {
             $stmt = getDb()->prepare(
-                'SELECT id, username, password_hash FROM users WHERE username = ? LIMIT 1'
+                'SELECT id, username, password_hash, requires_password_change FROM users WHERE username = ? LIMIT 1'
             );
             $stmt->execute([$username]);
             $user = $stmt->fetch();
@@ -35,6 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 session_regenerate_id(true);
                 $_SESSION['admin_user'] = $user['username'];
                 $_SESSION['admin_id']   = (int) $user['id'];
+                $_SESSION['requires_password_change'] = !empty($user['requires_password_change']);
 
                 getDb()->prepare('UPDATE users SET last_login = NOW() WHERE id = ?')
                        ->execute([$user['id']]);

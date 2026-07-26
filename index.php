@@ -464,7 +464,10 @@ if ($defaultModel === '') {
 <!-- ── Header ──────────────────────────────────────────────── -->
 <header>
     <h1>🤖 KHWF KI</h1>
-    <a class="admin-link" href="admin/login.php">⚙ Admin</a>
+    <div style="display:flex;align-items:center;gap:10px">
+        <a href="register.php" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">✍ Registrieren</a>
+        <a class="admin-link" href="admin/login.php">⚙ Admin</a>
+    </div>
 </header>
 
 <!-- ── Config bar (hidden – DOM refs kept for JS) ─────────── -->
