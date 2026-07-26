@@ -187,9 +187,92 @@ try {
         // Tables may not exist on older installations
     }
 
+    // ── LLM aggregate totals ──────────────────────────────────────────────────
+
+    $totals = [
+        'total_running' => 0, 'total_done' => 0, 'total_error' => 0,
+        'total_done_24h' => 0,
+        'grand_prompt_tokens' => 0, 'grand_completion_tokens' => 0, 'grand_tokens' => 0,
+    ];
+    try {
+        $tRow = getDb()->query("
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
+                COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
+                COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
+                COALESCE(SUM(CASE WHEN status = 'done'
+                                  AND started_at >= NOW() - INTERVAL 24 HOUR
+                             THEN 1 ELSE 0 END), 0) AS total_done_24h,
+                COALESCE(SUM(prompt_tokens), 0)     AS grand_prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) AS grand_completion_tokens,
+                COALESCE(SUM(total_tokens), 0)      AS grand_tokens
+            FROM tasks
+        ")->fetch(PDO::FETCH_ASSOC);
+        if ($tRow) {
+            $totals = [
+                'total_running'           => (int) $tRow['total_running'],
+                'total_done'              => (int) $tRow['total_done'],
+                'total_error'             => (int) $tRow['total_error'],
+                'total_done_24h'          => (int) $tRow['total_done_24h'],
+                'grand_prompt_tokens'     => (int) $tRow['grand_prompt_tokens'],
+                'grand_completion_tokens' => (int) $tRow['grand_completion_tokens'],
+                'grand_tokens'            => (int) $tRow['grand_tokens'],
+            ];
+        }
+    } catch (PDOException $e) { }
+
+    // ── SD aggregate totals ───────────────────────────────────────────────────
+
+    $sdTotals = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
+    try {
+        $sdT = getDb()->query("
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
+                COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
+                COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
+                COALESCE(SUM(CASE WHEN status = 'done'
+                                  AND started_at >= NOW() - INTERVAL 24 HOUR
+                             THEN 1 ELSE 0 END), 0) AS total_done_24h
+            FROM sd_tasks
+        ")->fetch(PDO::FETCH_ASSOC);
+        if ($sdT) {
+            $sdTotals = [
+                'total_running'  => (int) $sdT['total_running'],
+                'total_done'     => (int) $sdT['total_done'],
+                'total_error'    => (int) $sdT['total_error'],
+                'total_done_24h' => (int) $sdT['total_done_24h'],
+            ];
+        }
+    } catch (PDOException $e) { }
+
+    // ── ComfyUI aggregate totals ──────────────────────────────────────────────
+
+    $comfyTotals = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
+    try {
+        $comfyT = getDb()->query("
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
+                COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
+                COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
+                COALESCE(SUM(CASE WHEN status = 'done'
+                                  AND started_at >= NOW() - INTERVAL 24 HOUR
+                             THEN 1 ELSE 0 END), 0) AS total_done_24h
+            FROM comfy_tasks
+        ")->fetch(PDO::FETCH_ASSOC);
+        if ($comfyT) {
+            $comfyTotals = [
+                'total_running'  => (int) $comfyT['total_running'],
+                'total_done'     => (int) $comfyT['total_done'],
+                'total_error'    => (int) $comfyT['total_error'],
+                'total_done_24h' => (int) $comfyT['total_done_24h'],
+            ];
+        }
+    } catch (PDOException $e) { }
+
     echo json_encode(
         ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng,
-         'sd_endpoints' => $sdRows, 'comfy_endpoints' => $comfyRows, 'clients' => $clientStats],
+         'sd_endpoints' => $sdRows, 'comfy_endpoints' => $comfyRows, 'clients' => $clientStats,
+         'totals' => $totals, 'sd_totals' => $sdTotals, 'comfy_totals' => $comfyTotals],
         JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     );
 
