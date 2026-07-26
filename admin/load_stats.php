@@ -19,6 +19,11 @@ if (!isset($_SESSION['admin_user'])) {
     echo json_encode(['ok' => false, 'error' => 'Unauthorized']);
     exit;
 }
+// Release the session write lock – this endpoint only reads the session
+// for auth and never writes to it. Releasing early prevents this polling
+// request from blocking other same-session requests (e.g. a long-running
+// chat.php call) that also hold the session lock.
+session_write_close();
 
 require_once __DIR__ . '/../db.php';
 

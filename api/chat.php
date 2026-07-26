@@ -798,6 +798,10 @@ if (isset($payload['session_id']) && is_string($payload['session_id'])) {
 
 // Resolve the currently logged-in user for session ownership.
 $sessionUserId = isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null;
+// Release the session write lock immediately. chat.php can run for many seconds
+// (waiting for the LLM response) and holding the lock blocks every other same-session
+// request – most critically the admin/load_stats.php polling endpoint.
+session_write_close();
 
 // Occasionally purge expired conversation sessions (5 % probability).
 if (mt_rand(1, 20) === 1) {
