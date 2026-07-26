@@ -89,12 +89,63 @@ Mehrere KI-Server gemeinsam nutzen, statt einzelne Insellösungen zu betreiben.
 
 ---
 
+## Datenschutz & Datensouveränität
+
+LLMInt ist so konzipiert, dass Daten die eigene Infrastruktur nicht verlassen müssen.
+
+### Keine Abhängigkeit von externen Cloud-Diensten
+Alle KI-Modelle und Endpunkte werden intern betrieben. Anfragen, Dokumente und Antworten verbleiben vollständig in der eigenen Umgebung – kein Datentransfer zu Drittanbietern.
+
+### Klare Kontrolle
+- **Zentrales Management**: Wer auf welche Modelle Zugriff hat, wird zentral über den Admin-Bereich gesteuert.
+- **Keine Datenweitergabe**: Weder Nutzeranfragen noch Dokumente werden extern protokolliert oder für Modelltraining genutzt.
+- **Transparenz**: Es ist jederzeit nachvollziehbar, welches Modell eine Antwort geliefert hat und welche Ressourcen genutzt wurden.
+
+### DSGVO-konformes Betriebsmodell
+Da LLMInt auf eigener Infrastruktur läuft, liegt die Datenverarbeitung vollständig im Verantwortungsbereich der Organisation. Das vereinfacht die datenschutzrechtliche Dokumentation und reduziert den Aufwand für Auftragsverarbeitungsverträge mit KI-Anbietern.
+
+### Dokumentenwissen bleibt intern
+Hochgeladene Dokumente für den Dokumentenkontext (RAG) werden lokal gespeichert und verarbeitet – kein Upload in externe Systeme.
+
+---
+
+## Healthcare
+
+Im Gesundheitswesen gelten besonders hohe Anforderungen an Datenschutz, Verfügbarkeit und Nachvollziehbarkeit. LLMInt erfüllt diese Anforderungen durch seine Architektur.
+
+### Beispiel-Use-Cases im Gesundheitswesen
+
+#### Klinisches Wissensmanagement
+Medizinisches Fachpersonal kann interne Leitlinien, Protokolle und Dokumentationen direkt im Chat abfragen – ohne externe KI-Dienste nutzen zu müssen.
+
+#### Unterstützung bei Dokumentation
+LLMInt kann bei der Erstellung und Strukturierung klinischer Texte, Entlassberichte oder interner Kommunikation unterstützen – mit KI-Modellen, die vollständig intern laufen.
+
+#### Forschung und Literaturrecherche
+Über die optionale Websuche können aktuelle Publikationen eingebunden und mit internem Dokumentwissen verknüpft werden.
+
+#### Verwaltung und Administration
+Routineaufgaben wie das Erstellen von Vorlagen, Zusammenfassungen oder Korrespondenz können beschleunigt werden – datenschutzkonform und ohne Drittanbieteranbindung.
+
+### Warum LLMInt im Healthcare-Umfeld geeignet ist
+
+| Anforderung | LLMInt-Lösung |
+|---|---|
+| Datenschutz (DSGVO, ggf. HIPAA) | Vollständig interner Betrieb, keine Daten in externe Clouds |
+| Verfügbarkeit | Lastverteilung auf mehrere Endpunkte, keine Single-Point-of-Failure |
+| Nachvollziehbarkeit | Sichtbarkeit, welches Modell geantwortet hat |
+| Flexibilität | Unterschiedliche Modelle für unterschiedliche Fachabteilungen |
+| Skalierbarkeit | Neue Endpunkte ergänzbar ohne Änderung am Nutzer-Workflow |
+
+---
+
 ## Für wen ist LLMInt geeignet?
 
 - Bildungseinrichtungen
 - KMU und größere Organisationen
 - Forschungs- und Innovationsteams
 - IT-Abteilungen mit interner KI-Infrastruktur
+- Gesundheitseinrichtungen mit strengen Datenschutzanforderungen
 
 ---
 
