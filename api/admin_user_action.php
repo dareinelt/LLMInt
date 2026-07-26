@@ -5,6 +5,9 @@
  *
  * Admin-only AJAX endpoint for user management actions:
  *
+ *   action=create_user          { username, password, password2 }
+ *     → Creates a new user account (no e-mail / verification required).
+ *
  *   action=send_password_reset  { user_id }
  *     → Generates a reset token, sends a password-reset e-mail.
  *
@@ -41,7 +44,73 @@ if (empty($_SESSION['csrf_token']) || $csrf !== $_SESSION['csrf_token']) {
 
 $db = getDb();
 
-// ── send_password_reset ───────────────────────────────────────────────────────
+// ── create_user ───────────────────────────────────────────────────────────────
+if ($action === 'create_user') {
+    $username  = trim($data['username'] ?? '');
+    $password  = $data['password']  ?? '';
+    $password2 = $data['password2'] ?? '';
+
+    if ($username === '' || $password === '') {
+        echo json_encode(['ok' => false, 'message' => 'Bitte alle Pflichtfelder ausfüllen.']);
+        exit;
+    }
+    if (!preg_match('/^[a-zA-Z0-9_]{1,100}$/', $username)) {
+        echo json_encode(['ok' => false, 'message' => 'Benutzername darf nur Buchstaben, Ziffern und _ enthalten (max. 100 Zeichen).']);
+        exit;
+    }
+    if ($password !== $password2) {
+        echo json_encode(['ok' => false, 'message' => 'Die Passwörter stimmen nicht überein.']);
+        exit;
+    }
+    if (strlen($password) < 8
+        || !preg_match('/[A-Z]/', $password)
+        || !preg_match('/[a-z]/', $password)
+        || !preg_match('/[0-9]/', $password)
+        || !preg_match('/[#?!@$%^&*\-]/', $password)
+    ) {
+        echo json_encode(['ok' => false, 'message' => 'Das Passwort erfüllt nicht die Sicherheitsanforderungen (min. 8 Zeichen, Groß-/Kleinbuchstaben, Ziffer, Sonderzeichen).']);
+        exit;
+    }
+
+    $stCheck = $db->prepare('SELECT COUNT(*) FROM users WHERE username = ?');
+    $stCheck->execute([$username]);
+    if ((int) $stCheck->fetchColumn() > 0) {
+        echo json_encode(['ok' => false, 'message' => 'Dieser Benutzername ist bereits vergeben.']);
+        exit;
+    }
+
+    $hash         = password_hash($password, PASSWORD_BCRYPT);
+    $defaultModel = getSetting('new_user_default_model', '');
+
+    try {
+        $db->prepare(
+            'INSERT INTO users (username, password_hash, email, email_verified, default_model)
+             VALUES (?, ?, NULL, 1, ?)'
+        )->execute([$username, $hash, $defaultModel]);
+
+        $newId      = (int) $db->lastInsertId();
+        $createdAt  = date('Y-m-d H:i:s');
+
+        echo json_encode([
+            'ok'      => true,
+            'message' => "Benutzer \"{$username}\" wurde erfolgreich angelegt.",
+            'user'    => [
+                'id'             => $newId,
+                'username'       => $username,
+                'email'          => '',
+                'email_verified' => 1,
+                'default_model'  => $defaultModel,
+                'created_at'     => $createdAt,
+                'last_login'     => null,
+            ],
+        ]);
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'message' => 'Datenbankfehler: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
+
 if ($action === 'send_password_reset') {
     $userId = (int) ($data['user_id'] ?? 0);
     if ($userId <= 0) {
