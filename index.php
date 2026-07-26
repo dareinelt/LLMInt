@@ -470,6 +470,15 @@ if ($defaultModel === '') {
     let history = [];
     let isStreaming = false;
 
+    /* ── Session ID (persists conversation server-side) ─── */
+    let sessionId = sessionStorage.getItem('chat_session_id') || '';
+    if (!sessionId) {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        sessionId = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        sessionStorage.setItem('chat_session_id', sessionId);
+    }
+
     /* ── Helpers ─────────────────────────────────────────── */
 
     function setStatus(msg, type = 'info') {
@@ -700,6 +709,7 @@ if ($defaultModel === '') {
         const payload = {
             model,
             messages,
+            session_id: sessionId,
             stream: true,
             temperature: 0.7,
         };
@@ -802,6 +812,11 @@ if ($defaultModel === '') {
         chatArea.innerHTML = '';
         showWelcome();
         setStatus('Verlauf gelöscht.', 'info');
+        // Start a new server-side session so the old history is no longer used.
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        sessionId = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        sessionStorage.setItem('chat_session_id', sessionId);
     });
 
     systemToggle.addEventListener('click', () => {
