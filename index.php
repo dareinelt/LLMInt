@@ -966,9 +966,20 @@ if ($defaultModel === '') {
                     temperature: 0.7,
                 };
                 const result = await executeStreamingRequest(retryPayload, bubble);
-                const finalText = result.accumulated || '(Leere Antwort)';
+                let finalText = result.accumulated;
+                let retryResponseDetails = result.responseDetails;
+
+                if (!finalText) {
+                    setStatus('Leere Antwort – Wiederholungsversuch …', 'info');
+                    bubble.innerHTML = '';
+                    const retryResult = await executeStreamingRequest(retryPayload, bubble);
+                    finalText = retryResult.accumulated;
+                    retryResponseDetails = retryResult.responseDetails || retryResponseDetails;
+                }
+
+                finalText = finalText || '(Leere Antwort)';
                 bubble.innerHTML = renderMarkdown(finalText);
-                setResponseDetailsForBubble(bubble, result.responseDetails);
+                setResponseDetailsForBubble(bubble, retryResponseDetails);
                 bubble.classList.remove('streaming');
 
                 if (historyAssistantIndex >= 0 && historyAssistantIndex < history.length && history[historyAssistantIndex]?.role === 'assistant') {
@@ -1030,16 +1041,40 @@ if ($defaultModel === '') {
         };
 
         try {
-            const result = await executeStreamingRequest(payload, bubble);
-            const accumulated = result.accumulated;
+            let result = await executeStreamingRequest(payload, bubble);
+            let accumulated = result.accumulated;
+            let responseDetails = result.responseDetails;
+            let upgradeSuggestion = result.upgradeSuggestion;
+
+            if (!accumulated) {
+                // First retry: same model/endpoint
+                setStatus('Leere Antwort – Wiederholungsversuch …', 'info');
+                bubble.innerHTML = '';
+                const retryResult = await executeStreamingRequest(payload, bubble);
+                accumulated = retryResult.accumulated;
+                responseDetails = retryResult.responseDetails || responseDetails;
+                upgradeSuggestion = retryResult.upgradeSuggestion || upgradeSuggestion;
+
+                if (!accumulated && upgradeSuggestion?.available && upgradeSuggestion?.suggested_model) {
+                    // Second retry: next smarter model (automatic)
+                    setStatus(`Leere Antwort – Versuche mit ${upgradeSuggestion.suggested_intelligence || 'größerem'} Modell …`, 'info');
+                    bubble.innerHTML = '';
+                    const upgradePayload = { ...payload, model: upgradeSuggestion.suggested_model };
+                    const upgradeResult = await executeStreamingRequest(upgradePayload, bubble);
+                    accumulated = upgradeResult.accumulated;
+                    responseDetails = upgradeResult.responseDetails || responseDetails;
+                    upgradeSuggestion = null; // upgrade was already used automatically
+                }
+            }
+
             bubble.innerHTML = accumulated ? renderMarkdown(accumulated) : '(Leere Antwort)';
-            setResponseDetailsForBubble(bubble, result.responseDetails);
+            setResponseDetailsForBubble(bubble, responseDetails);
             bubble.classList.remove('streaming');
 
             // Store assistant reply in history.
             history.push({ role: 'assistant', content: accumulated });
             const assistantHistoryIndex = history.length - 1;
-            showUpgradePrompt(result.upgradeSuggestion, messages, assistantHistoryIndex);
+            showUpgradePrompt(upgradeSuggestion, messages, assistantHistoryIndex);
             setStatus('Bereit.', 'ok');
         } catch (err) {
             bubble.textContent = '⚠ Fehler: ' + err.message;
