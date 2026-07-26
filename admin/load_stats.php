@@ -9,7 +9,7 @@
  * Response shape:
  *   { ok: true, ts: <unix seconds>, endpoints: [ { id, alias, base_url,
  *     default_model, is_active, running, today_jobs, today_tokens }, … ],
- *     searxng: { enabled, running, today_jobs } }
+ *     searxng: { enabled, running, today_jobs, avg_duration_seconds } }
  */
 
 session_start();
@@ -71,7 +71,7 @@ try {
     unset($r);
 
     $searxngEnabled = trim(getSetting('searxng_base_url', '')) !== '';
-    $searxng = ['enabled' => $searxngEnabled, 'running' => 0, 'today_jobs' => 0];
+    $searxng = ['enabled' => $searxngEnabled, 'running' => 0, 'today_jobs' => 0, 'avg_duration_seconds' => null];
 
     if ($searxngEnabled) {
         try {
@@ -80,11 +80,19 @@ try {
                     COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
                     COALESCE(SUM(CASE WHEN status = 'done'
                                       AND DATE(started_at) = CURDATE()
-                                 THEN 1 ELSE 0 END), 0) AS today_jobs
+                                 THEN 1 ELSE 0 END), 0) AS today_jobs,
+                    AVG(CASE WHEN status = 'done'
+                                  AND DATE(started_at) = CURDATE()
+                                  AND finished_at IS NOT NULL
+                             THEN TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000000.0
+                             ELSE NULL END) AS avg_duration_seconds
                 FROM search_logs
             ")->fetch(PDO::FETCH_ASSOC);
-            $searxng['running']    = (int) $sRow['running'];
-            $searxng['today_jobs'] = (int) $sRow['today_jobs'];
+            $searxng['running']               = (int) $sRow['running'];
+            $searxng['today_jobs']            = (int) $sRow['today_jobs'];
+            $searxng['avg_duration_seconds']  = $sRow['avg_duration_seconds'] !== null
+                                                    ? round((float) $sRow['avg_duration_seconds'], 1)
+                                                    : null;
         } catch (PDOException $e) {
             // search_logs table may not exist on older installations
         }
