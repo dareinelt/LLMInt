@@ -1243,6 +1243,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             </form>
         </details>
     </div>
+    <div class="card" id="config-searxng-card">
         <details class="config-panel" id="config-searxng" open>
             <summary>🔎 Websuche</summary>
             <form method="POST">
