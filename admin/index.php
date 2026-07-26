@@ -405,7 +405,7 @@ try {
 
 // ── SearXNG search statistics ─────────────────────────────────────────────────
 
-$searxngStats = ['running' => 0, 'today_jobs' => 0, 'total_done' => 0];
+$searxngStats = ['running' => 0, 'today_jobs' => 0, 'total_done' => 0, 'avg_duration_seconds' => null];
 if ($searxngBaseUrl !== '') {
     try {
         $sRow = $db->query("
@@ -414,13 +414,21 @@ if ($searxngBaseUrl !== '') {
                 COALESCE(SUM(CASE WHEN status = 'done'
                                   AND DATE(started_at) = CURDATE()
                              THEN 1 ELSE 0 END), 0) AS today_jobs,
-                COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS total_done
+                COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS total_done,
+                AVG(CASE WHEN status = 'done'
+                              AND DATE(started_at) = CURDATE()
+                              AND finished_at IS NOT NULL
+                         THEN TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000000.0
+                         ELSE NULL END) AS avg_duration_seconds
             FROM search_logs
         ")->fetch();
         $searxngStats = [
-            'running'    => (int) $sRow['running'],
-            'today_jobs' => (int) $sRow['today_jobs'],
-            'total_done' => (int) $sRow['total_done'],
+            'running'              => (int) $sRow['running'],
+            'today_jobs'           => (int) $sRow['today_jobs'],
+            'total_done'           => (int) $sRow['total_done'],
+            'avg_duration_seconds' => $sRow['avg_duration_seconds'] !== null
+                                        ? round((float) $sRow['avg_duration_seconds'], 1)
+                                        : null,
         ];
     } catch (PDOException $e) {
         // search_logs table may not exist on older installations
@@ -2546,10 +2554,11 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     ) ?>;
 
     const INITIAL_SEARXNG = <?= json_encode([
-        'enabled'    => $searxngBaseUrl !== '',
-        'base_url'   => $searxngBaseUrl,
-        'running'    => $searxngStats['running'],
-        'today_jobs' => $searxngStats['today_jobs'],
+        'enabled'              => $searxngBaseUrl !== '',
+        'base_url'             => $searxngBaseUrl,
+        'running'              => $searxngStats['running'],
+        'today_jobs'           => $searxngStats['today_jobs'],
+        'avg_duration_seconds' => $searxngStats['avg_duration_seconds'],
     ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
     const INITIAL_SD = <?= json_encode(
@@ -2694,7 +2703,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const EP_W   = 218, EP_H   = 140;
         const H_GAP  = 60;
         const V_GAP  = 14;
-        const SRXNG_W = EP_W, SRXNG_H = 90;
+        const SRXNG_W = EP_W, SRXNG_H = 110;
         const SD_W    = EP_W, SD_H    = 90;
         const COMFY_W = EP_W, COMFY_H = 90;
 
@@ -3164,6 +3173,18 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             txt(g, `✓  Jobs heute: ${formatNum(searxng.today_jobs)}`, {
                 x: 12, y: 72,
                 fill: '#22c55e',
+                'font-size': 11,
+                'font-family': 'sans-serif',
+            });
+
+            // Average search duration
+            const avgDur = searxng.avg_duration_seconds;
+            const avgDurLabel = avgDur !== null && avgDur !== undefined
+                ? `⏱  Ø Antwortzeit: ${avgDur.toFixed(1)} s`
+                : `⏱  Ø Antwortzeit: –`;
+            txt(g, avgDurLabel, {
+                x: 12, y: 92,
+                fill: '#94a3b8',
                 'font-size': 11,
                 'font-family': 'sans-serif',
             });
