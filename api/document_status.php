@@ -30,7 +30,7 @@ $db     = getDb();
 
 try {
     $stmt = $db->prepare(
-        'SELECT id, original_name, mime_type, file_size, status, chunk_count, error_message, uploaded_at, processed_at
+        'SELECT id, original_name, mime_type, file_size, status, chunk_count, is_global_rag, error_message, uploaded_at, processed_at
            FROM document_uploads
           WHERE user_id = ?
           ORDER BY uploaded_at DESC

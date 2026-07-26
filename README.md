@@ -68,7 +68,7 @@ Die Oberfläche ist bewusst schlank gehalten: kein Framework, kein Build-Schritt
 - optionales Tool `search_web` über SearXNG – Websuche im Chat
 - optionales Tool `generate_image` für AUTOMATIC1111 – Bildgenerierung mit Stable Diffusion
 - optionales Tool `generate_image_comfy` für ComfyUI – alternative Bildgenerierung
-- optionales Tool `query_documents` – chunk-basierte RAG-Suche über eigene Dokumente
+- optionales Tool `query_documents` – chunk-basierte RAG-Suche über eigene und global freigegebene Dokumente
 
 ---
 

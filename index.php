@@ -762,6 +762,25 @@ $csrfToken = $_SESSION['csrf_token'];
             color: var(--text-muted);
         }
 
+        #upload-global-wrap {
+            margin-top: 12px;
+            font-size: .82rem;
+            color: var(--text-muted);
+        }
+
+        #upload-global-wrap label {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            cursor: pointer;
+            line-height: 1.35;
+        }
+
+        #upload-global-rag {
+            margin-top: 2px;
+            accent-color: var(--accent);
+        }
+
         #upload-progress {
             margin-top: 12px;
             display: none;
@@ -856,14 +875,20 @@ $csrfToken = $_SESSION['csrf_token'];
         <h3>📎 Dokument hochladen</h3>
 
         <div id="upload-drop-zone">
-            <div class="drop-icon">🖼️</div>
+            <div class="drop-icon">📄</div>
             <div>Datei hier ablegen oder <strong>klicken zum Auswählen</strong></div>
-            <div style="font-size:.76rem;margin-top:6px">PNG, JPG, WEBP, GIF · max. 20 MB</div>
+            <div style="font-size:.76rem;margin-top:6px">PNG, JPG, WEBP, GIF, PDF · max. 20 MB</div>
         </div>
         <input type="file" id="upload-file-input"
-               accept="image/png,image/jpeg,image/webp,image/gif">
+               accept="image/png,image/jpeg,image/webp,image/gif,application/pdf">
 
         <div id="upload-preview"></div>
+        <div id="upload-global-wrap">
+            <label for="upload-global-rag">
+                <input type="checkbox" id="upload-global-rag" checked>
+                Upload global für RAG freigeben (alle Nutzer können die Inhalte verwenden)
+            </label>
+        </div>
 
         <div id="upload-progress">
             <div id="upload-progress-bar">
@@ -1766,6 +1791,7 @@ $csrfToken = $_SESSION['csrf_token'];
     const progressFill  = document.getElementById('upload-progress-fill');
     const uploadMsg     = document.getElementById('upload-msg');
     const submitBtn     = document.getElementById('upload-submit-btn');
+    const globalRagCb   = document.getElementById('upload-global-rag');
 
     let selectedFile = null;
     let panelOpen = false;
@@ -1818,6 +1844,7 @@ $csrfToken = $_SESSION['csrf_token'];
             const name = u.original_name || 'Unbekannt';
             const date = formatDate(u.uploaded_at);
             const size = formatBytes(parseInt(u.file_size) || 0);
+            const globalScope = parseInt(u.is_global_rag, 10) === 1 ? 'Global' : 'Privat';
 
             let extra = '';
             if (u.status === 'error' && u.error_message) {
@@ -1828,7 +1855,7 @@ $csrfToken = $_SESSION['csrf_token'];
                 <span class="notif-status-icon">${icon}</span>
                 <div class="notif-info">
                     <div class="notif-name" title="${escHtml(name)}">${escHtml(name)}</div>
-                    <div class="notif-meta">${escHtml(label)} · ${escHtml(size)} · ${escHtml(date)}</div>
+                    <div class="notif-meta">${escHtml(label)} · ${escHtml(globalScope)} · ${escHtml(size)} · ${escHtml(date)}</div>
                     ${extra}
                 </div>
             </div>`;
@@ -1932,6 +1959,7 @@ $csrfToken = $_SESSION['csrf_token'];
         if (uploadProgress) uploadProgress.style.display = 'none';
         if (progressFill)  progressFill.style.width = '0%';
         if (uploadMsg)   { uploadMsg.textContent = ''; uploadMsg.className = ''; }
+        if (globalRagCb)   globalRagCb.checked = true;
         if (submitBtn)     submitBtn.disabled = true;
     }
 
@@ -1974,11 +2002,11 @@ $csrfToken = $_SESSION['csrf_token'];
     }
 
     function setFile(f) {
-        const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
+        const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif', 'application/pdf'];
         if (!allowed.includes(f.type)) {
             if (uploadPreview) {
                 uploadPreview.style.color = 'var(--error)';
-                uploadPreview.textContent = '✗ Nicht unterstütztes Format. Erlaubt: PNG, JPG, WEBP, GIF.';
+                uploadPreview.textContent = '✗ Nicht unterstütztes Format. Erlaubt: PNG, JPG, WEBP, GIF, PDF.';
             }
             if (submitBtn) submitBtn.disabled = true;
             return;
@@ -2014,6 +2042,7 @@ $csrfToken = $_SESSION['csrf_token'];
             const fd = new FormData();
             fd.append('file', selectedFile, selectedFile.name);
             fd.append('csrf_token', CSRF);
+            fd.append('global_rag', globalRagCb && globalRagCb.checked ? '1' : '0');
 
             try {
                 if (progressFill) progressFill.style.width = '50%';
