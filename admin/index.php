@@ -21,6 +21,7 @@ $db = getDb();
 $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
 $guestDefaultModel  = trim(getSetting('default_model', ''));
 $newUserDefaultModel = trim(getSetting('new_user_default_model', ''));
+$visionModel = trim(getSetting('vision_model', ''));
 
 // ── SMTP settings ─────────────────────────────────────────────────────────────
 $smtpHost       = getSetting('smtp_host', '');
@@ -159,6 +160,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newUserDefaultModel = $newModel;
             setSetting('new_user_default_model', $newModel);
             $flashOk = 'Standard-Modell für neue Benutzer gespeichert.';
+
+        // ── Save vision model ─────────────────────────────────────────────────
+        } elseif ($action === 'save_vision_settings') {
+            $newVisionModel = trim($_POST['vision_model'] ?? '');
+            $visionModel = $newVisionModel;
+            setSetting('vision_model', $newVisionModel);
+            $flashOk = $newVisionModel === ''
+                ? 'Vision-Modell zurückgesetzt (Dokument-Upload deaktiviert).'
+                : 'Vision-Modell gespeichert.';
 
         // ── Save SMTP settings ────────────────────────────────────────────────
         } elseif ($action === 'save_smtp_settings') {
@@ -341,7 +351,7 @@ $endpoints = $db->query(
 )->fetchAll();
 
 $users = $db->query(
-    'SELECT id, username, email, email_verified, default_model, created_at, last_login
+    'SELECT id, username, email, email_verified, default_model, can_upload_documents, created_at, last_login
        FROM users ORDER BY id'
 )->fetchAll();
 
@@ -1567,6 +1577,43 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
                </div>
            </form>
+
+           <hr style="border:none;border-top:1px solid var(--border);margin:20px 0">
+
+           <form method="POST">
+               <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+               <input type="hidden" name="action" value="save_vision_settings">
+
+               <div class="form-group">
+                   <label for="vision-model">Vision-Modell für Dokument-Upload</label>
+                   <select id="vision-model" name="vision_model">
+                       <option value="" <?= $visionModel === '' ? 'selected' : '' ?>>
+                           Kein Vision-Modell (Dokument-Upload deaktiviert)
+                       </option>
+                       <?php foreach ($availableGuestModels as $model): ?>
+                           <?php $intelligence = modelIntelligenceLabel($model); ?>
+                           <option value="<?= htmlspecialchars($model) ?>"
+                               <?= $visionModel === $model ? 'selected' : '' ?>>
+                               <?= htmlspecialchars($model) ?><?= $intelligence !== '–' ? ' · ' . htmlspecialchars($intelligence) : '' ?>
+                           </option>
+                       <?php endforeach; ?>
+                       <?php if ($visionModel !== '' && !isset($availableGuestModels[$visionModel])): ?>
+                           <option value="<?= htmlspecialchars($visionModel) ?>" selected>
+                               <?= htmlspecialchars($visionModel) ?> · derzeit nicht verfügbar
+                           </option>
+                       <?php endif; ?>
+                   </select>
+                   <p class="hint">
+                       Dieses Vision-fähige Modell analysiert hochgeladene Dokumente (Bilder) und extrahiert deren Inhalt.
+                       Wird in jeder Anfrage als Datenquelle per Tool-Aufruf <code>query_documents</code> bereitgestellt.
+                       Leer lassen, um den Dokument-Upload zu deaktivieren.
+                   </p>
+               </div>
+
+               <div class="action-row">
+                   <button type="submit" class="btn btn-primary">💾 Speichern</button>
+               </div>
+           </form>
        </details>
     </div>
 
@@ -2046,11 +2093,12 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             <tbody>
                 <?php foreach ($users as $u): ?>
                     <tr class="user-row" data-user='<?= htmlspecialchars(json_encode([
-                        'id'           => (int) $u['id'],
-                        'username'     => $u['username'],
-                        'email'        => $u['email'] ?? '',
-                        'email_verified' => (int) ($u['email_verified'] ?? 0),
-                        'default_model'  => $u['default_model'] ?? '',
+                        'id'                   => (int) $u['id'],
+                        'username'             => $u['username'],
+                        'email'                => $u['email'] ?? '',
+                        'email_verified'       => (int) ($u['email_verified'] ?? 0),
+                        'default_model'        => $u['default_model'] ?? '',
+                        'can_upload_documents' => (int) ($u['can_upload_documents'] ?? 0),
                     ]), ENT_QUOTES) ?>'
                     style="cursor:pointer" title="Klicken für Benutzerdetails">
                         <td>
@@ -2130,6 +2178,30 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <button id="overlay-save-model" class="btn btn-primary">💾 Modell speichern</button>
                 <span id="overlay-model-result" style="font-size:.82rem"></span>
             </div>
+
+            <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+
+            <!-- Document upload permission -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <span style="font-size:.88rem">Dokument-Upload erlauben</span>
+                <label style="position:relative;display:inline-block;width:40px;height:22px;cursor:pointer">
+                    <input type="checkbox" id="overlay-doc-upload"
+                           style="opacity:0;width:0;height:0;position:absolute">
+                    <span id="overlay-doc-upload-track"
+                          style="position:absolute;inset:0;border-radius:22px;background:var(--surface-alt);
+                                 transition:background .2s;display:block"></span>
+                    <span id="overlay-doc-upload-thumb"
+                          style="position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
+                                 background:#fff;transition:transform .2s;display:block"></span>
+                </label>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:4px">
+                <button id="overlay-save-doc-perm" class="btn btn-sm">💾 Berechtigung speichern</button>
+                <span id="overlay-doc-perm-result" style="font-size:.82rem"></span>
+            </div>
+            <p class="hint" style="margin-bottom:12px">
+                Erlaubt dem Benutzer, Dokumente (Bilder) in der Chat-Oberfläche hochzuladen und per Vision-Modell zu analysieren.
+            </p>
 
             <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
 
@@ -3510,8 +3582,25 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const modelResult  = document.getElementById('overlay-model-result');
     const resetPwBtn   = document.getElementById('overlay-reset-pw');
     const resetResult  = document.getElementById('overlay-reset-result');
+    const docUploadChk = document.getElementById('overlay-doc-upload');
+    const docUploadTrack = document.getElementById('overlay-doc-upload-track');
+    const docUploadThumb = document.getElementById('overlay-doc-upload-thumb');
+    const saveDocPermBtn = document.getElementById('overlay-save-doc-perm');
+    const docPermResult  = document.getElementById('overlay-doc-perm-result');
 
     const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    function updateToggleUI(checked) {
+        if (!docUploadTrack || !docUploadThumb) return;
+        docUploadTrack.style.background = checked ? 'var(--accent)' : 'var(--surface-alt)';
+        docUploadThumb.style.transform  = checked ? 'translateX(18px)' : 'translateX(0)';
+    }
+
+    if (docUploadChk) {
+        docUploadChk.addEventListener('change', function () {
+            updateToggleUI(this.checked);
+        });
+    }
 
     function openOverlay(user) {
         if (!overlay) return;
@@ -3532,8 +3621,15 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             }
         }
 
-        if (modelResult)  modelResult.textContent  = '';
-        if (resetResult)  resetResult.textContent   = '';
+        // Set document upload toggle
+        if (docUploadChk) {
+            docUploadChk.checked = !!user.can_upload_documents;
+            updateToggleUI(docUploadChk.checked);
+        }
+
+        if (modelResult)   modelResult.textContent  = '';
+        if (resetResult)   resetResult.textContent   = '';
+        if (docPermResult) docPermResult.textContent = '';
 
         overlay.style.display = 'flex';
         document.body.style.overflow = 'hidden';
@@ -3626,6 +3722,51 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             } finally {
                 resetPwBtn.disabled    = false;
                 resetPwBtn.textContent = '📧 Passwort-Reset senden';
+            }
+        });
+    }
+
+    // ── Save document upload permission ───────────────────────────────────────
+    if (saveDocPermBtn) {
+        saveDocPermBtn.addEventListener('click', async function () {
+            const userId  = userIdInput.value;
+            const allowed = docUploadChk ? docUploadChk.checked : false;
+
+            saveDocPermBtn.disabled    = true;
+            saveDocPermBtn.textContent = '⟳ Speichern …';
+            if (docPermResult) docPermResult.textContent = '';
+
+            try {
+                const res  = await fetch('../api/admin_user_action.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_user_doc_permission', user_id: parseInt(userId), allowed, csrf_token: CSRF }),
+                });
+                const data = await res.json();
+                if (docPermResult) {
+                    docPermResult.style.color = data.ok ? 'var(--success)' : 'var(--error)';
+                    docPermResult.textContent = (data.ok ? '✓ ' : '✗ ') + data.message;
+                }
+                // Update the row data in the table.
+                if (data.ok) {
+                    document.querySelectorAll('.user-row').forEach(row => {
+                        try {
+                            const u = JSON.parse(row.dataset.user);
+                            if (u.id === parseInt(userId)) {
+                                u.can_upload_documents = allowed ? 1 : 0;
+                                row.dataset.user = JSON.stringify(u);
+                            }
+                        } catch (_) {}
+                    });
+                }
+            } catch (e) {
+                if (docPermResult) {
+                    docPermResult.style.color = 'var(--error)';
+                    docPermResult.textContent = '✗ Netzwerkfehler: ' + e.message;
+                }
+            } finally {
+                saveDocPermBtn.disabled    = false;
+                saveDocPermBtn.textContent = '💾 Berechtigung speichern';
             }
         });
     }

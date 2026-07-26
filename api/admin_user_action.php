@@ -207,4 +207,34 @@ if ($action === 'set_user_model') {
     exit;
 }
 
+// ── set_user_doc_permission ───────────────────────────────────────────────────
+if ($action === 'set_user_doc_permission') {
+    $userId  = (int) ($data['user_id'] ?? 0);
+    $allowed = isset($data['allowed']) ? (bool) $data['allowed'] : false;
+
+    if ($userId <= 0) {
+        echo json_encode(['ok' => false, 'message' => 'Ungültige Benutzer-ID.']);
+        exit;
+    }
+
+    $stmt = $db->prepare('SELECT id, username FROM users WHERE id = ? LIMIT 1');
+    $stmt->execute([$userId]);
+    $user = $stmt->fetch();
+
+    if (!$user) {
+        echo json_encode(['ok' => false, 'message' => 'Benutzer nicht gefunden.']);
+        exit;
+    }
+
+    $db->prepare('UPDATE users SET can_upload_documents = ? WHERE id = ?')
+       ->execute([$allowed ? 1 : 0, $userId]);
+
+    $msg = $allowed
+        ? "Dokument-Upload für {$user['username']} aktiviert."
+        : "Dokument-Upload für {$user['username']} deaktiviert.";
+
+    echo json_encode(['ok' => true, 'message' => $msg]);
+    exit;
+}
+
 echo json_encode(['ok' => false, 'message' => 'Unbekannte Aktion.']);

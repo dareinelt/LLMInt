@@ -211,9 +211,30 @@ function ensureRuntimeSchema(PDO $pdo): void
         "ALTER TABLE users ADD COLUMN password_reset_expires TIMESTAMP NULL AFTER password_reset_token",
         "ALTER TABLE users ADD COLUMN default_model VARCHAR(255) NOT NULL DEFAULT '' AFTER password_reset_expires",
         "ALTER TABLE users ADD COLUMN requires_password_change TINYINT(1) NOT NULL DEFAULT 0 AFTER default_model",
+        "ALTER TABLE users ADD COLUMN can_upload_documents TINYINT(1) NOT NULL DEFAULT 0 AFTER requires_password_change",
     ] as $alter) {
         try { $pdo->exec($alter); } catch (Throwable $_e) { /* column already exists */ }
     }
+
+    // Document uploads: one row per uploaded file, including vision-model analysis result.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS document_uploads (
+            id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id        INT             NOT NULL,
+            original_name  VARCHAR(500)    NOT NULL DEFAULT '',
+            stored_name    VARCHAR(200)    NOT NULL DEFAULT '',
+            mime_type      VARCHAR(100)    NOT NULL DEFAULT '',
+            file_size      INT UNSIGNED    NOT NULL DEFAULT 0,
+            status         ENUM('pending','processing','done','error') NOT NULL DEFAULT 'pending',
+            extracted_text MEDIUMTEXT      NULL,
+            error_message  TEXT            NULL,
+            uploaded_at    TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            processed_at   TIMESTAMP(3)    NULL,
+            PRIMARY KEY (id),
+            KEY idx_du_user_status (user_id, status),
+            KEY idx_du_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
 
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS conversation_sessions (

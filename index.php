@@ -21,6 +21,28 @@ if ($defaultModel === '') {
 
 $loggedIn   = isset($_SESSION['admin_user']);
 $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '';
+
+// Check if the current user has document upload permission.
+$canUploadDocuments = false;
+if ($loggedIn && isset($_SESSION['admin_id'])) {
+    try {
+        $stmt = getDb()->prepare('SELECT can_upload_documents FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([(int) $_SESSION['admin_id']]);
+        $uRow = $stmt->fetch();
+        $canUploadDocuments = $uRow && (int) ($uRow['can_upload_documents'] ?? 0) === 1;
+    } catch (Throwable $_e) {
+        $canUploadDocuments = false;
+    }
+}
+
+// Check if vision model is configured (upload only meaningful when it is).
+$visionModelConfigured = trim(getSetting('vision_model', '')) !== '';
+
+// CSRF token for upload requests.
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrfToken = $_SESSION['csrf_token'];
 ?>
 <html lang="de">
 <head>
@@ -560,6 +582,229 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
             flex-direction: column;
             overflow: hidden;
         }
+
+        /* ── Notification / upload header buttons ─────────────────── */
+        .header-icon-btn {
+            position: relative;
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            transition: background .15s, color .15s;
+            flex-shrink: 0;
+        }
+
+        .header-icon-btn:hover { background: var(--surface); color: var(--text); }
+
+        .header-icon-btn .badge {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            min-width: 16px;
+            height: 16px;
+            background: var(--accent);
+            color: #fff;
+            font-size: .62rem;
+            font-weight: 700;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 3px;
+            line-height: 1;
+        }
+
+        .header-icon-btn .badge.badge-error { background: var(--error); }
+        .header-icon-btn .badge.badge-warn  { background: var(--warning); }
+
+        /* ── Notification panel ───────────────────────────────────── */
+        #notif-panel {
+            display: none;
+            position: fixed;
+            top: 58px;
+            right: 14px;
+            width: 340px;
+            max-height: 480px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 16px 40px rgba(0,0,0,.5);
+            z-index: 500;
+            overflow: hidden;
+            flex-direction: column;
+        }
+
+        #notif-panel.open { display: flex; }
+
+        #notif-panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px 10px;
+            border-bottom: 1px solid var(--border);
+            font-size: .88rem;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        #notif-panel-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 1rem;
+            line-height: 1;
+        }
+
+        #notif-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+
+        .notif-item {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            padding: 10px 16px;
+            font-size: .82rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .notif-item:last-child { border-bottom: none; }
+
+        .notif-status-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+
+        .notif-info { flex: 1; min-width: 0; }
+
+        .notif-name {
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .notif-meta { font-size: .74rem; color: var(--text-muted); margin-top: 2px; }
+
+        .notif-error { font-size: .74rem; color: var(--error); margin-top: 3px; word-break: break-word; }
+
+        /* ── Upload modal ─────────────────────────────────────────── */
+        #upload-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 600;
+            background: rgba(0,0,0,.55);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+        }
+
+        #upload-modal.open { display: flex; }
+
+        #upload-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 28px 32px;
+            max-width: 420px;
+            width: calc(100% - 32px);
+            box-shadow: 0 24px 60px rgba(0,0,0,.6);
+            position: relative;
+        }
+
+        #upload-modal h3 { font-size: 1rem; margin-bottom: 16px; }
+
+        #upload-close {
+            position: absolute;
+            top: 14px;
+            right: 16px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.2rem;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        #upload-drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 32px 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color .15s, background .15s;
+            color: var(--text-muted);
+            font-size: .88rem;
+        }
+
+        #upload-drop-zone:hover,
+        #upload-drop-zone.dragover {
+            border-color: var(--accent);
+            background: rgba(108,99,255,.06);
+            color: var(--text);
+        }
+
+        #upload-drop-zone .drop-icon { font-size: 2rem; margin-bottom: 8px; }
+
+        #upload-file-input { display: none; }
+
+        #upload-preview {
+            margin-top: 12px;
+            font-size: .82rem;
+            color: var(--text-muted);
+        }
+
+        #upload-progress {
+            margin-top: 12px;
+            display: none;
+        }
+
+        #upload-progress-bar {
+            height: 4px;
+            background: var(--surface-alt);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        #upload-progress-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--accent);
+            transition: width .3s;
+        }
+
+        #upload-msg {
+            font-size: .82rem;
+            margin-top: 8px;
+        }
+
+        #upload-msg.ok    { color: var(--success); }
+        #upload-msg.error { color: var(--error); }
+
+        #upload-submit-btn {
+            margin-top: 14px;
+            width: 100%;
+            padding: 9px;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius);
+            font-size: .9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background .15s;
+        }
+
+        #upload-submit-btn:hover:not(:disabled) { background: var(--accent-dark); }
+        #upload-submit-btn:disabled { opacity: .4; cursor: default; }
     </style>
 </head>
 <body>
@@ -567,9 +812,20 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
 <!-- ── Header ──────────────────────────────────────────────── -->
 <header>
     <h1>🤖 KHWF KI</h1>
-    <div style="display:flex;align-items:center;gap:10px">
+    <div style="display:flex;align-items:center;gap:8px">
 <?php if ($loggedIn): ?>
         <span style="font-size:.8rem;color:var(--text-muted)">👤 <?= $loggedUser ?></span>
+<?php if ($canUploadDocuments && $visionModelConfigured): ?>
+        <!-- Document upload button -->
+        <button class="header-icon-btn" id="upload-btn" title="Dokument hochladen">
+            📎
+        </button>
+        <!-- Notification bell -->
+        <button class="header-icon-btn" id="notif-btn" title="Dokument-Analysestatus">
+            🔔
+            <span id="notif-badge" class="badge" style="display:none">0</span>
+        </button>
+<?php endif; ?>
         <a href="logout.php" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">Abmelden</a>
 <?php else: ?>
         <a href="login.php" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">🔐 Anmelden</a>
@@ -578,6 +834,48 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
         <a class="admin-link" href="admin/login.php">⚙ Admin</a>
     </div>
 </header>
+
+<?php if ($canUploadDocuments && $visionModelConfigured): ?>
+<!-- ── Notification panel (document status) ────────────────── -->
+<div id="notif-panel">
+    <div id="notif-panel-header">
+        <span>📄 Dokumente</span>
+        <button id="notif-panel-close" title="Schließen">✕</button>
+    </div>
+    <div id="notif-list">
+        <div style="padding:16px;text-align:center;color:var(--text-muted);font-size:.82rem">
+            Lade …
+        </div>
+    </div>
+</div>
+
+<!-- ── Upload modal ────────────────────────────────────────── -->
+<div id="upload-modal">
+    <div id="upload-box">
+        <button id="upload-close" title="Schließen" aria-label="Schließen">✕</button>
+        <h3>📎 Dokument hochladen</h3>
+
+        <div id="upload-drop-zone">
+            <div class="drop-icon">🖼️</div>
+            <div>Datei hier ablegen oder <strong>klicken zum Auswählen</strong></div>
+            <div style="font-size:.76rem;margin-top:6px">PNG, JPG, WEBP, GIF · max. 20 MB</div>
+        </div>
+        <input type="file" id="upload-file-input"
+               accept="image/png,image/jpeg,image/webp,image/gif">
+
+        <div id="upload-preview"></div>
+
+        <div id="upload-progress">
+            <div id="upload-progress-bar">
+                <div id="upload-progress-fill"></div>
+            </div>
+            <div id="upload-msg"></div>
+        </div>
+
+        <button id="upload-submit-btn" disabled>📤 Hochladen & Analysieren</button>
+    </div>
+</div>
+<?php endif; ?>
 
 <!-- ── Config bar (hidden – DOM refs kept for JS) ─────────── -->
 <div id="config-bar">
@@ -1439,5 +1737,308 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
     setInterval(sendHeartbeat, 30000);
 })();
 </script>
+
+<?php if ($canUploadDocuments && $visionModelConfigured): ?>
+<script>
+/* ─────────────────────────────────────────────────────────────
+   Document upload & notification panel
+   ─────────────────────────────────────────────────────────────*/
+(function () {
+    'use strict';
+
+    const CSRF          = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    // ── Notification panel ────────────────────────────────────
+    const notifBtn      = document.getElementById('notif-btn');
+    const notifPanel    = document.getElementById('notif-panel');
+    const notifPanelClose = document.getElementById('notif-panel-close');
+    const notifList     = document.getElementById('notif-list');
+    const notifBadge    = document.getElementById('notif-badge');
+
+    // ── Upload modal ──────────────────────────────────────────
+    const uploadBtn     = document.getElementById('upload-btn');
+    const uploadModal   = document.getElementById('upload-modal');
+    const uploadClose   = document.getElementById('upload-close');
+    const dropZone      = document.getElementById('upload-drop-zone');
+    const fileInput     = document.getElementById('upload-file-input');
+    const uploadPreview = document.getElementById('upload-preview');
+    const uploadProgress = document.getElementById('upload-progress');
+    const progressFill  = document.getElementById('upload-progress-fill');
+    const uploadMsg     = document.getElementById('upload-msg');
+    const submitBtn     = document.getElementById('upload-submit-btn');
+
+    let selectedFile = null;
+    let panelOpen = false;
+
+    // Status icons
+    function statusIcon(status) {
+        if (status === 'done')       return '✅';
+        if (status === 'error')      return '❌';
+        if (status === 'processing') return '⏳';
+        return '🕐'; // pending
+    }
+
+    function statusLabel(status) {
+        if (status === 'done')       return 'Analysiert';
+        if (status === 'error')      return 'Fehler';
+        if (status === 'processing') return 'Wird analysiert …';
+        return 'Wartend';
+    }
+
+    function formatDate(ts) {
+        if (!ts) return '';
+        try {
+            const d = new Date(ts.replace(' ', 'T'));
+            return d.toLocaleString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+        } catch (_) { return ts; }
+    }
+
+    function formatBytes(b) {
+        if (b < 1024) return b + ' B';
+        if (b < 1024 * 1024) return Math.round(b / 1024) + ' KB';
+        return (b / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    // Render notification list
+    function renderUploads(uploads) {
+        if (!notifList) return;
+        if (!uploads || uploads.length === 0) {
+            notifList.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:.82rem">Noch keine Dokumente hochgeladen.</div>';
+            updateBadge(0, 0);
+            return;
+        }
+
+        let pending = 0, errors = 0;
+        const html = uploads.map(u => {
+            if (u.status === 'pending' || u.status === 'processing') pending++;
+            if (u.status === 'error') errors++;
+
+            const icon = statusIcon(u.status);
+            const label = statusLabel(u.status);
+            const name = u.original_name || 'Unbekannt';
+            const date = formatDate(u.uploaded_at);
+            const size = formatBytes(parseInt(u.file_size) || 0);
+
+            let extra = '';
+            if (u.status === 'error' && u.error_message) {
+                extra = `<div class="notif-error">${escHtml(u.error_message)}</div>`;
+            }
+
+            return `<div class="notif-item">
+                <span class="notif-status-icon">${icon}</span>
+                <div class="notif-info">
+                    <div class="notif-name" title="${escHtml(name)}">${escHtml(name)}</div>
+                    <div class="notif-meta">${escHtml(label)} · ${escHtml(size)} · ${escHtml(date)}</div>
+                    ${extra}
+                </div>
+            </div>`;
+        }).join('');
+
+        notifList.innerHTML = html;
+        updateBadge(pending, errors);
+    }
+
+    function updateBadge(pending, errors) {
+        if (!notifBadge) return;
+        const total = pending + errors;
+        if (total === 0) {
+            notifBadge.style.display = 'none';
+        } else {
+            notifBadge.style.display = 'flex';
+            notifBadge.textContent = total > 9 ? '9+' : String(total);
+            notifBadge.className = 'badge' + (errors > 0 ? ' badge-error' : (pending > 0 ? ' badge-warn' : ''));
+        }
+    }
+
+    function escHtml(s) {
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    // Load status from server
+    async function loadStatus() {
+        try {
+            const res = await fetch('api/document_status.php');
+            const data = await res.json();
+            if (data.ok) {
+                renderUploads(data.uploads);
+                // Auto-refresh if any are pending
+                const hasPending = (data.uploads || []).some(u => u.status === 'pending' || u.status === 'processing');
+                if (hasPending) {
+                    setTimeout(loadStatus, 5000);
+                }
+            }
+        } catch (_) {}
+    }
+
+    // Initial load for badge
+    loadStatus();
+
+    // Toggle notification panel
+    if (notifBtn) {
+        notifBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (panelOpen) {
+                closePanel();
+            } else {
+                openPanel();
+            }
+        });
+    }
+
+    function openPanel() {
+        if (!notifPanel) return;
+        notifPanel.classList.add('open');
+        panelOpen = true;
+        loadStatus();
+    }
+
+    function closePanel() {
+        if (!notifPanel) return;
+        notifPanel.classList.remove('open');
+        panelOpen = false;
+    }
+
+    if (notifPanelClose) notifPanelClose.addEventListener('click', closePanel);
+
+    document.addEventListener('click', function (e) {
+        if (panelOpen && notifPanel && !notifPanel.contains(e.target) && e.target !== notifBtn) {
+            closePanel();
+        }
+    });
+
+    // ── Upload modal ──────────────────────────────────────────
+
+    function openUploadModal() {
+        if (!uploadModal) return;
+        resetUpload();
+        uploadModal.classList.add('open');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeUploadModal() {
+        if (!uploadModal) return;
+        uploadModal.classList.remove('open');
+        document.body.style.overflow = '';
+    }
+
+    function resetUpload() {
+        selectedFile = null;
+        if (fileInput)     fileInput.value = '';
+        if (uploadPreview) uploadPreview.textContent = '';
+        if (uploadProgress) uploadProgress.style.display = 'none';
+        if (progressFill)  progressFill.style.width = '0%';
+        if (uploadMsg)   { uploadMsg.textContent = ''; uploadMsg.className = ''; }
+        if (submitBtn)     submitBtn.disabled = true;
+    }
+
+    if (uploadBtn)  uploadBtn.addEventListener('click', openUploadModal);
+    if (uploadClose) uploadClose.addEventListener('click', closeUploadModal);
+
+    if (uploadModal) {
+        uploadModal.addEventListener('click', function (e) {
+            if (e.target === uploadModal) closeUploadModal();
+        });
+    }
+
+    // Drop zone
+    if (dropZone) {
+        dropZone.addEventListener('click', function () {
+            if (fileInput) fileInput.click();
+        });
+
+        dropZone.addEventListener('dragover', function (e) {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', function () {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', function (e) {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const f = e.dataTransfer.files[0];
+            if (f) setFile(f);
+        });
+    }
+
+    if (fileInput) {
+        fileInput.addEventListener('change', function () {
+            if (this.files[0]) setFile(this.files[0]);
+        });
+    }
+
+    function setFile(f) {
+        const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
+        if (!allowed.includes(f.type)) {
+            if (uploadPreview) {
+                uploadPreview.style.color = 'var(--error)';
+                uploadPreview.textContent = '✗ Nicht unterstütztes Format. Erlaubt: PNG, JPG, WEBP, GIF.';
+            }
+            if (submitBtn) submitBtn.disabled = true;
+            return;
+        }
+        if (f.size > 20 * 1024 * 1024) {
+            if (uploadPreview) {
+                uploadPreview.style.color = 'var(--error)';
+                uploadPreview.textContent = '✗ Datei zu groß (max. 20 MB).';
+            }
+            if (submitBtn) submitBtn.disabled = true;
+            return;
+        }
+        selectedFile = f;
+        if (uploadPreview) {
+            uploadPreview.style.color = 'var(--text-muted)';
+            uploadPreview.textContent = '📄 ' + f.name + ' (' + (f.size < 1024 * 1024 ? Math.round(f.size / 1024) + ' KB' : (f.size / 1024 / 1024).toFixed(1) + ' MB') + ')';
+        }
+        if (submitBtn) submitBtn.disabled = false;
+        if (uploadMsg)   { uploadMsg.textContent = ''; uploadMsg.className = ''; }
+        if (uploadProgress) uploadProgress.style.display = 'none';
+    }
+
+    // Submit upload
+    if (submitBtn) {
+        submitBtn.addEventListener('click', async function () {
+            if (!selectedFile) return;
+
+            submitBtn.disabled = true;
+            if (uploadProgress) uploadProgress.style.display = 'block';
+            if (progressFill)   progressFill.style.width = '20%';
+            if (uploadMsg) { uploadMsg.textContent = 'Wird hochgeladen und analysiert …'; uploadMsg.className = ''; }
+
+            const fd = new FormData();
+            fd.append('file', selectedFile, selectedFile.name);
+            fd.append('csrf_token', CSRF);
+
+            try {
+                if (progressFill) progressFill.style.width = '50%';
+                const res  = await fetch('api/upload_document.php', { method: 'POST', body: fd });
+                if (progressFill) progressFill.style.width = '90%';
+                const data = await res.json();
+                if (progressFill) progressFill.style.width = '100%';
+
+                if (data.ok) {
+                    if (uploadMsg) { uploadMsg.textContent = '✓ ' + data.message; uploadMsg.className = 'ok'; }
+                    loadStatus(); // refresh notification list
+                    setTimeout(closeUploadModal, 1800);
+                } else {
+                    if (uploadMsg) { uploadMsg.textContent = '✗ ' + data.message; uploadMsg.className = 'error'; }
+                    submitBtn.disabled = false;
+                }
+            } catch (e) {
+                if (progressFill) progressFill.style.width = '100%';
+                if (uploadMsg) { uploadMsg.textContent = '✗ Netzwerkfehler: ' + e.message; uploadMsg.className = 'error'; }
+                submitBtn.disabled = false;
+            }
+        });
+    }
+})();
+</script>
+<?php endif; ?>
 </body>
 </html>
