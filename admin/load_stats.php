@@ -149,8 +149,34 @@ try {
         // comfy_endpoints / comfy_tasks tables may not exist yet
     }
 
+    // ── Client stats ─────────────────────────────────────────────────────────
+
+    $clientStats = ['current' => 0, 'today_min' => 0, 'today_max' => 0, 'today_avg' => 0.0];
+    try {
+        $current = (int) getDb()->query(
+            "SELECT COUNT(*) FROM active_clients
+              WHERE last_seen > DATE_SUB(NOW(), INTERVAL 90 SECOND)"
+        )->fetchColumn();
+
+        $sRow = getDb()->query(
+            "SELECT MIN(cnt) AS min_cnt, MAX(cnt) AS max_cnt, AVG(cnt) AS avg_cnt
+               FROM client_count_log
+              WHERE DATE(recorded_at) = CURDATE()"
+        )->fetch(PDO::FETCH_ASSOC);
+
+        $clientStats = [
+            'current'   => $current,
+            'today_min' => ($sRow && $sRow['min_cnt'] !== null) ? (int) $sRow['min_cnt'] : $current,
+            'today_max' => ($sRow && $sRow['max_cnt'] !== null) ? (int) $sRow['max_cnt'] : $current,
+            'today_avg' => ($sRow && $sRow['avg_cnt'] !== null) ? round((float) $sRow['avg_cnt'], 1) : (float) $current,
+        ];
+    } catch (PDOException $ignored) {
+        // Tables may not exist on older installations
+    }
+
     echo json_encode(
-        ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng, 'sd_endpoints' => $sdRows, 'comfy_endpoints' => $comfyRows],
+        ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng,
+         'sd_endpoints' => $sdRows, 'comfy_endpoints' => $comfyRows, 'clients' => $clientStats],
         JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     );
 

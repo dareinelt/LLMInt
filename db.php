@@ -117,6 +117,28 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    // Active-client heartbeat tracking.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS active_clients (
+            token      CHAR(128)    NOT NULL,
+            last_seen  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                    ON UPDATE CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (token),
+            KEY idx_ac_last_seen (last_seen)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // Periodic samples of the concurrent client count (for min/max/avg).
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS client_count_log (
+            id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            cnt         SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+            recorded_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            KEY idx_ccl_recorded (recorded_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     // AUTOMATIC1111 / Stable Diffusion endpoints.
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS sd_endpoints (
