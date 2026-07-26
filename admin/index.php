@@ -807,8 +807,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             margin: 20px 0 12px;
         }
 
-        #stats-card { order: 1; }
-        #load-tree-card { order: 2; }
+        #dashboard-card { order: 1; }
         #config-smtp-card { order: 3; }
         #config-searxng-card { order: 4; }
         #config-endpoints-card { order: 5; }
@@ -1059,13 +1058,23 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         /* ── Load-distribution tree ──────────────────────────────── */
         #load-tree-container {
-            overflow-x: auto;
-            padding: 8px 0 4px;
+            position: relative;
+            width: 100%;
+            height: 480px;
+            overflow: hidden;
+            cursor: grab;
+            border-radius: 10px;
+            background: rgba(0,0,0,.15);
+            user-select: none;
         }
+
+        #load-tree-container.dragging { cursor: grabbing; }
 
         #load-tree-svg {
             display: block;
             width: 100%;
+            height: 100%;
+            touch-action: none;
         }
 
         .tree-header-row {
@@ -1074,12 +1083,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             justify-content: space-between;
             flex-wrap: wrap;
             gap: 8px;
-            margin-bottom: 18px;
+            margin-bottom: 12px;
             padding-bottom: 10px;
             border-bottom: 1px solid var(--border);
         }
 
         .tree-header-row h2 { margin: 0; padding: 0; border: none; }
+
+        .tree-header-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
 
         .tree-refresh-info {
             font-size: .75rem;
@@ -1096,6 +1112,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             border-radius: 50%;
             background: var(--success);
         }
+
+        .tree-reset-btn {
+            padding: 3px 10px;
+            background: var(--surface-alt);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-muted);
+            font-size: .75rem;
+            cursor: pointer;
+            line-height: 1.5;
+            transition: color .12s, background .12s;
+        }
+        .tree-reset-btn:hover { background: #464646; color: var(--text); }
 
         @keyframes tree-pulse {
             0%,100% { transform: scale(1); opacity: 1; }
@@ -1118,6 +1147,48 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         }
 
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Animated data-flow connectors ───────────────────────── */
+        @keyframes dash-flow {
+            to { stroke-dashoffset: -22; }
+        }
+        @keyframes dash-flow-fast {
+            to { stroke-dashoffset: -22; }
+        }
+        .conn-idle {
+            stroke-dasharray: 6 5;
+            animation: dash-flow 2.5s linear infinite;
+        }
+        .conn-active {
+            stroke-dasharray: 8 3;
+            animation: dash-flow-fast .65s linear infinite;
+        }
+
+        /* ── Stat-box flash on live update ───────────────────────── */
+        @keyframes stat-flash {
+            0%   { background: rgba(108,99,255,.32); }
+            100% { background: var(--surface-alt); }
+        }
+        .stat-box.stat-flash { animation: stat-flash .55s ease-out; }
+
+        /* ── Dashboard detail tables (collapsed by default) ──────── */
+        .dash-detail-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 18px;
+            padding-top: 14px;
+            border-top: 1px solid var(--border);
+            cursor: pointer;
+            font-size: .82rem;
+            color: var(--text-muted);
+            user-select: none;
+        }
+        .dash-detail-toggle:hover { color: var(--text); }
+        .dash-detail-toggle .toggle-arrow { transition: transform .2s; }
+        .dash-detail-toggle.open .toggle-arrow { transform: rotate(90deg); }
+        .dash-detail-body { display: none; margin-top: 14px; }
+        .dash-detail-body.open { display: block; }
     </style>
 </head>
 <body>
@@ -1137,8 +1208,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 <!-- ── Left sidebar navigation ──────────────────────────────────────────────── -->
 <aside class="sidebar">
     <span class="sidebar-label">Übersicht</span>
-    <a href="#stats-card">📊 Statistik</a>
-    <a href="#load-tree-card">🌐 Lastverteilung</a>
+    <a href="#dashboard-card">🚀 Dashboard</a>
 
     <span class="sidebar-label">Konfiguration</span>
     <a href="#config-smtp-card">📧 E-Mail (SMTP)</a>
@@ -1733,83 +1803,110 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-         Statistics
+         Dashboard – Statistik & Lastverteilung (live)
     ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card" id="stats-card">
-        <h2>📊 Statistik &amp; Verteilung</h2>
+    <div class="card" id="dashboard-card">
 
-        <!-- Summary boxes -->
+        <!-- Header row -->
+        <div class="tree-header-row">
+            <h2 style="margin:0;padding:0;border:none">🚀 Dashboard</h2>
+            <div class="tree-header-controls">
+                <button class="tree-reset-btn" id="tree-reset-btn" title="Ansicht zurücksetzen">⊡ Ansicht zurücksetzen</button>
+                <div class="tree-refresh-info">
+                    <span class="tree-refresh-dot" id="tree-live-dot"></span>
+                    <span id="tree-status">Initialisierung …</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary stat boxes -->
         <div class="stat-grid">
             <div class="stat-box">
-                <div class="stat-val stat-running"><?= number_format((int) $totals['total_running']) ?></div>
+                <div class="stat-val stat-running" id="db-llm-running"><?= number_format((int) $totals['total_running']) ?></div>
                 <div class="stat-lbl">LLM laufend</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $totals['total_done_24h']) ?></div>
+                <div class="stat-val stat-done" id="db-llm-done24"><?= number_format((int) $totals['total_done_24h']) ?></div>
                 <div class="stat-lbl">LLM erledigt (24 h)</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $totals['total_done']) ?></div>
+                <div class="stat-val stat-done" id="db-llm-done"><?= number_format((int) $totals['total_done']) ?></div>
                 <div class="stat-lbl">LLM erledigt (gesamt)</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-error"><?= number_format((int) $totals['total_error']) ?></div>
+                <div class="stat-val stat-error" id="db-llm-error"><?= number_format((int) $totals['total_error']) ?></div>
                 <div class="stat-lbl">LLM Fehler (gesamt)</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_prompt_tokens']) ?></div>
+                <div class="stat-val stat-tokens" id="db-prompt-tok"><?= number_format((int) $totals['grand_prompt_tokens']) ?></div>
                 <div class="stat-lbl">Prompt Token (gesamt)</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_completion_tokens']) ?></div>
+                <div class="stat-val stat-tokens" id="db-comp-tok"><?= number_format((int) $totals['grand_completion_tokens']) ?></div>
                 <div class="stat-lbl">Completion Token (gesamt)</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_tokens']) ?></div>
+                <div class="stat-val stat-tokens" id="db-total-tok"><?= number_format((int) $totals['grand_tokens']) ?></div>
                 <div class="stat-lbl">Total Token (gesamt)</div>
             </div>
             <?php if ($searxngBaseUrl !== ''): ?>
             <div class="stat-box">
-                <div class="stat-val stat-running"><?= number_format($searxngStats['running']) ?></div>
+                <div class="stat-val stat-running" id="db-srxng-running"><?= number_format($searxngStats['running']) ?></div>
                 <div class="stat-lbl">Suchen laufend</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format($searxngStats['today_jobs']) ?></div>
+                <div class="stat-val stat-done" id="db-srxng-today"><?= number_format($searxngStats['today_jobs']) ?></div>
                 <div class="stat-lbl">Suchen heute</div>
             </div>
             <?php endif; ?>
             <?php if (!empty($sdEndpoints)): ?>
             <div class="stat-box">
-                <div class="stat-val stat-running"><?= number_format((int) $sdTotals['total_running']) ?></div>
+                <div class="stat-val stat-running" id="db-sd-running"><?= number_format((int) $sdTotals['total_running']) ?></div>
                 <div class="stat-lbl">SD laufend</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $sdTotals['total_done_24h']) ?></div>
+                <div class="stat-val stat-done" id="db-sd-done24"><?= number_format((int) $sdTotals['total_done_24h']) ?></div>
                 <div class="stat-lbl">SD Bilder (24 h)</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $sdTotals['total_done']) ?></div>
+                <div class="stat-val stat-done" id="db-sd-done"><?= number_format((int) $sdTotals['total_done']) ?></div>
                 <div class="stat-lbl">SD Bilder (gesamt)</div>
             </div>
             <?php endif; ?>
             <?php if (!empty($comfyEndpoints)): ?>
             <div class="stat-box">
-                <div class="stat-val stat-running"><?= number_format((int) $comfyTotals['total_running']) ?></div>
+                <div class="stat-val stat-running" id="db-comfy-running"><?= number_format((int) $comfyTotals['total_running']) ?></div>
                 <div class="stat-lbl">ComfyUI laufend</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $comfyTotals['total_done_24h']) ?></div>
+                <div class="stat-val stat-done" id="db-comfy-done24"><?= number_format((int) $comfyTotals['total_done_24h']) ?></div>
                 <div class="stat-lbl">ComfyUI (24 h)</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $comfyTotals['total_done']) ?></div>
+                <div class="stat-val stat-done" id="db-comfy-done"><?= number_format((int) $comfyTotals['total_done']) ?></div>
                 <div class="stat-lbl">ComfyUI (gesamt)</div>
             </div>
             <?php endif; ?>
         </div>
 
+        <!-- Live load-distribution visualization -->
+        <div id="load-tree-container">
+            <svg id="load-tree-svg"
+                 xmlns="http://www.w3.org/2000/svg"
+                 preserveAspectRatio="xMinYMin meet"
+                 aria-label="Horizontale Lastverteilung der Endpunkte">
+            </svg>
+        </div>
+
+        <!-- Collapsible endpoint detail tables -->
+        <div class="dash-detail-toggle" id="dash-detail-toggle">
+            <span class="toggle-arrow">▶</span>
+            <span>Endpunkt-Details</span>
+        </div>
+        <div class="dash-detail-body" id="dash-detail-body">
+
         <?php if (empty($epStats)): ?>
-            <p style="color:var(--text-muted)">Noch keine Aufgaben verarbeitet.</p>
+            <p style="color:var(--text-muted)">Noch keine LLM-Aufgaben verarbeitet.</p>
         <?php else: ?>
 
         <table class="data-table">
@@ -1920,25 +2017,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         </table>
         <?php endif; ?>
 
-    </div>
-
-    <!-- ═══════════════════════════════════════════════════════════════════════
-         Load distribution tree
-    ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card" id="load-tree-card">
-        <div class="tree-header-row">
-            <h2 style="margin-bottom:0;padding-bottom:0;border:none">🌐 Lastverteilung – Live</h2>
-            <div class="tree-refresh-info">
-                <span class="tree-refresh-dot" id="tree-live-dot"></span>
-                <span id="tree-status">Initialisierung …</span>
-            </div>
-        </div>
-        <div id="load-tree-container">
-            <svg id="load-tree-svg"
-                 xmlns="http://www.w3.org/2000/svg"
-                 aria-label="Horizontale Lastverteilung der Endpunkte">
-            </svg>
-        </div>
+        </div><!-- /.dash-detail-body -->
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
@@ -2600,10 +2679,124 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const PALETTE = ['#6c63ff','#22c55e','#f59e0b','#ef4444',
                      '#06b6d4','#a855f7','#f97316','#84cc16'];
 
-    const svg      = document.getElementById('load-tree-svg');
-    const statusEl = document.getElementById('tree-status');
-    const liveDot  = document.getElementById('tree-live-dot');
-    const NS       = 'http://www.w3.org/2000/svg';
+    const svg       = document.getElementById('load-tree-svg');
+    const container = document.getElementById('load-tree-container');
+    const statusEl  = document.getElementById('tree-status');
+    const liveDot   = document.getElementById('tree-live-dot');
+    const resetBtn  = document.getElementById('tree-reset-btn');
+    const NS        = 'http://www.w3.org/2000/svg';
+
+    // ── Pan / zoom state ──────────────────────────────────────────────────────
+
+    let treeW = 600, treeH = 400; // full diagram dimensions
+    let vpX = 0, vpY = 0, vpW = 600, vpH = 400; // current viewport (SVG coords)
+
+    function applyViewBox() {
+        svg.setAttribute('viewBox', `${vpX} ${vpY} ${vpW} ${vpH}`);
+    }
+
+    function resetView() {
+        vpX = 0; vpY = 0; vpW = treeW; vpH = treeH;
+        applyViewBox();
+    }
+
+    // Mouse pan
+    let isDragging = false, dStartX = 0, dStartY = 0, dStartVpX = 0, dStartVpY = 0;
+
+    container.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        isDragging = true;
+        dStartX = e.clientX; dStartY = e.clientY;
+        dStartVpX = vpX; dStartVpY = vpY;
+        container.classList.add('dragging');
+        e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', function (e) {
+        if (!isDragging) return;
+        const rect = container.getBoundingClientRect();
+        const scaleX = vpW / Math.max(1, rect.width);
+        const scaleY = vpH / Math.max(1, rect.height);
+        vpX = dStartVpX - (e.clientX - dStartX) * scaleX;
+        vpY = dStartVpY - (e.clientY - dStartY) * scaleY;
+        applyViewBox();
+    });
+
+    window.addEventListener('mouseup', function () {
+        isDragging = false;
+        container.classList.remove('dragging');
+    });
+
+    // Scroll-wheel zoom
+    container.addEventListener('wheel', function (e) {
+        e.preventDefault();
+        const factor = e.deltaY > 0 ? 1.13 : 1 / 1.13;
+        const rect   = container.getBoundingClientRect();
+        const mx = (e.clientX - rect.left) / Math.max(1, rect.width);
+        const my = (e.clientY - rect.top)  / Math.max(1, rect.height);
+        const cx = vpX + mx * vpW;
+        const cy = vpY + my * vpH;
+        const newW = Math.min(treeW * 6, Math.max(200, vpW * factor));
+        const newH = newW * (vpH / Math.max(1, vpW));
+        vpX = cx - mx * newW;
+        vpY = cy - my * newH;
+        vpW = newW; vpH = newH;
+        applyViewBox();
+    }, { passive: false });
+
+    // Touch pan + pinch-zoom
+    let lastTouchDist = 0;
+    let touchStartVpX = 0, touchStartVpY = 0, touchStartX = 0, touchStartY = 0;
+
+    container.addEventListener('touchstart', function (e) {
+        if (e.touches.length === 1) {
+            isDragging = true;
+            touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY;
+            touchStartVpX = vpX; touchStartVpY = vpY;
+        } else if (e.touches.length === 2) {
+            isDragging = false;
+            lastTouchDist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+        }
+        e.preventDefault();
+    }, { passive: false });
+
+    container.addEventListener('touchmove', function (e) {
+        if (e.touches.length === 1 && isDragging) {
+            const rect   = container.getBoundingClientRect();
+            const scaleX = vpW / Math.max(1, rect.width);
+            const scaleY = vpH / Math.max(1, rect.height);
+            vpX = touchStartVpX - (e.touches[0].clientX - touchStartX) * scaleX;
+            vpY = touchStartVpY - (e.touches[0].clientY - touchStartY) * scaleY;
+            applyViewBox();
+        } else if (e.touches.length === 2) {
+            const dist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+            if (lastTouchDist > 0) {
+                const factor = lastTouchDist / dist;
+                const cx = vpX + vpW / 2;
+                const cy = vpY + vpH / 2;
+                const newW = Math.min(treeW * 6, Math.max(200, vpW * factor));
+                const newH = newW * (treeH / Math.max(1, treeW));
+                vpX = cx - newW / 2;
+                vpY = cy - newH / 2;
+                vpW = newW; vpH = newH;
+                applyViewBox();
+            }
+            lastTouchDist = dist;
+        }
+        e.preventDefault();
+    }, { passive: false });
+
+    container.addEventListener('touchend', function () {
+        isDragging = false; lastTouchDist = 0;
+    });
+
+    if (resetBtn) resetBtn.addEventListener('click', resetView);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -2669,16 +2862,37 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const hasComfy    = Array.isArray(comfyEndpoints) && comfyEndpoints.length > 0;
 
         if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasSd && !hasComfy) {
-            svg.setAttribute('viewBox', '0 0 400 60');
-            svg.setAttribute('height', '60');
+            treeW = 400; treeH = 60;
+            svg.setAttribute('viewBox', `0 0 ${treeW} ${treeH}`);
             txt(svg, 'Keine Endpunkte konfiguriert.', {
                 x: 16, y: 38,
                 fill: '#8e8ea0',
                 'font-size': 13,
                 'font-family': 'sans-serif',
             });
+            resetView();
             return;
         }
+
+        // ── SVG defs (gradients) ──────────────────────────────────────────────
+        const defs = mk('defs', null);
+
+        function addLinearGradient(id, x2, y2, stop0, stop1) {
+            const g = mk('linearGradient', { id, x1: 0, y1: 0, x2, y2 });
+            const s0 = mk('stop', { offset: '0%', 'stop-color': stop0 });
+            const s1 = mk('stop', { offset: '100%', 'stop-color': stop1 });
+            g.appendChild(s0); g.appendChild(s1);
+            defs.appendChild(g);
+        }
+
+        addLinearGradient('grad-ep',    0, 1, '#363645', '#2a2a38');
+        addLinearGradient('grad-root',  0, 1, '#312f52', '#242438');
+        addLinearGradient('grad-mod',   0, 1, '#333342', '#28283a');
+        addLinearGradient('grad-cli',   0, 1, '#1c2b1c', '#182418');
+        addLinearGradient('grad-srxng', 0, 1, '#1a2f38', '#142028');
+        addLinearGradient('grad-sd',    0, 1, '#2b200f', '#201808');
+        addLinearGradient('grad-comfy', 0, 1, '#221430', '#180e22');
+        svg.appendChild(defs);
 
         // Group LLM endpoints by model
         const groups = new Map();
@@ -2697,46 +2911,37 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         // ── Layout constants ──────────────────────────────────────────────────
         const PAD       = 22;
         const CLIENT_W  = 112, CLIENT_H = 96;
-        const CLIENT_GAP = 40;   // gap between client node and root node
+        const CLIENT_GAP = 40;
         const ROOT_W = 112, ROOT_H = 82;
         const MOD_W  = 178, MOD_H  = 64;
-        const EP_W   = 218, EP_H   = 140;
+        const EP_W   = 218, EP_H   = 152;
         const H_GAP  = 60;
         const V_GAP  = 14;
         const SRXNG_W = EP_W, SRXNG_H = 110;
         const SD_W    = EP_W, SD_H    = 90;
         const COMFY_W = EP_W, COMFY_H = 90;
 
-        const COL0_X = PAD;                              // client node
-        const COL1_X = COL0_X + CLIENT_W + CLIENT_GAP;  // root node
+        const COL0_X = PAD;
+        const COL1_X = COL0_X + CLIENT_W + CLIENT_GAP;
         const COL2_X = COL1_X + ROOT_W + H_GAP;
         const COL3_X = COL2_X + MOD_W  + H_GAP;
         const TOTAL_W = COL3_X + EP_W + PAD;
 
-        // Vertical layout: one slot per LLM endpoint
         const totalEps = (endpoints || []).length;
         const LLM_H = totalEps > 0
             ? PAD * 2 + totalEps * EP_H + (totalEps - 1) * V_GAP
-            : PAD * 2 + ROOT_H; // minimum height when no endpoints
+            : PAD * 2 + ROOT_H;
 
         const SRXNG_V_GAP = 20;
         let TOTAL_H = LLM_H;
-        if (hasSearxng) {
-            TOTAL_H += SRXNG_V_GAP + SRXNG_H;
-        }
-        if (hasSd) {
-            const sdTileH = sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP;
-            TOTAL_H += SRXNG_V_GAP + sdTileH;
-        }
-        if (hasComfy) {
-            const comfyTileH = comfyEndpoints.length * COMFY_H + (comfyEndpoints.length - 1) * V_GAP;
-            TOTAL_H += SRXNG_V_GAP + comfyTileH;
-        }
+        if (hasSearxng) { TOTAL_H += SRXNG_V_GAP + SRXNG_H; }
+        if (hasSd)      { TOTAL_H += SRXNG_V_GAP + sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP; }
+        if (hasComfy)   { TOTAL_H += SRXNG_V_GAP + comfyEndpoints.length * COMFY_H + (comfyEndpoints.length - 1) * V_GAP; }
         TOTAL_H += PAD;
 
         let curY = PAD;
-        const epCY  = {}; // ep.id → center Y
-        const modCY = {}; // model  → center Y
+        const epCY  = {};
+        const modCY = {};
 
         for (const [model, eps] of groups) {
             const startY = curY;
@@ -2749,55 +2954,60 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             curY += V_GAP;
         }
 
-        // Root is centered on the LLM content area only
         const rootCY = LLM_H / 2;
 
-        // SearXNG tile center Y (below all LLM content)
         let afterLlmY = LLM_H;
         const searxngCY = afterLlmY + SRXNG_V_GAP + SRXNG_H / 2;
-        if (hasSearxng) {
-            afterLlmY += SRXNG_V_GAP + SRXNG_H;
-        }
+        if (hasSearxng) { afterLlmY += SRXNG_V_GAP + SRXNG_H; }
 
-        // SD tiles start below SearXNG (or below LLM if no SearXNG)
         const sdStartY = afterLlmY + SRXNG_V_GAP;
-        const sdCY = {}; // sd endpoint id → center Y
+        const sdCY = {};
         let sdCurY = sdStartY;
         for (const sdEp of (sdEndpoints || [])) {
             sdCY[sdEp.id] = sdCurY + SD_H / 2;
             sdCurY += SD_H + V_GAP;
         }
         let afterSdY = afterLlmY;
-        if (hasSd) {
-            afterSdY += SRXNG_V_GAP + sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP;
-        }
+        if (hasSd) { afterSdY += SRXNG_V_GAP + sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP; }
 
-        // ComfyUI tiles start below SD (or below SearXNG if no SD)
         const comfyStartY = afterSdY + SRXNG_V_GAP;
-        const comfyCY = {}; // comfy endpoint id → center Y
+        const comfyCY = {};
         let comfyCurY = comfyStartY;
         for (const comfyEp of (comfyEndpoints || [])) {
             comfyCY[comfyEp.id] = comfyCurY + COMFY_H / 2;
             comfyCurY += COMFY_H + V_GAP;
         }
 
-        svg.setAttribute('viewBox', `0 0 ${TOTAL_W} ${TOTAL_H}`);
-        svg.setAttribute('height', TOTAL_H);
+        // Update pan/zoom state for new diagram size
+        treeW = TOTAL_W;
+        treeH = TOTAL_H;
+        resetView();
 
         // ── Connector curves ──────────────────────────────────────────────────
 
         const CURVE_CTRL = H_GAP * 0.65;
 
+        // Helper: build animated path
+        function connPath(d, stroke, hasActive) {
+            return mk('path', {
+                d,
+                fill: 'none',
+                stroke,
+                'stroke-width': 1.8,
+                class: hasActive ? 'conn-active' : 'conn-idle',
+            });
+        }
+
         // Root → each model group
-        for (const [model] of groups) {
+        for (const [model, eps] of groups) {
             const mY = modCY[model];
             const rX = COL1_X + ROOT_W;
-            svg.appendChild(mk('path', {
-                d: `M ${rX},${rootCY} C ${rX + CURVE_CTRL},${rootCY} ${COL2_X - CURVE_CTRL},${mY} ${COL2_X},${mY}`,
-                fill: 'none',
-                stroke: 'rgba(255,255,255,0.11)',
-                'stroke-width': 1.5,
-            }));
+            const groupRunning = eps.reduce((s, e) => s + e.running, 0);
+            svg.appendChild(connPath(
+                `M ${rX},${rootCY} C ${rX + CURVE_CTRL},${rootCY} ${COL2_X - CURVE_CTRL},${mY} ${COL2_X},${mY}`,
+                'rgba(255,255,255,0.15)',
+                groupRunning > 0
+            ));
         }
 
         // Each model group → its endpoints
@@ -2806,117 +3016,97 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const mX = COL2_X + MOD_W;
             for (const ep of eps) {
                 const eY = epCY[ep.id];
-                svg.appendChild(mk('path', {
-                    d: `M ${mX},${mY} C ${mX + CURVE_CTRL},${mY} ${COL3_X - CURVE_CTRL},${eY} ${COL3_X},${eY}`,
-                    fill: 'none',
-                    stroke: 'rgba(255,255,255,0.11)',
-                    'stroke-width': 1.5,
-                }));
+                svg.appendChild(connPath(
+                    `M ${mX},${mY} C ${mX + CURVE_CTRL},${mY} ${COL3_X - CURVE_CTRL},${eY} ${COL3_X},${eY}`,
+                    'rgba(255,255,255,0.12)',
+                    ep.running > 0
+                ));
             }
         }
 
-        // Root → SearXNG tile (direct, bypassing model groups)
+        // Root → SearXNG
         if (hasSearxng) {
-            const rX = COL1_X + ROOT_W;
+            const rX   = COL1_X + ROOT_W;
             const ctrl = (COL3_X - rX) * 0.55;
-            svg.appendChild(mk('path', {
-                d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${searxngCY} ${COL3_X},${searxngCY}`,
-                fill: 'none',
-                stroke: 'rgba(6,182,212,0.3)',
-                'stroke-width': 1.5,
-                'stroke-dasharray': '4 3',
-            }));
+            svg.appendChild(connPath(
+                `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${searxngCY} ${COL3_X},${searxngCY}`,
+                'rgba(6,182,212,0.35)',
+                searxng.running > 0
+            ));
         }
 
-        // Root → SD endpoint tiles (direct, bypassing model groups)
+        // Root → SD endpoints
         if (hasSd) {
             for (const sdEp of sdEndpoints) {
                 const rX   = COL1_X + ROOT_W;
                 const eY   = sdCY[sdEp.id];
                 const ctrl = (COL3_X - rX) * 0.55;
-                svg.appendChild(mk('path', {
-                    d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
-                    fill: 'none',
-                    stroke: 'rgba(249,115,22,0.3)',
-                    'stroke-width': 1.5,
-                    'stroke-dasharray': '4 3',
-                }));
+                svg.appendChild(connPath(
+                    `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
+                    'rgba(249,115,22,0.35)',
+                    sdEp.running > 0
+                ));
             }
         }
 
-        // Root → ComfyUI endpoint tiles (direct, bypassing model groups)
+        // Root → ComfyUI endpoints
         if (hasComfy) {
             for (const comfyEp of comfyEndpoints) {
                 const rX   = COL1_X + ROOT_W;
                 const eY   = comfyCY[comfyEp.id];
                 const ctrl = (COL3_X - rX) * 0.55;
-                svg.appendChild(mk('path', {
-                    d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
-                    fill: 'none',
-                    stroke: 'rgba(168,85,247,0.3)',
-                    'stroke-width': 1.5,
-                    'stroke-dasharray': '4 3',
-                }));
+                svg.appendChild(connPath(
+                    `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
+                    'rgba(168,85,247,0.35)',
+                    comfyEp.running > 0
+                ));
             }
         }
 
-        // ── Client node → Root connector ──────────────────────────────────────
+        // Client → Root connector
         {
             const cRX  = COL0_X + CLIENT_W;
             const ctrl = CLIENT_GAP * 0.5;
-            svg.appendChild(mk('path', {
-                d: `M ${cRX},${rootCY} C ${cRX + ctrl},${rootCY} ${COL1_X - ctrl},${rootCY} ${COL1_X},${rootCY}`,
-                fill: 'none',
-                stroke: 'rgba(255,255,255,0.18)',
-                'stroke-width': 1.5,
-            }));
+            const anyRunning = (endpoints || []).some(e => e.running > 0);
+            svg.appendChild(connPath(
+                `M ${cRX},${rootCY} C ${cRX + ctrl},${rootCY} ${COL1_X - ctrl},${rootCY} ${COL1_X},${rootCY}`,
+                'rgba(255,255,255,0.22)',
+                anyRunning
+            ));
         }
 
         // ── Client node ───────────────────────────────────────────────────────
         {
-            const cl       = clients || {};
-            const current  = cl.current  ?? 0;
-            const minVal   = cl.today_min ?? 0;
-            const maxVal   = cl.today_max ?? 0;
-            const avgVal   = cl.today_avg ?? 0;
+            const cl      = clients || {};
+            const current = cl.current  ?? 0;
+            const minVal  = cl.today_min ?? 0;
+            const maxVal  = cl.today_max ?? 0;
+            const avgVal  = cl.today_avg ?? 0;
 
             const g = mk('g', { transform: `translate(${COL0_X},${rootCY - CLIENT_H / 2})` });
 
             g.appendChild(mk('rect', {
                 x: 0, y: 0, width: CLIENT_W, height: CLIENT_H,
-                rx: 11,
-                fill: '#1e2a1e',
-                stroke: 'rgba(34,197,94,0.45)',
+                rx: 12,
+                fill: 'url(#grad-cli)',
+                stroke: 'rgba(34,197,94,0.5)',
                 'stroke-width': 1.5,
             }));
             txt(g, '👥', {
                 x: CLIENT_W / 2, y: 26,
-                'text-anchor': 'middle',
-                fill: '#ececf1',
-                'font-size': 18,
-                'font-family': 'sans-serif',
+                'text-anchor': 'middle', fill: '#ececf1', 'font-size': 18, 'font-family': 'sans-serif',
             });
             txt(g, String(current), {
                 x: CLIENT_W / 2, y: 48,
-                'text-anchor': 'middle',
-                fill: '#22c55e',
-                'font-size': 18,
-                'font-weight': 700,
-                'font-family': 'sans-serif',
+                'text-anchor': 'middle', fill: '#22c55e', 'font-size': 18, 'font-weight': 700, 'font-family': 'sans-serif',
             });
             txt(g, 'Clients', {
                 x: CLIENT_W / 2, y: 64,
-                'text-anchor': 'middle',
-                fill: '#8e8ea0',
-                'font-size': 10,
-                'font-family': 'sans-serif',
+                'text-anchor': 'middle', fill: '#8e8ea0', 'font-size': 10, 'font-family': 'sans-serif',
             });
             txt(g, `min ${minVal} · max ${maxVal} · Ø ${avgVal}`, {
                 x: CLIENT_W / 2, y: 80,
-                'text-anchor': 'middle',
-                fill: '#6b7280',
-                'font-size': 9,
-                'font-family': 'sans-serif',
+                'text-anchor': 'middle', fill: '#6b7280', 'font-size': 9, 'font-family': 'sans-serif',
             });
 
             svg.appendChild(g);
@@ -2928,32 +3118,22 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             g.appendChild(mk('rect', {
                 x: 0, y: 0, width: ROOT_W, height: ROOT_H,
-                rx: 11,
-                fill: '#2a2a3a',
-                stroke: 'rgba(108,99,255,0.55)',
+                rx: 12,
+                fill: 'url(#grad-root)',
+                stroke: 'rgba(108,99,255,0.65)',
                 'stroke-width': 1.5,
             }));
             txt(g, '⚡', {
                 x: ROOT_W / 2, y: 30,
-                'text-anchor': 'middle',
-                fill: '#ececf1',
-                'font-size': 22,
-                'font-family': 'sans-serif',
+                'text-anchor': 'middle', fill: '#ececf1', 'font-size': 22, 'font-family': 'sans-serif',
             });
             txt(g, 'LLMInt', {
                 x: ROOT_W / 2, y: 50,
-                'text-anchor': 'middle',
-                fill: '#ececf1',
-                'font-size': 12,
-                'font-weight': 700,
-                'font-family': 'sans-serif',
+                'text-anchor': 'middle', fill: '#ececf1', 'font-size': 12, 'font-weight': 700, 'font-family': 'sans-serif',
             });
             txt(g, 'System', {
                 x: ROOT_W / 2, y: 66,
-                'text-anchor': 'middle',
-                fill: '#8e8ea0',
-                'font-size': 10,
-                'font-family': 'sans-serif',
+                'text-anchor': 'middle', fill: '#8e8ea0', 'font-size': 10, 'font-family': 'sans-serif',
             });
 
             svg.appendChild(g);
@@ -2968,50 +3148,32 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             g.appendChild(mk('rect', {
                 x: 0, y: 0, width: MOD_W, height: MOD_H,
                 rx: 10,
-                fill: '#2f2f2f',
-                stroke: color + '55',
+                fill: 'url(#grad-mod)',
+                stroke: color + '66',
                 'stroke-width': 1.5,
             }));
             // Coloured left accent bar
             g.appendChild(mk('rect', {
                 x: 0, y: 8, width: 4, height: MOD_H - 16,
-                rx: 2,
-                fill: color,
+                rx: 2, fill: color,
             }));
 
-            const groupRunning = eps.reduce((s, e) => s + e.running, 0);
-            const modelLabel   = truncate(model, 22);
+            const groupRunning      = eps.reduce((s, e) => s + e.running, 0);
+            const modelLabel        = truncate(model, 22);
             const intelligenceLabel = extractIntelligenceLabel(model);
 
             txt(g, modelLabel, {
-                x: 16, y: 24,
-                fill: '#ececf1',
-                'font-size': 11,
-                'font-weight': 700,
-                'font-family': 'sans-serif',
+                x: 16, y: 24, fill: '#ececf1', 'font-size': 11, 'font-weight': 700, 'font-family': 'sans-serif',
             });
             txt(g, `${eps.length} Endpunkt${eps.length !== 1 ? 'e' : ''} · ${intelligenceLabel}`, {
-                x: 16, y: 40,
-                fill: '#8e8ea0',
-                'font-size': 10,
-                'font-family': 'sans-serif',
+                x: 16, y: 40, fill: '#8e8ea0', 'font-size': 10, 'font-family': 'sans-serif',
             });
 
             if (groupRunning > 0) {
                 txt(g, `▶ ${groupRunning} laufend`, {
-                    x: 16, y: 56,
-                    fill: '#f59e0b',
-                    'font-size': 10,
-                    'font-family': 'sans-serif',
+                    x: 16, y: 56, fill: '#f59e0b', 'font-size': 10, 'font-family': 'sans-serif',
                 });
-                // Animated pulse ring at top-right corner
-                const dot = mk('circle', {
-                    class: 'pulse-dot',
-                    cx: MOD_W - 14,
-                    cy: 14,
-                    r: 5,
-                    fill: '#f59e0b',
-                });
+                const dot = mk('circle', { class: 'pulse-dot', cx: MOD_W - 14, cy: 14, r: 5, fill: '#f59e0b' });
                 g.appendChild(dot);
             }
 
@@ -3020,93 +3182,72 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         // ── Endpoint nodes ────────────────────────────────────────────────────
         for (const ep of endpoints) {
-            const model = ep.default_model || '–';
-            const color = colorMap[model] || '#555';
-            const eY    = epCY[ep.id];
-            const g     = mk('g', { transform: `translate(${COL3_X},${eY - EP_H / 2})` });
-
+            const model    = ep.default_model || '–';
+            const color    = colorMap[model] || '#555';
+            const eY       = epCY[ep.id];
             const isActive = ep.is_active === 1;
+            const g        = mk('g', { transform: `translate(${COL3_X},${eY - EP_H / 2})` });
 
             g.appendChild(mk('rect', {
                 x: 0, y: 0, width: EP_W, height: EP_H,
                 rx: 10,
-                fill: '#2f2f2f',
-                stroke: isActive ? 'rgba(255,255,255,0.10)' : 'rgba(239,68,68,0.35)',
+                fill: 'url(#grad-ep)',
+                stroke: isActive ? color + '44' : 'rgba(239,68,68,0.4)',
                 'stroke-width': 1.5,
             }));
-
-            // Animated running-task pulse ring (drawn first, behind status dot)
-            if (ep.running > 0 && isActive) {
-                const pDot = mk('circle', {
-                    class: 'pulse-dot',
-                    cx: 14, cy: 18,
-                    r: 4,
-                    fill: '#f59e0b',
-                });
-                g.appendChild(pDot);
-            }
-
-            // Status dot (drawn on top of pulse ring)
-            g.appendChild(mk('circle', {
-                cx: 14, cy: 18,
-                r: 4,
-                fill: isActive ? '#22c55e' : '#8e8ea0',
+            // Accent bar (left)
+            g.appendChild(mk('rect', {
+                x: 0, y: 10, width: 3, height: EP_H - 20,
+                rx: 1.5,
+                fill: isActive ? color : '#ef4444',
+                opacity: 0.7,
             }));
+
+            // Animated running pulse (behind status dot)
+            if (ep.running > 0 && isActive) {
+                g.appendChild(mk('circle', { class: 'pulse-dot', cx: 16, cy: 20, r: 4, fill: '#f59e0b' }));
+            }
+            // Status dot
+            g.appendChild(mk('circle', { cx: 16, cy: 20, r: 4, fill: isActive ? '#22c55e' : '#8e8ea0' }));
 
             const endpointLabel = ep.alias ? ep.alias : shortUrl(ep.base_url);
             txt(g, truncate(endpointLabel, 26), {
-                x: 26, y: 22,
-                fill: '#ececf1',
-                'font-size': 10.5,
-                'font-weight': 700,
-                'font-family': 'monospace, sans-serif',
+                x: 28, y: 24, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
             });
 
             // Divider
-            g.appendChild(mk('line', {
-                x1: 10, y1: 32, x2: EP_W - 10, y2: 32,
-                stroke: 'rgba(255,255,255,0.07)',
-                'stroke-width': 1,
-            }));
+            g.appendChild(mk('line', { x1: 10, y1: 34, x2: EP_W - 10, y2: 34, stroke: 'rgba(255,255,255,0.08)', 'stroke-width': 1 }));
 
             // Running count
             const runColor = ep.running > 0 ? '#f59e0b' : '#8e8ea0';
             txt(g, `▶  Laufend: ${ep.running}`, {
-                x: 12, y: 50,
-                fill: runColor,
-                'font-size': 11,
-                'font-family': 'sans-serif',
+                x: 12, y: 52, fill: runColor, 'font-size': 11, 'font-family': 'sans-serif',
             });
 
             // Jobs today
             txt(g, `✓  Jobs heute: ${formatNum(ep.today_jobs)}`, {
-                x: 12, y: 68,
-                fill: '#22c55e',
-                'font-size': 11,
-                'font-family': 'sans-serif',
+                x: 12, y: 70, fill: '#22c55e', 'font-size': 11, 'font-family': 'sans-serif',
             });
 
             // Tokens today
             txt(g, `↑  Prompt heute: ${formatNum(ep.today_prompt_tokens)}`, {
-                x: 12, y: 86,
-                fill: '#6c63ff',
-                'font-size': 11,
-                'font-family': 'sans-serif',
+                x: 12, y: 88, fill: '#6c63ff', 'font-size': 11, 'font-family': 'sans-serif',
+            });
+            txt(g, `↓  Completion: ${formatNum(ep.today_completion_tokens)}`, {
+                x: 12, y: 106, fill: '#8b5cf6', 'font-size': 11, 'font-family': 'sans-serif',
+            });
+            txt(g, `⬡  Total Token: ${formatNum(ep.today_tokens)}`, {
+                x: 12, y: 124, fill: '#a78bfa', 'font-size': 11, 'font-family': 'sans-serif',
             });
 
-            txt(g, `↓  Completion heute: ${formatNum(ep.today_completion_tokens)}`, {
-                x: 12, y: 104,
-                fill: '#8b5cf6',
-                'font-size': 11,
-                'font-family': 'sans-serif',
-            });
-
-            txt(g, `⬡  Total Token heute: ${formatNum(ep.today_tokens)}`, {
-                x: 12, y: 122,
-                fill: '#a78bfa',
-                'font-size': 11,
-                'font-family': 'sans-serif',
-            });
+            // Slot utilisation bar (max 4 slots)
+            const maxSlots  = 4;
+            const barX      = 12, barY = 136, barW = EP_W - 24, barH = 5;
+            g.appendChild(mk('rect', { x: barX, y: barY, width: barW, height: barH, rx: 2.5, fill: 'rgba(255,255,255,0.07)' }));
+            if (ep.running > 0) {
+                const fillW = Math.round(barW * Math.min(1, ep.running / maxSlots));
+                g.appendChild(mk('rect', { x: barX, y: barY, width: fillW, height: barH, rx: 2.5, fill: '#f59e0b' }));
+            }
 
             svg.appendChild(g);
         }
@@ -3118,76 +3259,28 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             g.appendChild(mk('rect', {
                 x: 0, y: 0, width: SRXNG_W, height: SRXNG_H,
-                rx: 10,
-                fill: '#1e2f35',
-                stroke: SRXNG_COLOR + '66',
-                'stroke-width': 1.5,
+                rx: 10, fill: 'url(#grad-srxng)', stroke: SRXNG_COLOR + '66', 'stroke-width': 1.5,
             }));
 
-            // Animated pulse ring when searches are running
             if (searxng.running > 0) {
-                g.appendChild(mk('circle', {
-                    class: 'pulse-dot',
-                    cx: 14, cy: 18,
-                    r: 4,
-                    fill: SRXNG_COLOR,
-                }));
+                g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: SRXNG_COLOR }));
             }
+            g.appendChild(mk('circle', { cx: 14, cy: 18, r: 4, fill: SRXNG_COLOR }));
 
-            // Status dot
-            g.appendChild(mk('circle', {
-                cx: 14, cy: 18,
-                r: 4,
-                fill: SRXNG_COLOR,
-            }));
-
-            // SearXNG label / URL
-            const srxngLabel = searxng.base_url
-                ? truncate(shortUrl(searxng.base_url), 26)
-                : 'SearXNG';
+            const srxngLabel = searxng.base_url ? truncate(shortUrl(searxng.base_url), 26) : 'SearXNG';
             txt(g, srxngLabel, {
-                x: 26, y: 22,
-                fill: '#ececf1',
-                'font-size': 10.5,
-                'font-weight': 700,
-                'font-family': 'monospace, sans-serif',
+                x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
             });
+            g.appendChild(mk('line', { x1: 10, y1: 32, x2: SRXNG_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
 
-            // Divider
-            g.appendChild(mk('line', {
-                x1: 10, y1: 32, x2: SRXNG_W - 10, y2: 32,
-                stroke: 'rgba(255,255,255,0.07)',
-                'stroke-width': 1,
-            }));
-
-            // Running count
             const runColor = searxng.running > 0 ? '#f59e0b' : '#8e8ea0';
-            txt(g, `▶  Laufend: ${searxng.running}`, {
-                x: 12, y: 52,
-                fill: runColor,
-                'font-size': 11,
-                'font-family': 'sans-serif',
-            });
+            txt(g, `▶  Laufend: ${searxng.running}`, { x: 12, y: 52, fill: runColor, 'font-size': 11, 'font-family': 'sans-serif' });
+            txt(g, `✓  Jobs heute: ${formatNum(searxng.today_jobs)}`, { x: 12, y: 72, fill: '#22c55e', 'font-size': 11, 'font-family': 'sans-serif' });
 
-            // Jobs today
-            txt(g, `✓  Jobs heute: ${formatNum(searxng.today_jobs)}`, {
-                x: 12, y: 72,
-                fill: '#22c55e',
-                'font-size': 11,
-                'font-family': 'sans-serif',
-            });
-
-            // Average search duration
-            const avgDur = searxng.avg_duration_seconds;
+            const avgDur      = searxng.avg_duration_seconds;
             const avgDurLabel = avgDur !== null && avgDur !== undefined
-                ? `⏱  Ø Antwortzeit: ${avgDur.toFixed(1)} s`
-                : `⏱  Ø Antwortzeit: –`;
-            txt(g, avgDurLabel, {
-                x: 12, y: 92,
-                fill: '#94a3b8',
-                'font-size': 11,
-                'font-family': 'sans-serif',
-            });
+                ? `⏱  Ø Antwortzeit: ${avgDur.toFixed(1)} s` : `⏱  Ø Antwortzeit: –`;
+            txt(g, avgDurLabel, { x: 12, y: 92, fill: '#94a3b8', 'font-size': 11, 'font-family': 'sans-serif' });
 
             svg.appendChild(g);
         }
@@ -3196,66 +3289,29 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         if (hasSd) {
             const SD_COLOR = '#f97316';
             for (const sdEp of sdEndpoints) {
-                const eY      = sdCY[sdEp.id];
+                const eY       = sdCY[sdEp.id];
                 const isActive = sdEp.is_active === 1;
-                const g       = mk('g', { transform: `translate(${COL3_X},${eY - SD_H / 2})` });
+                const g        = mk('g', { transform: `translate(${COL3_X},${eY - SD_H / 2})` });
 
                 g.appendChild(mk('rect', {
                     x: 0, y: 0, width: SD_W, height: SD_H,
-                    rx: 10,
-                    fill: '#2b1e0f',
-                    stroke: isActive ? SD_COLOR + '66' : 'rgba(239,68,68,0.35)',
-                    'stroke-width': 1.5,
+                    rx: 10, fill: 'url(#grad-sd)',
+                    stroke: isActive ? SD_COLOR + '66' : 'rgba(239,68,68,0.4)', 'stroke-width': 1.5,
                 }));
 
-                // Animated pulse ring when tasks are running
                 if (sdEp.running > 0 && isActive) {
-                    g.appendChild(mk('circle', {
-                        class: 'pulse-dot',
-                        cx: 14, cy: 18,
-                        r: 4,
-                        fill: '#f59e0b',
-                    }));
+                    g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: '#f59e0b' }));
                 }
-
-                // Status dot
-                g.appendChild(mk('circle', {
-                    cx: 14, cy: 18,
-                    r: 4,
-                    fill: isActive ? SD_COLOR : '#8e8ea0',
-                }));
+                g.appendChild(mk('circle', { cx: 14, cy: 18, r: 4, fill: isActive ? SD_COLOR : '#8e8ea0' }));
 
                 txt(g, truncate(shortUrl(sdEp.base_url), 26), {
-                    x: 26, y: 22,
-                    fill: '#ececf1',
-                    'font-size': 10.5,
-                    'font-weight': 700,
-                    'font-family': 'monospace, sans-serif',
+                    x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
                 });
+                g.appendChild(mk('line', { x1: 10, y1: 32, x2: SD_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
 
-                // Divider
-                g.appendChild(mk('line', {
-                    x1: 10, y1: 32, x2: SD_W - 10, y2: 32,
-                    stroke: 'rgba(255,255,255,0.07)',
-                    'stroke-width': 1,
-                }));
-
-                // Running count
                 const runColor = sdEp.running > 0 ? '#f59e0b' : '#8e8ea0';
-                txt(g, `▶  Laufend: ${sdEp.running}`, {
-                    x: 12, y: 52,
-                    fill: runColor,
-                    'font-size': 11,
-                    'font-family': 'sans-serif',
-                });
-
-                // Jobs today
-                txt(g, `🖼  Bilder heute: ${formatNum(sdEp.today_jobs)}`, {
-                    x: 12, y: 72,
-                    fill: '#22c55e',
-                    'font-size': 11,
-                    'font-family': 'sans-serif',
-                });
+                txt(g, `▶  Laufend: ${sdEp.running}`, { x: 12, y: 52, fill: runColor, 'font-size': 11, 'font-family': 'sans-serif' });
+                txt(g, `🖼  Bilder heute: ${formatNum(sdEp.today_jobs)}`, { x: 12, y: 72, fill: '#22c55e', 'font-size': 11, 'font-family': 'sans-serif' });
 
                 svg.appendChild(g);
             }
@@ -3271,73 +3327,79 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
                 g.appendChild(mk('rect', {
                     x: 0, y: 0, width: COMFY_W, height: COMFY_H,
-                    rx: 10,
-                    fill: '#1e1626',
-                    stroke: isActive ? COMFY_COLOR + '66' : 'rgba(239,68,68,0.35)',
-                    'stroke-width': 1.5,
+                    rx: 10, fill: 'url(#grad-comfy)',
+                    stroke: isActive ? COMFY_COLOR + '66' : 'rgba(239,68,68,0.4)', 'stroke-width': 1.5,
                 }));
 
-                // Animated pulse ring when tasks are running
                 if (comfyEp.running > 0 && isActive) {
-                    g.appendChild(mk('circle', {
-                        class: 'pulse-dot',
-                        cx: 14, cy: 18,
-                        r: 4,
-                        fill: '#f59e0b',
-                    }));
+                    g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: '#f59e0b' }));
                 }
-
-                // Status dot
-                g.appendChild(mk('circle', {
-                    cx: 14, cy: 18,
-                    r: 4,
-                    fill: isActive ? COMFY_COLOR : '#8e8ea0',
-                }));
+                g.appendChild(mk('circle', { cx: 14, cy: 18, r: 4, fill: isActive ? COMFY_COLOR : '#8e8ea0' }));
 
                 txt(g, truncate(shortUrl(comfyEp.base_url), 26), {
-                    x: 26, y: 22,
-                    fill: '#ececf1',
-                    'font-size': 10.5,
-                    'font-weight': 700,
-                    'font-family': 'monospace, sans-serif',
+                    x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
                 });
+                g.appendChild(mk('line', { x1: 10, y1: 32, x2: COMFY_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
 
-                // Divider
-                g.appendChild(mk('line', {
-                    x1: 10, y1: 32, x2: COMFY_W - 10, y2: 32,
-                    stroke: 'rgba(255,255,255,0.07)',
-                    'stroke-width': 1,
-                }));
-
-                // Running count
                 const runColor = comfyEp.running > 0 ? '#f59e0b' : '#8e8ea0';
-                txt(g, `▶  Laufend: ${comfyEp.running}`, {
-                    x: 12, y: 52,
-                    fill: runColor,
-                    'font-size': 11,
-                    'font-family': 'sans-serif',
-                });
-
-                // Jobs today
-                txt(g, `🖼  Bilder heute: ${formatNum(comfyEp.today_jobs)}`, {
-                    x: 12, y: 72,
-                    fill: '#22c55e',
-                    'font-size': 11,
-                    'font-family': 'sans-serif',
-                });
+                txt(g, `▶  Laufend: ${comfyEp.running}`, { x: 12, y: 52, fill: runColor, 'font-size': 11, 'font-family': 'sans-serif' });
+                txt(g, `🖼  Bilder heute: ${formatNum(comfyEp.today_jobs)}`, { x: 12, y: 72, fill: '#22c55e', 'font-size': 11, 'font-family': 'sans-serif' });
 
                 svg.appendChild(g);
             }
         }
     }
 
+    // ── Live stat-box updates ─────────────────────────────────────────────────
+
+    function fmtCount(n) {
+        return Number(n).toLocaleString();
+    }
+
+    function setStatBox(id, val) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const str = fmtCount(val);
+        if (el.textContent !== str) {
+            el.textContent = str;
+            const box = el.closest('.stat-box');
+            if (box) {
+                box.classList.remove('stat-flash');
+                // Force reflow so animation restarts
+                void box.offsetWidth;
+                box.classList.add('stat-flash');
+            }
+        }
+    }
+
+    function updateStatBoxes(data) {
+        const t     = data.totals       || {};
+        const s     = data.searxng      || {};
+        const sdT   = data.sd_totals    || {};
+        const comfyT = data.comfy_totals || {};
+
+        setStatBox('db-llm-running',   t.total_running           ?? 0);
+        setStatBox('db-llm-done24',    t.total_done_24h          ?? 0);
+        setStatBox('db-llm-done',      t.total_done              ?? 0);
+        setStatBox('db-llm-error',     t.total_error             ?? 0);
+        setStatBox('db-prompt-tok',    t.grand_prompt_tokens     ?? 0);
+        setStatBox('db-comp-tok',      t.grand_completion_tokens ?? 0);
+        setStatBox('db-total-tok',     t.grand_tokens            ?? 0);
+        setStatBox('db-srxng-running', s.running                 ?? 0);
+        setStatBox('db-srxng-today',   s.today_jobs              ?? 0);
+        setStatBox('db-sd-running',    sdT.total_running         ?? 0);
+        setStatBox('db-sd-done24',     sdT.total_done_24h        ?? 0);
+        setStatBox('db-sd-done',       sdT.total_done            ?? 0);
+        setStatBox('db-comfy-running', comfyT.total_running      ?? 0);
+        setStatBox('db-comfy-done24',  comfyT.total_done_24h     ?? 0);
+        setStatBox('db-comfy-done',    comfyT.total_done         ?? 0);
+    }
+
     // ── Status bar ────────────────────────────────────────────────────────────
 
     function setStatus(label, loading) {
         if (statusEl) statusEl.textContent = label;
-        if (liveDot) {
-            liveDot.style.background = loading ? '#f59e0b' : '#22c55e';
-        }
+        if (liveDot)  liveDot.style.background = loading ? '#f59e0b' : '#22c55e';
     }
 
     function tsLabel(ts) {
@@ -3357,6 +3419,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const data = await res.json();
             if (data.ok && Array.isArray(data.endpoints)) {
                 renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || [], data.clients || null);
+                updateStatBoxes(data);
                 setStatus(tsLabel(data.ts), false);
             } else {
                 setStatus('Fehler beim Laden', false);
@@ -3374,6 +3437,20 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     // Refresh every 15 seconds
     setInterval(refreshTree, 15000);
 
+})();
+</script>
+
+<script>
+// ── Detail tables toggle ──────────────────────────────────────────────────────
+(function () {
+    'use strict';
+    const toggle = document.getElementById('dash-detail-toggle');
+    const body   = document.getElementById('dash-detail-body');
+    if (!toggle || !body) return;
+    toggle.addEventListener('click', function () {
+        const open = body.classList.toggle('open');
+        toggle.classList.toggle('open', open);
+    });
 })();
 </script>
 
@@ -3734,7 +3811,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     'use strict';
 
     const sectionIds = [
-        'stats-card', 'load-tree-card', 'config-smtp-card', 'config-searxng-card',
+        'dashboard-card', 'config-smtp-card', 'config-searxng-card',
         'config-endpoints-card', 'config-request-handling-card',
         'config-sd-card', 'config-comfy-card', 'users-card', 'password-card'
     ];
