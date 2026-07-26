@@ -212,6 +212,7 @@ function ensureRuntimeSchema(PDO $pdo): void
         "ALTER TABLE users ADD COLUMN default_model VARCHAR(255) NOT NULL DEFAULT '' AFTER password_reset_expires",
         "ALTER TABLE users ADD COLUMN requires_password_change TINYINT(1) NOT NULL DEFAULT 0 AFTER default_model",
         "ALTER TABLE users ADD COLUMN can_upload_documents TINYINT(1) NOT NULL DEFAULT 0 AFTER requires_password_change",
+        "ALTER TABLE document_uploads ADD COLUMN chunk_count INT UNSIGNED NOT NULL DEFAULT 0 AFTER extracted_text",
     ] as $alter) {
         try { $pdo->exec($alter); } catch (Throwable $_e) { /* column already exists */ }
     }
@@ -227,12 +228,31 @@ function ensureRuntimeSchema(PDO $pdo): void
             file_size      INT UNSIGNED    NOT NULL DEFAULT 0,
             status         ENUM('pending','processing','done','error') NOT NULL DEFAULT 'pending',
             extracted_text MEDIUMTEXT      NULL,
+            chunk_count    INT UNSIGNED    NOT NULL DEFAULT 0,
             error_message  TEXT            NULL,
             uploaded_at    TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
             processed_at   TIMESTAMP(3)    NULL,
             PRIMARY KEY (id),
             KEY idx_du_user_status (user_id, status),
             KEY idx_du_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS document_chunks (
+            id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            document_upload_id BIGINT UNSIGNED NOT NULL,
+            user_id            INT             NOT NULL,
+            chunk_index        INT UNSIGNED    NOT NULL,
+            chunk_text         MEDIUMTEXT      NOT NULL,
+            created_at         TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            UNIQUE KEY uniq_doc_chunk (document_upload_id, chunk_index),
+            KEY idx_dc_user (user_id),
+            KEY idx_dc_doc (document_upload_id),
+            CONSTRAINT fk_dc_doc_upload
+                FOREIGN KEY (document_upload_id) REFERENCES document_uploads(id)
+                ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
