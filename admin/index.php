@@ -27,6 +27,7 @@ $visionModel = trim(getSetting('vision_model', ''));
 $smtpHost       = getSetting('smtp_host', '');
 $smtpPort       = getSetting('smtp_port', '587');
 $smtpEncryption = getSetting('smtp_encryption', 'tls');
+$smtpAuth       = getSetting('smtp_auth', '1') === '1';
 $smtpUser       = getSetting('smtp_user', '');
 $smtpPass       = getSetting('smtp_pass', '');
 $smtpFromEmail  = getSetting('smtp_from_email', '');
@@ -175,6 +176,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newSmtpHost       = trim($_POST['smtp_host']        ?? '');
             $newSmtpPort       = (int) ($_POST['smtp_port']      ?? 587);
             $newSmtpEncryption = trim($_POST['smtp_encryption']  ?? 'tls');
+            $newSmtpAuth       = isset($_POST['smtp_auth']) ? '1' : '0';
             $newSmtpUser       = trim($_POST['smtp_user']        ?? '');
             $newSmtpPass       = $_POST['smtp_pass']             ?? '';
             $newSmtpFromEmail  = trim($_POST['smtp_from_email']  ?? '');
@@ -190,6 +192,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 setSetting('smtp_host',       $newSmtpHost);
                 setSetting('smtp_port',       (string) $newSmtpPort);
                 setSetting('smtp_encryption', $newSmtpEncryption);
+                setSetting('smtp_auth',       $newSmtpAuth);
                 setSetting('smtp_user',       $newSmtpUser);
                 // Only overwrite the password if the field was not left blank
                 if ($newSmtpPass !== '') {
@@ -201,6 +204,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $smtpHost       = $newSmtpHost;
                 $smtpPort       = (string) $newSmtpPort;
                 $smtpEncryption = $newSmtpEncryption;
+                $smtpAuth       = $newSmtpAuth === '1';
                 $smtpUser       = $newSmtpUser;
                 if ($newSmtpPass !== '') { $smtpPass = $newSmtpPass; }
                 $smtpFromEmail  = $newSmtpFromEmail;
@@ -1285,6 +1289,17 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             <div class="form-row">
                 <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                        <input type="checkbox" id="smtp-auth" name="smtp_auth" value="1"
+                               <?= $smtpAuth ? 'checked' : '' ?>>
+                        Authentifizierung erforderlich
+                    </label>
+                </div>
+            </div>
+
+            <div id="smtp-auth-fields" <?= $smtpAuth ? '' : 'style="display:none"' ?>>
+            <div class="form-row">
+                <div class="form-group">
                     <label for="smtp-user">SMTP-Benutzername</label>
                     <input type="text" id="smtp-user" name="smtp_user"
                            autocomplete="off"
@@ -1298,6 +1313,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                            placeholder="<?= $smtpPass !== '' ? '(gespeichert – leer lassen zum Beibehalten)' : 'Passwort eingeben' ?>">
                     <p class="hint">Leer lassen, um das gespeicherte Passwort beizubehalten.</p>
                 </div>
+            </div>
             </div>
 
             <div class="form-row">
@@ -3565,6 +3581,17 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             testBtn.disabled    = false;
             testBtn.textContent = '🔌 Test-E-Mail senden';
         }
+    });
+})();
+
+// ── SMTP auth toggle ──────────────────────────────────────────────────────────
+(function () {
+    'use strict';
+    const authChk    = document.getElementById('smtp-auth');
+    const authFields = document.getElementById('smtp-auth-fields');
+    if (!authChk || !authFields) return;
+    authChk.addEventListener('change', function () {
+        authFields.style.display = authChk.checked ? '' : 'none';
     });
 })();
 

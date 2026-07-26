@@ -304,8 +304,9 @@ function mailerFromSettings(): Mailer
     $host       = getSetting('smtp_host', '');
     $port       = (int) getSetting('smtp_port', '587');
     $encryption = getSetting('smtp_encryption', 'tls');
-    $user       = getSetting('smtp_user', '');
-    $pass       = getSetting('smtp_pass', '');
+    $auth       = getSetting('smtp_auth', '1') === '1';
+    $user       = $auth ? getSetting('smtp_user', '') : '';
+    $pass       = $auth ? getSetting('smtp_pass', '') : '';
 
     if ($host === '') {
         throw new RuntimeException('SMTP-Host ist nicht konfiguriert.');
