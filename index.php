@@ -1,5 +1,8 @@
 <!DOCTYPE html>
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 require_once __DIR__ . '/db.php';
 $defaultModel = getSetting('default_model', '');
 if ($defaultModel === '') {
@@ -15,6 +18,9 @@ if ($defaultModel === '') {
         // Ignore – endpoints table may not exist yet (before setup.php is run).
     }
 }
+
+$loggedIn   = isset($_SESSION['admin_user']);
+$loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '';
 ?>
 <html lang="de">
 <head>
@@ -457,6 +463,103 @@ if ($defaultModel === '') {
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 3px; }
+
+        /* ── Layout wrapper (header + below) ───────────────────────── */
+        #content-wrapper {
+            flex: 1 1 0;
+            display: flex;
+            flex-direction: row;
+            overflow: hidden;
+        }
+
+        /* ── Sidebar (session list, logged-in users only) ──────────── */
+        #sidebar {
+            width: 240px;
+            flex-shrink: 0;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #sidebar-header {
+            padding: 10px 10px 6px;
+            flex-shrink: 0;
+        }
+
+        #new-chat-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            width: 100%;
+            padding: 9px 12px;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius);
+            font-size: .85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background .15s;
+        }
+
+        #new-chat-btn:hover { background: var(--accent-dark); }
+
+        #session-list {
+            flex: 1 1 0;
+            overflow-y: auto;
+            padding: 4px 6px 10px;
+        }
+
+        .session-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 4px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: .82rem;
+            color: var(--text-muted);
+            transition: background .12s, color .12s;
+            overflow: hidden;
+        }
+
+        .session-item:hover { background: var(--surface-alt); color: var(--text); }
+
+        .session-item.active { background: var(--surface-alt); color: var(--text); }
+
+        .session-title {
+            flex: 1;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .session-delete {
+            flex-shrink: 0;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: .75rem;
+            padding: 2px 4px;
+            border-radius: 4px;
+            opacity: 0;
+            transition: opacity .12s, color .12s;
+        }
+
+        .session-item:hover .session-delete { opacity: 1; }
+        .session-delete:hover { color: var(--error); }
+
+        /* ── Main area (chat + input) ───────────────────────────────── */
+        #main-area {
+            flex: 1 1 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
     </style>
 </head>
 <body>
@@ -465,7 +568,13 @@ if ($defaultModel === '') {
 <header>
     <h1>🤖 KHWF KI</h1>
     <div style="display:flex;align-items:center;gap:10px">
+<?php if ($loggedIn): ?>
+        <span style="font-size:.8rem;color:var(--text-muted)">👤 <?= $loggedUser ?></span>
+        <a href="logout.php" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">Abmelden</a>
+<?php else: ?>
+        <a href="login.php" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">🔐 Anmelden</a>
         <a href="register.php" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">✍ Registrieren</a>
+<?php endif; ?>
         <a class="admin-link" href="admin/login.php">⚙ Admin</a>
     </div>
 </header>
@@ -476,6 +585,22 @@ if ($defaultModel === '') {
     <select id="model-select"><option value="">– Modelle laden –</option></select>
     <button id="refresh-btn">⟳ Modelle laden</button>
 </div>
+
+<!-- ── Content wrapper (sidebar + main) ───────────────────── -->
+<div id="content-wrapper">
+
+<?php if ($loggedIn): ?>
+<!-- ── Session sidebar (logged-in users) ──────────────────── -->
+<nav id="sidebar">
+    <div id="sidebar-header">
+        <button id="new-chat-btn">✏ Neuer Chat</button>
+    </div>
+    <div id="session-list"></div>
+</nav>
+<?php endif; ?>
+
+<!-- ── Main area (chat + input) ───────────────────────────── -->
+<div id="main-area">
 
 <!-- ── Chat messages ──────────────────────────────────────── -->
 <div id="chat-area"></div>
@@ -507,6 +632,9 @@ if ($defaultModel === '') {
 
     </div>
 </div>
+
+</div><!-- /#main-area -->
+</div><!-- /#content-wrapper -->
 
 <script>
 /* ─────────────────────────────────────────────────────────────────
@@ -561,7 +689,161 @@ if ($defaultModel === '') {
         sessionStorage.setItem('chat_session_id', sessionId);
     }
 
-    /* ── Helpers ─────────────────────────────────────────── */
+    /* Whether the current user is logged in (set by PHP) */
+    const loggedIn = <?= $loggedIn ? 'true' : 'false' ?>;
+
+    /* ── Sidebar session management ──────────────────────── */
+
+    const sessionListEl = document.getElementById('session-list');
+    const newChatBtn    = document.getElementById('new-chat-btn');
+
+    function generateSessionId() {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function truncate(str, max) {
+        if (!str) return '(Neuer Chat)';
+        return str.length > max ? str.slice(0, max) + '…' : str;
+    }
+
+    /** Render the list of sessions in the sidebar. */
+    function renderSessionList(sessions) {
+        if (!sessionListEl) return;
+        sessionListEl.innerHTML = '';
+        if (!sessions || sessions.length === 0) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'padding:12px 10px;font-size:.78rem;color:var(--text-muted)';
+            empty.textContent = 'Noch keine Chats gespeichert.';
+            sessionListEl.appendChild(empty);
+            return;
+        }
+        sessions.forEach(s => {
+            const item = document.createElement('div');
+            item.className = 'session-item' + (s.session_id === sessionId ? ' active' : '');
+            item.dataset.sessionId = s.session_id;
+
+            const titleEl = document.createElement('span');
+            titleEl.className = 'session-title';
+            titleEl.textContent = truncate(s.title || '', 60);
+            titleEl.title = s.title || '';
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'session-delete';
+            delBtn.title = 'Chat löschen';
+            delBtn.textContent = '✕';
+            delBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!confirm('Diesen Chat-Verlauf löschen?')) return;
+                await deleteSession(s.session_id);
+            });
+
+            item.appendChild(titleEl);
+            item.appendChild(delBtn);
+
+            item.addEventListener('click', () => loadSession(s.session_id));
+            sessionListEl.appendChild(item);
+        });
+    }
+
+    /** Load and display the list of user sessions. */
+    async function refreshSessionList() {
+        if (!loggedIn || !sessionListEl) return;
+        try {
+            const res = await fetch('api/chat_sessions.php?action=list');
+            if (!res.ok) return;
+            const sessions = await res.json();
+            renderSessionList(sessions);
+        } catch (_) { /* ignore */ }
+    }
+
+    /** Switch to a different conversation from the sidebar. */
+    async function loadSession(sid) {
+        if (isStreaming) return;
+        if (sid === sessionId) return;
+        try {
+            const res = await fetch('api/chat_sessions.php?action=load&session_id=' + encodeURIComponent(sid));
+            if (!res.ok) { setStatus('Fehler beim Laden des Chats.', 'error'); return; }
+            const data = await res.json();
+            if (data.error) { setStatus(data.error, 'error'); return; }
+
+            sessionId = sid;
+            sessionStorage.setItem('chat_session_id', sessionId);
+
+            // Rebuild the visible chat from stored messages.
+            clearUpgradePrompt();
+            chatArea.innerHTML = '';
+            history = [];
+
+            const msgs = data.messages || [];
+            for (const msg of msgs) {
+                if (msg.role === 'user' || msg.role === 'assistant') {
+                    const content = typeof msg.content === 'string' ? msg.content : '';
+                    appendMessage(msg.role, content);
+                    history.push({ role: msg.role, content });
+                }
+            }
+
+            if (history.length === 0) {
+                showWelcome();
+            } else {
+                scrollToBottom();
+            }
+
+            // Highlight active item in sidebar.
+            document.querySelectorAll('.session-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.sessionId === sessionId);
+            });
+
+            setStatus('Chat geladen.', 'ok');
+        } catch (_) {
+            setStatus('Fehler beim Laden des Chats.', 'error');
+        }
+    }
+
+    /** Delete a session from the server and refresh the list. */
+    async function deleteSession(sid) {
+        try {
+            const fd = new FormData();
+            fd.append('action', 'delete');
+            fd.append('session_id', sid);
+            await fetch('api/chat_sessions.php', { method: 'POST', body: fd });
+
+            // If active session was deleted, start fresh.
+            if (sid === sessionId) {
+                startNewChat();
+            } else {
+                refreshSessionList();
+            }
+        } catch (_) { /* ignore */ }
+    }
+
+    /** Start a brand-new empty chat. */
+    function startNewChat() {
+        history = [];
+        chatArea.innerHTML = '';
+        clearUpgradePrompt();
+        sessionId = generateSessionId();
+        sessionStorage.setItem('chat_session_id', sessionId);
+        showWelcome();
+        setStatus('Neuer Chat gestartet.', 'info');
+        // Deselect sidebar items.
+        document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
+        userInput.focus();
+    }
+
+    if (newChatBtn) {
+        newChatBtn.addEventListener('click', startNewChat);
+    }
+
+    /** After a successful exchange, refresh the session list so the new
+     *  title (derived from the first message) appears in the sidebar. */
+    function afterExchangeRefresh() {
+        if (loggedIn) {
+            refreshSessionList();
+        }
+    }
 
     function setStatus(msg, type = 'info') {
         statusBar.textContent = msg;
@@ -1079,6 +1361,7 @@ if ($defaultModel === '') {
             const assistantHistoryIndex = history.length - 1;
             showUpgradePrompt(upgradeSuggestion, messages, assistantHistoryIndex);
             setStatus('Bereit.', 'ok');
+            afterExchangeRefresh();
         } catch (err) {
             bubble.textContent = '⚠ Fehler: ' + err.message;
             bubble.classList.remove('streaming');
@@ -1106,18 +1389,7 @@ if ($defaultModel === '') {
 
     userInput.addEventListener('input', () => autoResizeTextarea(userInput));
 
-    clearBtn.addEventListener('click', () => {
-        history    = [];
-        chatArea.innerHTML = '';
-        clearUpgradePrompt();
-        showWelcome();
-        setStatus('Verlauf gelöscht.', 'info');
-        // Start a new server-side session so the old history is no longer used.
-        const bytes = new Uint8Array(32);
-        crypto.getRandomValues(bytes);
-        sessionId = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-        sessionStorage.setItem('chat_session_id', sessionId);
-    });
+    clearBtn.addEventListener('click', startNewChat);
 
     systemToggle.addEventListener('click', () => {
         const hidden = systemPromptWrap.style.display !== 'block';
@@ -1127,6 +1399,11 @@ if ($defaultModel === '') {
     /* ── Auto-focus input on start ───────────────────────── */
     showWelcome();
     userInput.focus();
+
+    /* ── Load session list on startup (logged-in users) ─── */
+    if (loggedIn) {
+        refreshSessionList();
+    }
 })();
 </script>
 </body>
