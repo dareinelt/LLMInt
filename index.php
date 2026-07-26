@@ -341,6 +341,7 @@ $csrfToken = $_SESSION['csrf_token'];
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-word;
+            margin-bottom: 10px;
         }
 
         /* ── Input outer (fade + full-width bg) ───────────────────── */
@@ -1461,11 +1462,14 @@ $csrfToken = $_SESSION['csrf_token'];
                 accumulated += delta;
             }
             if (delta || thinkingDelta) {
-                if (accumulated) {
-                    bubble.innerHTML = renderMarkdown(accumulated);
-                } else if (accumulatedThinking) {
-                    bubble.innerHTML = '<div class="thinking-bubble">' + escapeHtmlContent(accumulatedThinking) + '</div>';
+                let html = '';
+                if (accumulatedThinking) {
+                    html += '<div class="thinking-bubble">' + escapeHtmlContent(accumulatedThinking) + '</div>';
                 }
+                if (accumulated) {
+                    html += renderMarkdown(accumulated);
+                }
+                bubble.innerHTML = html;
                 scrollToBottom();
             }
             return false;
