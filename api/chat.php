@@ -640,7 +640,38 @@ function emitSseData(array|string $payload): void
     flush();
 }
 
-function emitSyntheticStream(array $data): void
+function formatIntelligenceLabel(float $value): string
+{
+    if (abs($value - round($value)) < 0.00001) {
+        return ((string) ((int) round($value))) . 'b';
+    }
+    return rtrim(rtrim(number_format($value, 2, '.', ''), '0'), '.') . 'b';
+}
+
+function buildIntelligenceUpgradePayload(array $suggestion): array
+{
+    return [
+        'available' => true,
+        'current_model' => (string) ($suggestion['requested_model'] ?? ''),
+        'current_intelligence' => formatIntelligenceLabel((float) ($suggestion['requested_intelligence'] ?? 0)),
+        'suggested_model' => (string) ($suggestion['model'] ?? ''),
+        'suggested_intelligence' => formatIntelligenceLabel((float) ($suggestion['suggested_intelligence'] ?? 0)),
+        'message' => 'Es stehen Ressourcen bereit um die Aufgabe erneut mit größerer Intelligenz zu bearbeiten. Dies kann länger dauern als zuvor, kann jedoch genauere Antworten liefern. Fortfahren?',
+    ];
+}
+
+function emitIntelligenceUpgradeSse(?array $suggestion): void
+{
+    if ($suggestion === null) {
+        return;
+    }
+    emitSseData([
+        'type' => 'intelligence_upgrade',
+        'upgrade' => buildIntelligenceUpgradePayload($suggestion),
+    ]);
+}
+
+function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null): void
 {
     $content = normalizeAssistantContent($data['choices'][0]['message']['content'] ?? '');
     $id = (string) ($data['id'] ?? ('chatcmpl-' . bin2hex(random_bytes(8))));
@@ -674,6 +705,7 @@ function emitSyntheticStream(array $data): void
             'finish_reason' => $data['choices'][0]['finish_reason'] ?? 'stop',
         ]],
     ]);
+    emitIntelligenceUpgradeSse($upgradeSuggestion);
     emitSseData('[DONE]');
 }
 
@@ -721,6 +753,12 @@ foreach ($payload['messages'] as $msg) {
 // ── Select endpoint via load balancer ─────────────────────────────────────────
 
 $model = $payload['model'];
+$intelligenceUpgrade = null;
+try {
+    $intelligenceUpgrade = getUpgradeModelSuggestionForRequestedModel($model);
+} catch (Throwable $e) {
+    $intelligenceUpgrade = null;
+}
 
 // Extract and validate the optional session ID for conversation persistence.
 $sessionId = '';
@@ -1045,6 +1083,9 @@ if ($useTools) {
         'completion_tokens' => $usage['completion'],
         'total_tokens' => $usage['total'],
     ];
+    if ($intelligenceUpgrade !== null) {
+        $finalData['intelligence_upgrade'] = buildIntelligenceUpgradePayload($intelligenceUpgrade);
+    }
 
     $taskFinished = true;
     completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total']);
@@ -1062,7 +1103,7 @@ if ($useTools) {
     }
 
     if ($clientRequestedStream) {
-        emitSyntheticStream($finalData);
+        emitSyntheticStream($finalData, $intelligenceUpgrade);
     } else {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode($finalData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -1186,6 +1227,9 @@ if ($stream) {
         );
         saveConversationSession($sessionId, $model, $sessionMessages);
     }
+    if ($streamStatus === 'done' && ($dataWritten || headers_sent())) {
+        emitIntelligenceUpgradeSse($intelligenceUpgrade);
+    }
 
     if ($streamCurlErr !== '') {
         if ($dataWritten || headers_sent()) {
@@ -1274,4 +1318,9 @@ if ($sessionId !== '' && is_array($data)) {
 }
 
 // Forward the raw LM Studio response.
-echo $body;
+if (is_array($data) && $intelligenceUpgrade !== null) {
+    $data['intelligence_upgrade'] = buildIntelligenceUpgradePayload($intelligenceUpgrade);
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+} else {
+    echo $body;
+}

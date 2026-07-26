@@ -462,6 +462,37 @@ if (isset($_GET['edit_comfy']) && (int) $_GET['edit_comfy'] > 0) {
 $palette       = ['#6c63ff', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#f97316', '#84cc16'];
 $modelColorMap = [];
 $colorIdx      = 0;
+
+/**
+ * Extracts the intelligence label (e.g. "7b", "27b") from a model name.
+ */
+function modelIntelligenceLabel(string $model): string
+{
+    if ($model === '') {
+        return '–';
+    }
+    if (!preg_match_all('/(\d+(?:[.,]\d+)?)\s*b\b/i', $model, $matches) || empty($matches[1])) {
+        return '–';
+    }
+    $best = null;
+    foreach ($matches[1] as $raw) {
+        $num = (float) str_replace(',', '.', $raw);
+        if ($num <= 0) {
+            continue;
+        }
+        if ($best === null || $num > $best) {
+            $best = $num;
+        }
+    }
+    if ($best === null) {
+        return '–';
+    }
+    if (abs($best - round($best)) < 0.00001) {
+        return ((string) ((int) round($best))) . 'b';
+    }
+    return rtrim(rtrim(number_format($best, 2, '.', ''), '0'), '.') . 'b';
+}
+
 foreach ($endpoints as $ep) {
     $m = $ep['default_model'];
     if ($m !== '' && !isset($modelColorMap[$m])) {
@@ -951,6 +982,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <th>URL</th>
                     <th>Timeout</th>
                     <th>Standard-Modell</th>
+                    <th>Intelligenz</th>
                     <th>Status</th>
                     <th>Aktionen</th>
                 </tr>
@@ -975,6 +1007,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                             <span class="model-badge badge-empty">–</span>
                         <?php endif; ?>
                     </td>
+                    <td><?= htmlspecialchars(modelIntelligenceLabel((string) $ep['default_model'])) ?></td>
                     <td>
                         <span class="dot <?= $ep['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
                         <?= $ep['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
@@ -2024,6 +2057,22 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         return str.length > max ? str.slice(0, max - 1) + '…' : str;
     }
 
+    function extractIntelligenceLabel(modelName) {
+        if (!modelName) return '–';
+        const matches = [...String(modelName).matchAll(/(\d+(?:[.,]\d+)?)\s*b\b/gi)];
+        if (matches.length === 0) return '–';
+        let best = null;
+        for (const m of matches) {
+            const v = parseFloat((m[1] || '').replace(',', '.'));
+            if (!Number.isFinite(v) || v <= 0) continue;
+            if (best === null || v > best) best = v;
+        }
+        if (best === null) return '–';
+        const rounded = Math.round(best);
+        if (Math.abs(best - rounded) < 1e-6) return `${rounded}b`;
+        return `${best.toFixed(2).replace(/\.?0+$/, '')}b`;
+    }
+
     // ── Tree renderer ─────────────────────────────────────────────────────────
 
     function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints) {
@@ -2281,6 +2330,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             const groupRunning = eps.reduce((s, e) => s + e.running, 0);
             const modelLabel   = truncate(model, 22);
+            const intelligenceLabel = extractIntelligenceLabel(model);
 
             txt(g, modelLabel, {
                 x: 16, y: 24,
@@ -2289,7 +2339,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'font-weight': 700,
                 'font-family': 'sans-serif',
             });
-            txt(g, `${eps.length} Endpunkt${eps.length !== 1 ? 'e' : ''}`, {
+            txt(g, `${eps.length} Endpunkt${eps.length !== 1 ? 'e' : ''} · ${intelligenceLabel}`, {
                 x: 16, y: 40,
                 fill: '#8e8ea0',
                 'font-size': 10,
