@@ -324,6 +324,118 @@ function callSdGenerate(array $params, int $timeout = 120): array
 }
 
 /**
+ * Returns true when at least one analysed (done) document upload exists.
+ */
+function hasDocumentUploads(): bool
+{
+    try {
+        $count = (int) getDb()->query(
+            "SELECT COUNT(*) FROM document_uploads WHERE status = 'done'"
+        )->fetchColumn();
+        return $count > 0;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function createDocumentQueryToolDefinition(): array
+{
+    return [[
+        'type' => 'function',
+        'function' => [
+            'name' => 'query_documents',
+            'description' => 'Durchsucht die hochgeladenen und analysierten Dokumente nach relevanten Informationen. Nutze dieses Tool, wenn der Benutzer nach etwas fragt, das in hochgeladenen Dokumenten enthalten sein könnte.',
+            'parameters' => [
+                'type' => 'object',
+                'properties' => [
+                    'query' => [
+                        'type' => 'string',
+                        'description' => 'Suchanfrage, nach der in den Dokumenten gesucht werden soll.',
+                    ],
+                ],
+                'required' => ['query'],
+            ],
+        ],
+    ]];
+}
+
+/**
+ * Search through extracted document texts for relevant content.
+ * Returns an array with matching document excerpts.
+ */
+function queryDocuments(string $query): array
+{
+    if ($query === '') {
+        return ['error' => 'Leere Suchanfrage.'];
+    }
+
+    try {
+        $db = getDb();
+
+        // Full text search: LIKE on extracted_text with the query terms.
+        $terms = array_filter(array_map('trim', explode(' ', $query)));
+        $terms = array_slice($terms, 0, 10); // limit to 10 terms
+
+        // Build WHERE conditions for each term.
+        $conditions = [];
+        $params     = [];
+        foreach ($terms as $term) {
+            if (strlen($term) >= 2) {
+                $conditions[] = 'extracted_text LIKE ?';
+                $params[] = '%' . $term . '%';
+            }
+        }
+
+        if (empty($conditions)) {
+            // Fallback: return all documents.
+            $stmt = $db->query(
+                "SELECT original_name, extracted_text FROM document_uploads
+                  WHERE status = 'done' AND extracted_text IS NOT NULL
+                  ORDER BY uploaded_at DESC LIMIT 5"
+            );
+        } else {
+            $whereClause = implode(' OR ', $conditions);
+            $stmt = $db->prepare(
+                "SELECT original_name, extracted_text FROM document_uploads
+                  WHERE status = 'done' AND extracted_text IS NOT NULL
+                    AND ({$whereClause})
+                  ORDER BY uploaded_at DESC LIMIT 5"
+            );
+            $stmt->execute($params);
+        }
+
+        $rows = $stmt->fetchAll();
+
+        if (empty($rows)) {
+            return [
+                'found' => false,
+                'message' => 'Keine passenden Informationen in den analysierten Dokumenten gefunden.',
+            ];
+        }
+
+        $results = [];
+        foreach ($rows as $row) {
+            $text = (string) ($row['extracted_text'] ?? '');
+            // Truncate very long texts to 4000 chars to avoid token overflow.
+            if (mb_strlen($text) > 4000) {
+                $text = mb_substr($text, 0, 4000) . ' … [gekürzt]';
+            }
+            $results[] = [
+                'document' => (string) ($row['original_name'] ?? 'Unbekannt'),
+                'content'  => $text,
+            ];
+        }
+
+        return [
+            'found'   => true,
+            'results' => $results,
+        ];
+    } catch (Throwable $e) {
+        return ['error' => 'Datenbankfehler: ' . $e->getMessage()];
+    }
+}
+
+/**
  * Returns true when at least one active ComfyUI endpoint is configured.
  */
 function hasComfyEndpoints(): bool
@@ -935,10 +1047,11 @@ $switchEndpoint = function () use (
 };
 
 $clientRequestedStream = isset($payload['stream']) && $payload['stream'] === true;
-$useSearchTool = $searxngBaseUrl !== '';
-$useSdTool     = hasSdEndpoints();
-$useComfyTool  = hasComfyEndpoints();
-$useTools      = $useSearchTool || $useSdTool || $useComfyTool;
+$useSearchTool   = $searxngBaseUrl !== '';
+$useSdTool       = hasSdEndpoints();
+$useComfyTool    = hasComfyEndpoints();
+$useDocQueryTool = hasDocumentUploads();
+$useTools        = $useSearchTool || $useSdTool || $useComfyTool || $useDocQueryTool;
 $stream = $clientRequestedStream && !$useTools;
 
 // Forward only the fields LM Studio expects.
@@ -1005,6 +1118,9 @@ if ($useTools) {
     }
     if ($useComfyTool) {
         $tools = array_merge($tools, createComfyToolDefinition());
+    }
+    if ($useDocQueryTool) {
+        $tools = array_merge($tools, createDocumentQueryToolDefinition());
     }
 
     for ($iteration = 0; $iteration < 6; $iteration++) {
@@ -1131,6 +1247,10 @@ if ($useTools) {
                 if (isset($toolResult['image_url'])) {
                     $toolResult['markdown'] = '![Generiertes Bild (ComfyUI)](' . $toolResult['image_url'] . ')';
                 }
+            } elseif ($toolName === 'query_documents' && $useDocQueryTool) {
+                $args  = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
+                $query = trim((string) ($args['query'] ?? ''));
+                $toolResult = queryDocuments($query);
             }
 
             $messages[] = [
