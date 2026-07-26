@@ -1195,7 +1195,7 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
         bubble._responseDetailsBodyEl.innerHTML = html;
     }
 
-    function showUpgradePrompt(upgrade, requestMessages, historyAssistantIndex, responseDetails) {
+    function showUpgradePrompt(upgrade, requestMessages, historyAssistantIndex, responseDetails, messageOverride) {
         if (!upgrade || !upgrade.available || !upgrade.suggested_model) {
             return;
         }
@@ -1206,7 +1206,7 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
 
         const card = document.createElement('div');
         card.className = 'intelligence-upgrade-card';
-        card.textContent = upgrade.message || 'Es stehen freie Ressourcen für ein intelligenteres Modell bereit. Fortfahren?';
+        card.textContent = messageOverride || upgrade.message || 'Es stehen freie Ressourcen für ein intelligenteres Modell bereit. Fortfahren?';
 
         const actions = document.createElement('div');
         actions.className = 'intelligence-upgrade-actions';
@@ -1346,16 +1346,6 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
                 responseDetails = retryResult.responseDetails || responseDetails;
                 upgradeSuggestion = retryResult.upgradeSuggestion || upgradeSuggestion;
 
-                if (!accumulated && upgradeSuggestion?.available && upgradeSuggestion?.suggested_model) {
-                    // Second retry: next smarter model (automatic)
-                    setStatus(`Leere Antwort – Versuche mit ${upgradeSuggestion.suggested_intelligence || 'größerem'} Modell …`, 'info');
-                    bubble.innerHTML = '';
-                    const upgradePayload = { ...payload, model: upgradeSuggestion.suggested_model };
-                    const upgradeResult = await executeStreamingRequest(upgradePayload, bubble);
-                    accumulated = upgradeResult.accumulated;
-                    responseDetails = upgradeResult.responseDetails || responseDetails;
-                    upgradeSuggestion = null; // upgrade was already used automatically
-                }
             }
 
             bubble.innerHTML = accumulated ? renderMarkdown(accumulated) : '(Leere Antwort)';
@@ -1365,7 +1355,10 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
             // Store assistant reply in history.
             history.push({ role: 'assistant', content: accumulated });
             const assistantHistoryIndex = history.length - 1;
-            showUpgradePrompt(upgradeSuggestion, messages, assistantHistoryIndex, responseDetails);
+            const emptyResponseMsg = !accumulated && upgradeSuggestion?.available
+                ? 'Das Modell hat keine Antwort generiert. Soll die Anfrage mit einem anderen Modell erneut verarbeitet werden?'
+                : null;
+            showUpgradePrompt(upgradeSuggestion, messages, assistantHistoryIndex, responseDetails, emptyResponseMsg);
             setStatus('Bereit.', 'ok');
             afterExchangeRefresh();
         } catch (err) {
