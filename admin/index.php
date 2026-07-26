@@ -559,6 +559,31 @@ if (isset($_GET['edit_comfy']) && (int) $_GET['edit_comfy'] > 0) {
     }
 }
 
+// ── Connected-client stats ────────────────────────────────────────────────────
+
+$clientStats = ['current' => 0, 'today_min' => 0, 'today_max' => 0, 'today_avg' => 0.0];
+try {
+    $current = (int) $db->query(
+        "SELECT COUNT(*) FROM active_clients
+          WHERE last_seen > DATE_SUB(NOW(), INTERVAL 90 SECOND)"
+    )->fetchColumn();
+
+    $cRow = $db->query(
+        "SELECT MIN(cnt) AS min_cnt, MAX(cnt) AS max_cnt, AVG(cnt) AS avg_cnt
+           FROM client_count_log
+          WHERE DATE(recorded_at) = CURDATE()"
+    )->fetch(PDO::FETCH_ASSOC);
+
+    $clientStats = [
+        'current'   => $current,
+        'today_min' => ($cRow && $cRow['min_cnt'] !== null) ? (int) $cRow['min_cnt'] : $current,
+        'today_max' => ($cRow && $cRow['max_cnt'] !== null) ? (int) $cRow['max_cnt'] : $current,
+        'today_avg' => ($cRow && $cRow['avg_cnt'] !== null) ? round((float) $cRow['avg_cnt'], 1) : (float) $current,
+    ];
+} catch (PDOException $e) {
+    // Tables may not exist on older installations
+}
+
 // Assign a stable colour to each distinct model name.
 $palette       = ['#6c63ff', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#f97316', '#84cc16'];
 $modelColorMap = [];
@@ -2552,6 +2577,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
     ) ?>;
 
+    const INITIAL_CLIENTS = <?= json_encode([
+        'current'   => $clientStats['current'],
+        'today_min' => $clientStats['today_min'],
+        'today_max' => $clientStats['today_max'],
+        'today_avg' => $clientStats['today_avg'],
+    ], JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
     const MODEL_COLORS = <?= json_encode($modelColorMap,
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
@@ -2619,7 +2651,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     // ── Tree renderer ─────────────────────────────────────────────────────────
 
-    function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints) {
+    function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints, clients) {
         svg.innerHTML = '';
 
         const hasSearxng  = searxng && searxng.enabled;
@@ -2653,7 +2685,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         }
 
         // ── Layout constants ──────────────────────────────────────────────────
-        const PAD    = 22;
+        const PAD       = 22;
+        const CLIENT_W  = 112, CLIENT_H = 96;
+        const CLIENT_GAP = 40;   // gap between client node and root node
         const ROOT_W = 112, ROOT_H = 82;
         const MOD_W  = 178, MOD_H  = 64;
         const EP_W   = 218, EP_H   = 140;
@@ -2663,7 +2697,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const SD_W    = EP_W, SD_H    = 90;
         const COMFY_W = EP_W, COMFY_H = 90;
 
-        const COL1_X = PAD;
+        const COL0_X = PAD;                              // client node
+        const COL1_X = COL0_X + CLIENT_W + CLIENT_GAP;  // root node
         const COL2_X = COL1_X + ROOT_W + H_GAP;
         const COL3_X = COL2_X + MOD_W  + H_GAP;
         const TOTAL_W = COL3_X + EP_W + PAD;
@@ -2813,6 +2848,68 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     'stroke-dasharray': '4 3',
                 }));
             }
+        }
+
+        // ── Client node → Root connector ──────────────────────────────────────
+        {
+            const cRX  = COL0_X + CLIENT_W;
+            const ctrl = CLIENT_GAP * 0.5;
+            svg.appendChild(mk('path', {
+                d: `M ${cRX},${rootCY} C ${cRX + ctrl},${rootCY} ${COL1_X - ctrl},${rootCY} ${COL1_X},${rootCY}`,
+                fill: 'none',
+                stroke: 'rgba(255,255,255,0.18)',
+                'stroke-width': 1.5,
+            }));
+        }
+
+        // ── Client node ───────────────────────────────────────────────────────
+        {
+            const cl       = clients || {};
+            const current  = cl.current  ?? 0;
+            const minVal   = cl.today_min ?? 0;
+            const maxVal   = cl.today_max ?? 0;
+            const avgVal   = cl.today_avg ?? 0;
+
+            const g = mk('g', { transform: `translate(${COL0_X},${rootCY - CLIENT_H / 2})` });
+
+            g.appendChild(mk('rect', {
+                x: 0, y: 0, width: CLIENT_W, height: CLIENT_H,
+                rx: 11,
+                fill: '#1e2a1e',
+                stroke: 'rgba(34,197,94,0.45)',
+                'stroke-width': 1.5,
+            }));
+            txt(g, '👥', {
+                x: CLIENT_W / 2, y: 26,
+                'text-anchor': 'middle',
+                fill: '#ececf1',
+                'font-size': 18,
+                'font-family': 'sans-serif',
+            });
+            txt(g, String(current), {
+                x: CLIENT_W / 2, y: 48,
+                'text-anchor': 'middle',
+                fill: '#22c55e',
+                'font-size': 18,
+                'font-weight': 700,
+                'font-family': 'sans-serif',
+            });
+            txt(g, 'Clients', {
+                x: CLIENT_W / 2, y: 64,
+                'text-anchor': 'middle',
+                fill: '#8e8ea0',
+                'font-size': 10,
+                'font-family': 'sans-serif',
+            });
+            txt(g, `min ${minVal} · max ${maxVal} · Ø ${avgVal}`, {
+                x: CLIENT_W / 2, y: 80,
+                'text-anchor': 'middle',
+                fill: '#6b7280',
+                'font-size': 9,
+                'font-family': 'sans-serif',
+            });
+
+            svg.appendChild(g);
         }
 
         // ── Root node ─────────────────────────────────────────────────────────
@@ -3234,7 +3331,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const res  = await fetch('load_stats.php', { cache: 'no-store' });
             const data = await res.json();
             if (data.ok && Array.isArray(data.endpoints)) {
-                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || []);
+                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || [], data.clients || null);
                 setStatus(tsLabel(data.ts), false);
             } else {
                 setStatus('Fehler beim Laden', false);
@@ -3245,7 +3342,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     }
 
     // Initial render using PHP-injected data
-    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD, INITIAL_COMFY);
+    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD, INITIAL_COMFY, INITIAL_CLIENTS);
     setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
 
     // Refresh every 15 seconds

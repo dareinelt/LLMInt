@@ -1406,5 +1406,32 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
     }
 })();
 </script>
+
+<script>
+// ── Client-presence heartbeat ─────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    // Stable per-tab token (survives page reload within the same tab).
+    let token = sessionStorage.getItem('hb_token') || '';
+    if (!token) {
+        const bytes = crypto.getRandomValues(new Uint8Array(32));
+        token = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        sessionStorage.setItem('hb_token', token);
+    }
+
+    function sendHeartbeat() {
+        fetch('api/heartbeat.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+            keepalive: true,
+        }).catch(() => {}); // fire-and-forget
+    }
+
+    sendHeartbeat();
+    setInterval(sendHeartbeat, 30000);
+})();
+</script>
 </body>
 </html>
