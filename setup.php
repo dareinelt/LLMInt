@@ -177,6 +177,7 @@ $db->exec("
         status         ENUM('pending','processing','done','error') NOT NULL DEFAULT 'pending',
         extracted_text MEDIUMTEXT      NULL,
         chunk_count    INT UNSIGNED    NOT NULL DEFAULT 0,
+        is_global_rag  TINYINT(1)      NOT NULL DEFAULT 1,
         error_message  TEXT            NULL,
         uploaded_at    TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
         processed_at   TIMESTAMP(3)    NULL,
@@ -188,6 +189,12 @@ $db->exec("
 
 try {
     $db->exec("ALTER TABLE document_uploads ADD COLUMN chunk_count INT UNSIGNED NOT NULL DEFAULT 0 AFTER extracted_text");
+} catch (Throwable $_e) {
+    // column already exists
+}
+
+try {
+    $db->exec("ALTER TABLE document_uploads ADD COLUMN is_global_rag TINYINT(1) NOT NULL DEFAULT 1 AFTER chunk_count");
 } catch (Throwable $_e) {
     // column already exists
 }

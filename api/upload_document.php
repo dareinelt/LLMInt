@@ -6,8 +6,9 @@
  * Handles document uploads and triggers vision-model analysis.
  *
  * POST multipart/form-data:
- *   file          – The uploaded file (image: PNG, JPG, JPEG, WEBP, GIF)
+ *   file          – The uploaded file (PNG, JPG, JPEG, WEBP, GIF, PDF)
  *   csrf_token    – CSRF token from the session
+ *   global_rag    – "1" for globally shareable RAG usage, else "0"
  *
  * Requires an active user session with can_upload_documents = 1 (or is admin).
  * Returns JSON { ok, message, id? }.
@@ -95,6 +96,44 @@ function persistDocumentChunks(PDO $db, int $uploadId, int $userId, array $chunk
         return 0;
     }
 
+    function extractPdfText(string $pdfPath): array
+    {
+        if (!function_exists('proc_open')) {
+            return ['ok' => false, 'error' => 'PDF-Verarbeitung nicht verfügbar (proc_open deaktiviert).'];
+        }
+
+        $cmd = 'pdftotext -enc UTF-8 -q ' . escapeshellarg($pdfPath) . ' -';
+        $descriptorspec = [
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+        $process = @proc_open($cmd, $descriptorspec, $pipes);
+        if (!is_resource($process)) {
+            return ['ok' => false, 'error' => 'PDF-Verarbeitung fehlgeschlagen (pdftotext nicht verfügbar).'];
+        }
+
+        $stdout = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+        $exitCode = proc_close($process);
+
+        if ($exitCode !== 0) {
+            $err = trim((string) $stderr);
+            if ($err === '') {
+                $err = 'PDF konnte nicht gelesen werden.';
+            }
+            return ['ok' => false, 'error' => $err];
+        }
+
+        $text = normalizeDocumentText((string) $stdout);
+        if ($text === '') {
+            return ['ok' => false, 'error' => 'PDF enthält keinen auslesbaren Text.'];
+        }
+
+        return ['ok' => true, 'text' => $text];
+    }
+
     $insert = $db->prepare(
         'INSERT INTO document_chunks (document_upload_id, user_id, chunk_index, chunk_text, created_at)
          VALUES (?, ?, ?, ?, NOW(3))'
@@ -147,14 +186,16 @@ $file         = $_FILES['file'];
 $originalName = basename($file['name']);
 $tmpPath      = $file['tmp_name'];
 $fileSize     = (int) $file['size'];
+$globalRag    = isset($_POST['global_rag']) && (string) $_POST['global_rag'] === '1' ? 1 : 0;
 
 // Allowed MIME types.
 $allowedMimes = [
-    'image/png'  => 'png',
-    'image/jpeg' => 'jpg',
-    'image/jpg'  => 'jpg',
-    'image/webp' => 'webp',
-    'image/gif'  => 'gif',
+    'image/png'       => 'png',
+    'image/jpeg'      => 'jpg',
+    'image/jpg'       => 'jpg',
+    'image/webp'      => 'webp',
+    'image/gif'       => 'gif',
+    'application/pdf' => 'pdf',
 ];
 
 // Detect MIME type from file content (more reliable than client-reported).
@@ -162,7 +203,7 @@ $finfo    = new finfo(FILEINFO_MIME_TYPE);
 $mimeType = $finfo->file($tmpPath);
 
 if (!isset($allowedMimes[$mimeType])) {
-    echo json_encode(['ok' => false, 'message' => 'Nicht unterstütztes Dateiformat. Erlaubt sind: PNG, JPG, WEBP, GIF.']);
+    echo json_encode(['ok' => false, 'message' => 'Nicht unterstütztes Dateiformat. Erlaubt sind: PNG, JPG, WEBP, GIF, PDF.']);
     exit;
 }
 
@@ -189,14 +230,59 @@ if (!move_uploaded_file($tmpPath, $storedPath)) {
 
 // Create DB record with status 'processing'.
 $db->prepare(
-    "INSERT INTO document_uploads (user_id, original_name, stored_name, mime_type, file_size, status, uploaded_at)
-     VALUES (?, ?, ?, ?, ?, 'processing', NOW(3))"
-)->execute([$userId, $originalName, $storedName, $mimeType, $fileSize]);
+    "INSERT INTO document_uploads (user_id, original_name, stored_name, mime_type, file_size, is_global_rag, status, uploaded_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'processing', NOW(3))"
+)->execute([$userId, $originalName, $storedName, $mimeType, $fileSize, $globalRag]);
 
 $uploadId = (int) $db->lastInsertId();
 
 // Release session lock so other requests are not blocked during analysis.
 session_write_close();
+
+if ($mimeType === 'application/pdf') {
+    $pdfResult = extractPdfText($storedPath);
+    if (!($pdfResult['ok'] ?? false)) {
+        $db->prepare(
+            "UPDATE document_uploads
+                SET status = 'error',
+                    error_message = ?,
+                    processed_at = NOW(3)
+              WHERE id = ?"
+        )->execute([(string) ($pdfResult['error'] ?? 'PDF-Verarbeitung fehlgeschlagen.'), $uploadId]);
+
+        echo json_encode([
+            'ok'      => false,
+            'id'      => $uploadId,
+            'message' => (string) ($pdfResult['error'] ?? 'PDF-Verarbeitung fehlgeschlagen.'),
+        ]);
+        exit;
+    }
+
+    $content = (string) ($pdfResult['text'] ?? '');
+    $chunks = buildDocumentChunks($content);
+    $chunkCount = 0;
+    try {
+        $chunkCount = persistDocumentChunks($db, $uploadId, $userId, $chunks);
+    } catch (Throwable $_e) {
+        $chunkCount = 0;
+    }
+
+    $db->prepare(
+        "UPDATE document_uploads
+            SET status = 'done',
+                extracted_text = ?,
+                chunk_count = ?,
+                processed_at = NOW(3)
+          WHERE id = ?"
+    )->execute([$content, $chunkCount, $uploadId]);
+
+    echo json_encode([
+        'ok'      => true,
+        'id'      => $uploadId,
+        'message' => 'PDF erfolgreich verarbeitet.',
+    ]);
+    exit;
+}
 
 // ── Vision model analysis ─────────────────────────────────────────────────────
 

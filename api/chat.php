@@ -407,7 +407,8 @@ function scoreRagChunk(string $chunkText, string $query, array $terms): float
 }
 
 /**
- * Returns true when at least one analysed (done) document upload with chunks exists.
+ * Returns true when at least one analysed document upload is available
+ * for the current user (own uploads or globally shared uploads).
  */
 function hasDocumentUploads(?int $userId): bool
 {
@@ -418,9 +419,9 @@ function hasDocumentUploads(?int $userId): bool
         $stmt = getDb()->prepare(
             "SELECT COUNT(*)
                FROM document_uploads
-              WHERE user_id = ?
-                AND status = 'done'
+              WHERE status = 'done'
                 AND chunk_count > 0"
+                . " AND (user_id = ? OR is_global_rag = 1)"
         );
         $stmt->execute([$userId]);
         $count = (int) $stmt->fetchColumn();
@@ -436,7 +437,7 @@ function createDocumentQueryToolDefinition(): array
         'type' => 'function',
         'function' => [
             'name' => 'query_documents',
-            'description' => 'Durchsucht die hochgeladenen und analysierten Dokumente des aktuellen Nutzers per chunk-basierter RAG-Suche. Gib in deiner Antwort an, aus welchem Dokument die Informationen stammen.',
+            'description' => 'Durchsucht analysierte Dokumente (eigene Uploads sowie global freigegebene Uploads anderer Nutzer) per chunk-basierter RAG-Suche. Gib in deiner Antwort an, aus welchem Dokument die Informationen stammen.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -473,19 +474,18 @@ function queryDocuments(string $query, ?int $userId): array
             "SELECT du.id AS document_id, du.original_name, dc.chunk_index, dc.chunk_text
                FROM document_chunks dc
                JOIN document_uploads du ON du.id = dc.document_upload_id
-              WHERE du.user_id = ?
-                AND du.status = 'done'
-                AND dc.user_id = ?
+              WHERE du.status = 'done'
+                AND (du.user_id = ? OR du.is_global_rag = 1)
               ORDER BY du.uploaded_at DESC, dc.chunk_index ASC
               LIMIT 500"
         );
-        $stmt->execute([$userId, $userId]);
+        $stmt->execute([$userId]);
         $rows = $stmt->fetchAll();
 
         if (empty($rows)) {
             return [
                 'found' => false,
-                'message' => 'Es sind noch keine analysierten Dokument-Chunks verfügbar.',
+                'message' => 'Es sind noch keine analysierten Dokument-Chunks (eigene oder global freigegebene) verfügbar.',
             ];
         }
 
