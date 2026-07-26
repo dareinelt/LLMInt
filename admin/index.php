@@ -558,6 +558,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             border: 1px solid var(--border);
             border-radius: var(--radius);
             padding: 24px 28px;
+            order: 10;
         }
 
         .card h2 {
@@ -573,6 +574,35 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             font-weight: 600;
             margin: 20px 0 12px;
         }
+
+        #stats-card { order: 1; }
+        #load-tree-card { order: 2; }
+        #config-searxng-card { order: 3; }
+        #config-endpoints-card { order: 4; }
+        #config-sd-card { order: 5; }
+        #config-comfy-card { order: 6; }
+
+        .config-panel > summary {
+            list-style: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 18px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .config-panel > summary::-webkit-details-marker { display: none; }
+        .config-panel > summary::before {
+            content: '▸';
+            font-size: .9rem;
+            color: var(--text-muted);
+            transform: translateY(1px);
+        }
+        .config-panel[open] > summary::before { content: '▾'; }
 
         /* ── Form elements ────────────────────────────────────────── */
         .form-group { margin-bottom: 14px; }
@@ -875,9 +905,10 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         <div class="flash-error">✗ <?= htmlspecialchars($flashError) ?></div>
     <?php endif; ?>
 
-    <div class="card">
-        <h2>🔎 Websuche</h2>
-        <form method="POST">
+    <div class="card" id="config-searxng-card">
+        <details class="config-panel" id="config-searxng" open>
+            <summary>🔎 Websuche</summary>
+            <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
             <input type="hidden" name="action" value="save_search_settings">
 
@@ -898,14 +929,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <button type="button" id="searxng-test-btn" class="btn">🔌 Verbindung testen</button>
                 <span id="searxng-test-result" style="font-size:.85rem"></span>
             </div>
-        </form>
+            </form>
+        </details>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
          Endpoint Management
     ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card">
-        <h2>🔗 Endpunkte</h2>
+    <div class="card" id="config-endpoints-card">
+        <details class="config-panel" id="config-endpoints" open>
+        <summary>🔗 Endpunkte</summary>
 
         <?php if (empty($endpoints)): ?>
             <p style="color:var(--text-muted);margin-bottom:16px;">Noch keine Endpunkte konfiguriert. Füge unten einen hinzu.</p>
@@ -1025,13 +1058,15 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 </div>
             </form>
         </div>
+        </details>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
          SD / AUTOMATIC1111 Endpoint Management
     ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card">
-        <h2>🎨 Bildgenerierung (AUTOMATIC1111)</h2>
+    <div class="card" id="config-sd-card">
+        <details class="config-panel" id="config-sd" open>
+        <summary>🎨 Bildgenerierung (AUTOMATIC1111)</summary>
 
         <?php if (empty($sdEndpoints)): ?>
             <p style="color:var(--text-muted);margin-bottom:16px;">Noch keine SD-Endpunkte konfiguriert. Füge unten einen hinzu.</p>
@@ -1125,13 +1160,15 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 </div>
             </form>
         </div>
+        </details>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
          ComfyUI Endpoint Management
     ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card">
-        <h2>🖼️ Bildgenerierung (ComfyUI)</h2>
+    <div class="card" id="config-comfy-card">
+        <details class="config-panel" id="config-comfy" open>
+        <summary>🖼️ Bildgenerierung (ComfyUI)</summary>
 
         <?php if (empty($comfyEndpoints)): ?>
             <p style="color:var(--text-muted);margin-bottom:16px;">Noch keine ComfyUI-Endpunkte konfiguriert. Füge unten einen hinzu.</p>
@@ -1253,12 +1290,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 </div>
             </form>
         </div>
+        </details>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
          Statistics
     ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card">
+    <div class="card" id="stats-card">
         <h2>📊 Statistik &amp; Verteilung</h2>
 
         <!-- Summary boxes -->
@@ -1533,12 +1571,14 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const modelList    = document.getElementById('ep-model-list');
     const activeCheck  = document.getElementById('ep-active');
     const loadBtn      = document.getElementById('ep-load-btn');
+    const endpointConfigPanel = document.getElementById('config-endpoints');
 
     // Pre-fill the form when the page loaded with ?edit=<id>
     <?php if ($editEp): ?>
     document.getElementById('ep-form-title').textContent = '✏ Endpunkt bearbeiten';
     document.getElementById('ep-action').value = 'update_endpoint';
     document.getElementById('ep-id').value     = <?= (int) $editEp['id'] ?>;
+    if (endpointConfigPanel) { endpointConfigPanel.open = true; }
     document.querySelector('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
     <?php endif; ?>
 
@@ -1556,6 +1596,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         activeCheck.checked    = ep.is_active == 1;
         // Clear datalist options from a previous load-models call.
         modelList.innerHTML    = '';
+        if (endpointConfigPanel) { endpointConfigPanel.open = true; }
         document.querySelector('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
     };
 
@@ -1625,6 +1666,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const sdUrlInput     = document.getElementById('sd-ep-url');
     const sdTimeoutInput = document.getElementById('sd-ep-timeout');
     const sdActiveCheck  = document.getElementById('sd-ep-active');
+    const sdConfigPanel  = document.getElementById('config-sd');
 
     if (!sdFormTitle) { return; }
 
@@ -1633,6 +1675,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     sdFormTitle.textContent = '✏ SD-Endpunkt bearbeiten';
     sdActionInput.value = 'update_sd_endpoint';
     sdIdInput.value     = <?= (int) $editSdEp['id'] ?>;
+    if (sdConfigPanel) { sdConfigPanel.open = true; }
     document.getElementById('sd-ep-form').closest('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
     <?php endif; ?>
 
@@ -1643,6 +1686,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         sdUrlInput.value         = ep.base_url;
         sdTimeoutInput.value     = ep.timeout;
         sdActiveCheck.checked    = ep.is_active == 1;
+        if (sdConfigPanel) { sdConfigPanel.open = true; }
         document.getElementById('sd-ep-form').closest('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
     };
 
@@ -1755,6 +1799,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const comfyLoadBtn      = document.getElementById('comfy-ep-load-btn');
     const comfyCheckpointInput = document.getElementById('comfy-ep-checkpoint-input');
     const comfyCheckpointList  = document.getElementById('comfy-ep-checkpoint-list');
+    const comfyConfigPanel = document.getElementById('config-comfy');
 
     if (!comfyFormTitle) { return; }
 
@@ -1763,6 +1808,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     comfyFormTitle.textContent = '✏ ComfyUI-Endpunkt bearbeiten';
     comfyActionInput.value = 'update_comfy_endpoint';
     comfyIdInput.value     = <?= (int) $editComfyEp['id'] ?>;
+    if (comfyConfigPanel) { comfyConfigPanel.open = true; }
     document.getElementById('comfy-ep-form').closest('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
     <?php endif; ?>
 
@@ -1775,6 +1821,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         comfyActiveCheck.checked     = ep.is_active == 1;
         comfyCheckpointInput.value   = ep.default_checkpoint || '';
         comfyCheckpointList.innerHTML = '';
+        if (comfyConfigPanel) { comfyConfigPanel.open = true; }
         document.getElementById('comfy-ep-form').closest('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
     };
 
