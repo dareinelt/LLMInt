@@ -954,6 +954,43 @@ if ($useTools) {
     $finalData = null;
     $searchQueryUsed = '';
 
+    // When an intelligence upgrade re-runs a query that already used search_web,
+    // the caller may supply the original search query so we can pre-fetch fresh
+    // results and inject them into the context before the LLM loop starts.
+    $forceSearchQuery = '';
+    if ($useSearchTool && isset($payload['force_search_query']) && is_string($payload['force_search_query'])) {
+        $forceSearchQuery = trim($payload['force_search_query']);
+    }
+    if ($forceSearchQuery !== '') {
+        $fakeToolCallId = 'call_' . bin2hex(random_bytes(8));
+        $searchLogId = startSearchLog(substr($forceSearchQuery, 0, 400));
+        try {
+            $searchResult = runSearxngSearch($searxngBaseUrl, substr($forceSearchQuery, 0, 400), min($timeout, 15));
+            completeSearchLog($searchLogId, 'done');
+            $searchQueryUsed = $forceSearchQuery;
+        } catch (Throwable $e) {
+            completeSearchLog($searchLogId, 'error');
+            $searchResult = ['error' => $e->getMessage()];
+        }
+        $messages[] = [
+            'role'       => 'assistant',
+            'content'    => null,
+            'tool_calls' => [[
+                'id'       => $fakeToolCallId,
+                'type'     => 'function',
+                'function' => [
+                    'name'      => 'search_web',
+                    'arguments' => json_encode(['query' => $forceSearchQuery], JSON_UNESCAPED_UNICODE),
+                ],
+            ]],
+        ];
+        $messages[] = [
+            'role'         => 'tool',
+            'tool_call_id' => $fakeToolCallId,
+            'content'      => json_encode($searchResult, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ];
+    }
+
     // Build the tool list from active integrations.
     $tools = [];
     if ($useSearchTool) {
