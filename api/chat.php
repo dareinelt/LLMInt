@@ -918,7 +918,9 @@ if ($useTools) {
         $curlErr = curl_error($ch);
         curl_close($ch);
 
-        header('Content-Type: application/json; charset=utf-8');
+        if (!headers_sent()) {
+            header('Content-Type: application/json; charset=utf-8');
+        }
 
         if ($curlErr !== '') {
             if ($switchEndpoint()) {
@@ -928,8 +930,12 @@ if ($useTools) {
             }
             $taskFinished = true;
             completeTask($taskId, 'error');
-            http_response_code(502);
-            echo json_encode(['error' => 'LM Studio nicht erreichbar: ' . $curlErr]);
+            if ($clientRequestedStream && headers_sent()) {
+                emitSseData(['error' => 'LM Studio nicht erreichbar: ' . $curlErr]);
+            } else {
+                http_response_code(502);
+                echo json_encode(['error' => 'LM Studio nicht erreichbar: ' . $curlErr]);
+            }
             exit;
         }
 
@@ -945,8 +951,12 @@ if ($useTools) {
             }
             $taskFinished = true;
             completeTask($taskId, 'error');
-            http_response_code(502);
-            echo json_encode(['error' => $msg]);
+            if ($clientRequestedStream && headers_sent()) {
+                emitSseData(['error' => $msg]);
+            } else {
+                http_response_code(502);
+                echo json_encode(['error' => $msg]);
+            }
             exit;
         }
 
@@ -1020,9 +1030,13 @@ if ($useTools) {
     if ($finalData === null) {
         $taskFinished = true;
         completeTask($taskId, 'error');
-        http_response_code(502);
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['error' => 'Der Tool-Dialog mit dem Modell konnte nicht abgeschlossen werden.']);
+        if ($clientRequestedStream && headers_sent()) {
+            emitSseData(['error' => 'Der Tool-Dialog mit dem Modell konnte nicht abgeschlossen werden.']);
+        } else {
+            http_response_code(502);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['error' => 'Der Tool-Dialog mit dem Modell konnte nicht abgeschlossen werden.']);
+        }
         exit;
     }
 
@@ -1174,7 +1188,7 @@ if ($stream) {
     }
 
     if ($streamCurlErr !== '') {
-        if ($dataWritten) {
+        if ($dataWritten || headers_sent()) {
             emitSseData(['error' => $streamCurlErr]);
         } else {
             // Nothing sent yet – return a plain JSON error.
