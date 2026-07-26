@@ -611,6 +611,35 @@ function normalizeAssistantContent(mixed $content): string
     return implode("\n", $parts);
 }
 
+function ensureSseHeaders(): void
+{
+    static $headersSent = false;
+
+    if ($headersSent) {
+        return;
+    }
+
+    header('Content-Type: text/event-stream; charset=utf-8');
+    header('Cache-Control: no-cache');
+    header('X-Accel-Buffering: no');
+    $headersSent = true;
+}
+
+function emitSseData(array|string $payload): void
+{
+    ensureSseHeaders();
+
+    if (is_array($payload)) {
+        $payload = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    echo 'data: ' . $payload . "\n\n";
+    if (ob_get_level() > 0) {
+        ob_flush();
+    }
+    flush();
+}
+
 function emitSyntheticStream(array $data): void
 {
     $content = normalizeAssistantContent($data['choices'][0]['message']['content'] ?? '');
@@ -618,12 +647,10 @@ function emitSyntheticStream(array $data): void
     $created = (int) ($data['created'] ?? time());
     $model = (string) ($data['model'] ?? '');
 
-    header('Content-Type: text/event-stream; charset=utf-8');
-    header('Cache-Control: no-cache');
-    header('X-Accel-Buffering: no');
+    ensureSseHeaders();
 
     if ($content !== '') {
-        echo 'data: ' . json_encode([
+        emitSseData([
             'id' => $id,
             'object' => 'chat.completion.chunk',
             'created' => $created,
@@ -633,10 +660,10 @@ function emitSyntheticStream(array $data): void
                 'delta' => ['content' => $content],
                 'finish_reason' => null,
             ]],
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n\n";
+        ]);
     }
 
-    echo 'data: ' . json_encode([
+    emitSseData([
         'id' => $id,
         'object' => 'chat.completion.chunk',
         'created' => $created,
@@ -646,13 +673,8 @@ function emitSyntheticStream(array $data): void
             'delta' => new stdClass(),
             'finish_reason' => $data['choices'][0]['finish_reason'] ?? 'stop',
         ]],
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n\n";
-    echo "data: [DONE]\n\n";
-
-    if (ob_get_level() > 0) {
-        ob_flush();
-    }
-    flush();
+    ]);
+    emitSseData('[DONE]');
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -724,10 +746,63 @@ try {
 }
 
 if ($slot === null) {
-    http_response_code(503);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['error' => 'Kein Endpunkt verfügbar. Alle Kapazitäten sind belegt oder kein passender Endpunkt konfiguriert.']);
-    exit;
+    try {
+        $hasMatchingEndpoint = hasActiveEndpointForModel($model);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['error' => 'Interner Fehler beim Endpunkt-Routing.']);
+        exit;
+    }
+
+    if (!$hasMatchingEndpoint) {
+        http_response_code(503);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['error' => 'Kein passender Endpunkt verfügbar.']);
+        exit;
+    }
+
+    ignore_user_abort(true);
+    @set_time_limit(0);
+
+    if (isset($payload['stream']) && $payload['stream'] === true) {
+        emitSseData([
+            'status' => 'queued',
+            'message' => 'Alle LLM-Ressourcen sind derzeit belegt. Die Bearbeitung beginnt automatisch, sobald ein Slot frei wird.',
+        ]);
+    }
+
+    while ($slot === null) {
+        if (connection_aborted()) {
+            exit;
+        }
+
+        usleep(500000);
+
+        try {
+            if (!hasActiveEndpointForModel($model)) {
+                if (isset($payload['stream']) && $payload['stream'] === true) {
+                    emitSseData(['error' => 'Kein passender Endpunkt mehr verfügbar.']);
+                } else {
+                    http_response_code(503);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['error' => 'Kein passender Endpunkt mehr verfügbar.']);
+                }
+                exit;
+            }
+
+            $slot = pickEndpointForModel($model);
+        } catch (Throwable $e) {
+            if (isset($payload['stream']) && $payload['stream'] === true) {
+                emitSseData(['error' => 'Interner Fehler beim Endpunkt-Routing.']);
+            } else {
+                http_response_code(500);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['error' => 'Interner Fehler beim Endpunkt-Routing.']);
+            }
+            exit;
+        }
+    }
 }
 
 $endpoint = $slot['endpoint'];
@@ -1027,9 +1102,7 @@ if ($stream) {
                 if (!$dataWritten) {
                     // Emit SSE headers on first data chunk (deferred so we can
                     // still switch the endpoint if the connection was refused).
-                    header('Content-Type: text/event-stream; charset=utf-8');
-                    header('Cache-Control: no-cache');
-                    header('X-Accel-Buffering: no');
+                    ensureSseHeaders();
                     $dataWritten = true;
                 }
                 echo $data;
@@ -1102,8 +1175,7 @@ if ($stream) {
 
     if ($streamCurlErr !== '') {
         if ($dataWritten) {
-            echo "data: " . json_encode(['error' => $streamCurlErr]) . "\n\n";
-            flush();
+            emitSseData(['error' => $streamCurlErr]);
         } else {
             // Nothing sent yet – return a plain JSON error.
             http_response_code(502);
