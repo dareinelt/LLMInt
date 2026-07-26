@@ -295,6 +295,20 @@ if ($defaultModel === '') {
             color: var(--text-muted);
         }
 
+        /* ── Thinking bubble (reasoning tokens, semi-transparent during streaming) ── */
+        .bubble .thinking-bubble {
+            opacity: 0.45;
+            font-size: .83rem;
+            font-style: italic;
+            color: var(--text-muted);
+            padding: 6px 10px;
+            border-left: 2px solid var(--accent);
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
         /* ── Input outer (fade + full-width bg) ───────────────────── */
         #input-outer {
             flex-shrink: 0;
@@ -780,6 +794,7 @@ if ($defaultModel === '') {
         let buffer  = '';
         let queueNoticeShown = false;
         let accumulated = '';
+        let accumulatedThinking = '';
         let upgradeSuggestion = null;
         let responseDetails = null;
 
@@ -813,13 +828,25 @@ if ($defaultModel === '') {
                 return false;
             }
 
+            const thinkingDelta = obj.choices?.[0]?.delta?.reasoning_content ?? '';
             const delta = obj.choices?.[0]?.delta?.content ?? '';
-            if (delta && queueNoticeShown) {
-                setStatus('Antwort wird generiert …', 'info');
+            if (thinkingDelta) {
+                accumulatedThinking += thinkingDelta;
             }
-            accumulated += delta;
-            bubble.innerHTML = renderMarkdown(accumulated);
-            scrollToBottom();
+            if (delta) {
+                if (queueNoticeShown) {
+                    setStatus('Antwort wird generiert …', 'info');
+                }
+                accumulated += delta;
+            }
+            if (delta || thinkingDelta) {
+                if (accumulated) {
+                    bubble.innerHTML = renderMarkdown(accumulated);
+                } else if (accumulatedThinking) {
+                    bubble.innerHTML = '<div class="thinking-bubble">' + escapeHtmlContent(accumulatedThinking) + '</div>';
+                }
+                scrollToBottom();
+            }
             return false;
         }
 
