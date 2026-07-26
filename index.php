@@ -1195,7 +1195,7 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
         bubble._responseDetailsBodyEl.innerHTML = html;
     }
 
-    function showUpgradePrompt(upgrade, requestMessages, historyAssistantIndex) {
+    function showUpgradePrompt(upgrade, requestMessages, historyAssistantIndex, responseDetails) {
         if (!upgrade || !upgrade.available || !upgrade.suggested_model) {
             return;
         }
@@ -1250,6 +1250,12 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
                     stream: true,
                     temperature: 0.7,
                 };
+                const upgradeSearchQuery = (responseDetails && typeof responseDetails.search_query === 'string')
+                    ? responseDetails.search_query.trim()
+                    : '';
+                if (upgradeSearchQuery) {
+                    retryPayload.force_search_query = upgradeSearchQuery;
+                }
                 const result = await executeStreamingRequest(retryPayload, bubble);
                 let finalText = result.accumulated;
                 let retryResponseDetails = result.responseDetails;
@@ -1359,7 +1365,7 @@ $loggedUser = $loggedIn ? htmlspecialchars((string) $_SESSION['admin_user']) : '
             // Store assistant reply in history.
             history.push({ role: 'assistant', content: accumulated });
             const assistantHistoryIndex = history.length - 1;
-            showUpgradePrompt(upgradeSuggestion, messages, assistantHistoryIndex);
+            showUpgradePrompt(upgradeSuggestion, messages, assistantHistoryIndex, responseDetails);
             setStatus('Bereit.', 'ok');
             afterExchangeRefresh();
         } catch (err) {
