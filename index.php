@@ -166,10 +166,16 @@ if ($defaultModel === '') {
             white-space: normal;
         }
 
+        .assistant-content {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
         .response-details {
             margin-top: 8px;
-            margin-left: 40px;
-            width: calc(100% - 40px);
+            width: 100%;
             color: var(--text-muted);
             font-size: .8rem;
         }
@@ -724,6 +730,13 @@ if ($defaultModel === '') {
             wrapper.appendChild(avatar);
         }
 
+        const messageContent = role === 'assistant'
+            ? document.createElement('div')
+            : wrapper;
+        if (role === 'assistant') {
+            messageContent.className = 'assistant-content';
+        }
+
         const bubble = document.createElement('div');
         bubble.className = 'bubble' + (streaming ? ' streaming' : '');
         if (role === 'assistant') {
@@ -732,7 +745,7 @@ if ($defaultModel === '') {
             bubble.textContent = content;
         }
 
-        wrapper.appendChild(bubble);
+        messageContent.appendChild(bubble);
 
         if (role === 'assistant') {
             const detailsWrap = document.createElement('details');
@@ -750,7 +763,8 @@ if ($defaultModel === '') {
 
             detailsWrap.appendChild(summary);
             detailsWrap.appendChild(body);
-            wrapper.appendChild(detailsWrap);
+            messageContent.appendChild(detailsWrap);
+            wrapper.appendChild(messageContent);
         }
 
         chatArea.appendChild(wrapper);
