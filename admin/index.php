@@ -3328,8 +3328,11 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     async function refreshTree() {
         setStatus('⟳ Aktualisiere …', true);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
         try {
-            const res  = await fetch('load_stats.php', { cache: 'no-store' });
+            const res  = await fetch('load_stats.php', { cache: 'no-store', signal: controller.signal });
+            clearTimeout(timer);
             const data = await res.json();
             if (data.ok && Array.isArray(data.endpoints)) {
                 renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || [], data.clients || null);
@@ -3338,7 +3341,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 setStatus('Fehler beim Laden', false);
             }
         } catch (err) {
-            setStatus('Netzwerkfehler', false);
+            clearTimeout(timer);
+            setStatus(err.name === 'AbortError' ? 'Zeitüberschreitung' : 'Netzwerkfehler', false);
         }
     }
 
