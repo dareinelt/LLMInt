@@ -81,6 +81,22 @@ function pickEndpointForModel(string $model): ?array
 }
 
 /**
+ * Returns true when at least one active endpoint exists for the model.
+ */
+function hasActiveEndpointForModel(string $model): bool
+{
+    $stmt = getDb()->prepare('
+        SELECT COUNT(*)
+          FROM endpoints
+         WHERE is_active = 1
+           AND default_model = ?
+    ');
+    $stmt->execute([$model]);
+
+    return (int) $stmt->fetchColumn() > 0;
+}
+
+/**
  * Mark a task as finished and store optional token usage counts.
  *
  * @param int    $taskId           Primary key of the task row.

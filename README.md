@@ -217,6 +217,7 @@ LLM-Endpunkte werden in der Tabelle `endpoints` gespeichert.
 - Endpunkte mit demselben `default_model` bilden eine **Gruppe**
 - pro Gruppe wird der **am wenigsten belastete Endpunkt** gewählt
 - pro Endpunkt sind maximal **4 parallele Tasks** vorgesehen
+- sind alle 4 Slots aller passenden Endpunkte belegt, wartet der Chat-Request automatisch und blendet im Chat einen Hinweis ein, bis wieder Kapazität frei wird
 - jeder Chat-Request wird in `tasks` protokolliert
 - Token-Werte aus Antworten werden gespeichert und für Statistiken genutzt
 

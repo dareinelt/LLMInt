@@ -705,6 +705,7 @@ if ($defaultModel === '') {
 
         const bubble = appendMessage('assistant', '', true);
         let   accumulated = '';
+        let   queueNoticeShown = false;
 
         const payload = {
             model,
@@ -745,8 +746,19 @@ if ($defaultModel === '') {
                 try { obj = JSON.parse(raw); } catch { return; }
 
                 if (obj.error) throw new Error(obj.error);
+                if (obj.status === 'queued' && obj.message) {
+                    if (!queueNoticeShown) {
+                        appendSystemMessage(obj.message);
+                        queueNoticeShown = true;
+                    }
+                    setStatus(obj.message, 'info');
+                    return;
+                }
 
                 const delta = obj.choices?.[0]?.delta?.content ?? '';
+                if (delta && queueNoticeShown) {
+                    setStatus('Antwort wird generiert …', 'info');
+                }
                 accumulated += delta;
                 bubble.innerHTML = renderMarkdown(accumulated);
                 scrollToBottom();
