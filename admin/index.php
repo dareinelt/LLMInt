@@ -303,14 +303,20 @@ try {
             COALESCE(SUM(CASE WHEN t.status = \'done\'
                               AND t.started_at >= NOW() - INTERVAL 24 HOUR
                          THEN 1 ELSE 0 END), 0) AS cnt_done_24h,
-            COALESCE(SUM(t.total_tokens), 0) AS sum_tokens,
+            COALESCE(SUM(t.prompt_tokens), 0)     AS sum_prompt_tokens,
+            COALESCE(SUM(t.completion_tokens), 0) AS sum_completion_tokens,
+            COALESCE(SUM(t.total_tokens), 0)      AS sum_tokens,
             COALESCE(ROUND(AVG(CASE WHEN t.total_tokens IS NOT NULL
                                     THEN t.total_tokens END)), 0) AS avg_tokens,
             COALESCE(SUM(CASE WHEN t.status = \'done\'
                               AND DATE(t.started_at) = CURDATE()
                          THEN 1 ELSE 0 END), 0) AS today_jobs,
             COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
-                         THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0) AS today_tokens
+                         THEN COALESCE(t.prompt_tokens, 0) ELSE 0 END), 0)     AS today_prompt_tokens,
+            COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
+                         THEN COALESCE(t.completion_tokens, 0) ELSE 0 END), 0) AS today_completion_tokens,
+            COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
+                         THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0)      AS today_tokens
         FROM endpoints e
         LEFT JOIN tasks t ON t.endpoint_id = e.id
         GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active
@@ -325,6 +331,8 @@ try {
             COALESCE(SUM(CASE WHEN status = \'done\'
                               AND started_at >= NOW() - INTERVAL 24 HOUR
                          THEN 1 ELSE 0 END), 0) AS total_done_24h,
+            COALESCE(SUM(prompt_tokens), 0)     AS grand_prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0) AS grand_completion_tokens,
             COALESCE(SUM(total_tokens), 0) AS grand_tokens
         FROM tasks
     ')->fetch();
@@ -332,7 +340,8 @@ try {
     $epStats = [];
     $totals  = [
         'total_running' => 0, 'total_done' => 0, 'total_error' => 0,
-        'total_done_24h' => 0, 'grand_tokens' => 0,
+        'total_done_24h' => 0,
+        'grand_prompt_tokens' => 0, 'grand_completion_tokens' => 0, 'grand_tokens' => 0,
     ];
 }
 
@@ -1449,8 +1458,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <div class="stat-lbl">LLM Fehler (gesamt)</div>
             </div>
             <div class="stat-box">
+                <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_prompt_tokens']) ?></div>
+                <div class="stat-lbl">Prompt Token (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_completion_tokens']) ?></div>
+                <div class="stat-lbl">Completion Token (gesamt)</div>
+            </div>
+            <div class="stat-box">
                 <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_tokens']) ?></div>
-                <div class="stat-lbl">Token (gesamt)</div>
+                <div class="stat-lbl">Total Token (gesamt)</div>
             </div>
             <?php if ($searxngBaseUrl !== ''): ?>
             <div class="stat-box">
@@ -1506,7 +1523,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <th style="text-align:right">Erledigt (gesamt)</th>
                     <th style="text-align:right">Fehler</th>
                     <th style="text-align:right">⌀ Token</th>
-                    <th style="text-align:right">Token gesamt</th>
+                    <th style="text-align:right">Prompt Token</th>
+                    <th style="text-align:right">Completion Token</th>
+                    <th style="text-align:right">Total Token</th>
                 </tr>
             </thead>
             <tbody>
@@ -1532,6 +1551,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
                     <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
                     <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['avg_tokens']) ?></td>
+                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['sum_prompt_tokens']) ?></td>
+                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['sum_completion_tokens']) ?></td>
                     <td style="text-align:right;color:var(--accent)"><?= number_format((int) $s['sum_tokens']) ?></td>
                 </tr>
                 <?php endforeach; ?>
@@ -2069,9 +2090,11 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'base_url'      => $s['base_url'],
                 'default_model' => $s['default_model'],
                 'is_active'     => (int) $s['is_active'],
-                'running'       => (int) $s['cnt_running'],
-                'today_jobs'    => (int) $s['today_jobs'],
-                'today_tokens'  => (int) $s['today_tokens'],
+                'running'                 => (int) $s['cnt_running'],
+                'today_jobs'              => (int) $s['today_jobs'],
+                'today_prompt_tokens'     => (int) $s['today_prompt_tokens'],
+                'today_completion_tokens' => (int) $s['today_completion_tokens'],
+                'today_tokens'            => (int) $s['today_tokens'],
             ];
         }, $epStats),
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
@@ -2214,7 +2237,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const PAD    = 22;
         const ROOT_W = 112, ROOT_H = 82;
         const MOD_W  = 178, MOD_H  = 64;
-        const EP_W   = 218, EP_H   = 104;
+        const EP_W   = 218, EP_H   = 140;
         const H_GAP  = 60;
         const V_GAP  = 14;
         const SRXNG_W = EP_W, SRXNG_H = 90;
@@ -2538,9 +2561,23 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             });
 
             // Tokens today
-            txt(g, `⬡  Token heute: ${formatNum(ep.today_tokens)}`, {
+            txt(g, `↑  Prompt heute: ${formatNum(ep.today_prompt_tokens)}`, {
                 x: 12, y: 86,
                 fill: '#6c63ff',
+                'font-size': 11,
+                'font-family': 'sans-serif',
+            });
+
+            txt(g, `↓  Completion heute: ${formatNum(ep.today_completion_tokens)}`, {
+                x: 12, y: 104,
+                fill: '#8b5cf6',
+                'font-size': 11,
+                'font-family': 'sans-serif',
+            });
+
+            txt(g, `⬡  Total Token heute: ${formatNum(ep.today_tokens)}`, {
+                x: 12, y: 122,
+                fill: '#a78bfa',
                 'font-size': 11,
                 'font-family': 'sans-serif',
             });

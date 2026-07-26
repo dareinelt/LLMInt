@@ -40,6 +40,12 @@ try {
                          THEN 1 ELSE 0 END), 0)
                 AS today_jobs,
             COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
+                         THEN COALESCE(t.prompt_tokens, 0) ELSE 0 END), 0)
+                AS today_prompt_tokens,
+            COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
+                         THEN COALESCE(t.completion_tokens, 0) ELSE 0 END), 0)
+                AS today_completion_tokens,
+            COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
                          THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0)
                 AS today_tokens
         FROM endpoints e
@@ -51,9 +57,11 @@ try {
     foreach ($rows as &$r) {
         $r['id']           = (int) $r['id'];
         $r['is_active']    = (int) $r['is_active'];
-        $r['running']      = (int) $r['running'];
-        $r['today_jobs']   = (int) $r['today_jobs'];
-        $r['today_tokens'] = (int) $r['today_tokens'];
+        $r['running']                 = (int) $r['running'];
+        $r['today_jobs']              = (int) $r['today_jobs'];
+        $r['today_prompt_tokens']     = (int) $r['today_prompt_tokens'];
+        $r['today_completion_tokens'] = (int) $r['today_completion_tokens'];
+        $r['today_tokens']            = (int) $r['today_tokens'];
     }
     unset($r);
 
