@@ -19,6 +19,7 @@ require_once __DIR__ . '/../db.php';
 
 $db = getDb();
 $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
+$guestDefaultModel = trim(getSetting('default_model', ''));
 
 // ── Generate CSRF token ───────────────────────────────────────────────────────
 
@@ -108,6 +109,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashOk = $searxngBaseUrl === ''
                     ? 'SearXNG-Suche deaktiviert.'
                     : 'SearXNG-URL gespeichert.';
+            }
+
+        // ── Save request-handling settings ───────────────────────────────────
+        } elseif ($action === 'save_request_handling') {
+            $newGuestDefaultModel = trim($_POST['guest_default_model'] ?? '');
+
+            if ($newGuestDefaultModel !== '') {
+                $stmt = $db->prepare(
+                    'SELECT COUNT(*) FROM endpoints
+                      WHERE is_active = 1
+                        AND default_model = ?'
+                );
+                $stmt->execute([$newGuestDefaultModel]);
+                $isKnownModelGroup = (int) $stmt->fetchColumn() > 0;
+
+                if (!$isKnownModelGroup) {
+                    $flashError = 'Bitte ein verfügbares Modell bzw. eine verfügbare Modellgruppe aus den aktiven Endpunkten auswählen.';
+                }
+            }
+
+            if ($flashError === '') {
+                $guestDefaultModel = $newGuestDefaultModel;
+                setSetting('default_model', $guestDefaultModel);
+                $flashOk = $guestDefaultModel === ''
+                    ? 'Anfragenhandling gespeichert. Neue Anfragen nutzen wieder automatisch das erste aktive Modell.'
+                    : 'Anfragenhandling gespeichert.';
             }
 
         // ── Add SD endpoint ───────────────────────────────────────────────────
@@ -499,6 +526,15 @@ foreach ($endpoints as $ep) {
         $modelColorMap[$m] = $palette[$colorIdx % count($palette)];
         $colorIdx++;
     }
+}
+
+$availableGuestModels = [];
+foreach ($endpoints as $ep) {
+    $model = trim((string) ($ep['default_model'] ?? ''));
+    if ((int) ($ep['is_active'] ?? 0) !== 1 || $model === '' || isset($availableGuestModels[$model])) {
+        continue;
+    }
+    $availableGuestModels[$model] = $model;
 }
 
 // Populate $editEp if the URL requests editing a specific endpoint.
@@ -1094,8 +1130,53 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         </details>
     </div>
 
+    <div class="card" id="config-request-handling-card">
+       <details class="config-panel" id="config-request-handling" open>
+           <summary>📨 Anfragenhandling</summary>
+
+           <form method="POST">
+               <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+               <input type="hidden" name="action" value="save_request_handling">
+
+               <div class="form-group">
+                   <label for="guest-default-model">Standard-Modell / Modellgruppe für neue Anfragen</label>
+                   <select id="guest-default-model" name="guest_default_model">
+                       <option value="" <?= $guestDefaultModel === '' ? 'selected' : '' ?>>
+                           Automatisch: erstes aktives Modell verwenden
+                       </option>
+                       <?php foreach ($availableGuestModels as $model): ?>
+                           <?php $intelligence = modelIntelligenceLabel($model); ?>
+                           <option value="<?= htmlspecialchars($model) ?>"
+                               <?= $guestDefaultModel === $model ? 'selected' : '' ?>>
+                               <?= htmlspecialchars($model) ?><?= $intelligence !== '–' ? ' · ' . htmlspecialchars($intelligence) : '' ?>
+                           </option>
+                       <?php endforeach; ?>
+                       <?php if ($guestDefaultModel !== '' && !isset($availableGuestModels[$guestDefaultModel])): ?>
+                           <option value="<?= htmlspecialchars($guestDefaultModel) ?>" selected>
+                               <?= htmlspecialchars($guestDefaultModel) ?> · derzeit nicht über aktive Endpunkte verfügbar
+                           </option>
+                       <?php endif; ?>
+                   </select>
+                   <p class="hint">
+                       Gilt für neue Anfragen nicht angemeldeter Benutzer im Chat. Zur Auswahl stehen aktive Modellgruppen aus dem Bereich
+                       <strong>Endpunkte</strong>.
+                   </p>
+                   <?php if (empty($availableGuestModels)): ?>
+                       <p class="hint" style="color:var(--warning)">
+                           Aktuell sind keine aktiven Modellgruppen verfügbar. Bitte zuerst unter <strong>Endpunkte</strong> mindestens ein Standard-Modell konfigurieren.
+                       </p>
+                   <?php endif; ?>
+               </div>
+
+               <div class="action-row">
+                   <button type="submit" class="btn btn-primary">💾 Speichern</button>
+               </div>
+           </form>
+       </details>
+    </div>
+
     <!-- ═══════════════════════════════════════════════════════════════════════
-         SD / AUTOMATIC1111 Endpoint Management
+        SD / AUTOMATIC1111 Endpoint Management
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-sd-card">
         <details class="config-panel" id="config-sd" open>
