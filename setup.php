@@ -32,14 +32,22 @@ $db->exec("
 
 $db->exec("
     CREATE TABLE IF NOT EXISTS users (
-        id            INT          NOT NULL AUTO_INCREMENT,
-        username      VARCHAR(100) NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        email         VARCHAR(255),
-        created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        last_login    TIMESTAMP    NULL,
+        id                         INT          NOT NULL AUTO_INCREMENT,
+        username                   VARCHAR(100) NOT NULL,
+        password_hash              VARCHAR(255) NOT NULL,
+        email                      VARCHAR(255),
+        email_verified             TINYINT(1)   NOT NULL DEFAULT 0,
+        email_verification_token   VARCHAR(64)  NULL,
+        verification_expires       TIMESTAMP    NULL,
+        password_reset_token       VARCHAR(64)  NULL,
+        password_reset_expires     TIMESTAMP    NULL,
+        default_model              VARCHAR(255) NOT NULL DEFAULT '',
+        requires_password_change   TINYINT(1)   NOT NULL DEFAULT 0,
+        created_at                 TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_login                 TIMESTAMP    NULL,
         PRIMARY KEY (id),
-        UNIQUE KEY uq_username (username)
+        UNIQUE KEY uq_username (username),
+        UNIQUE KEY uq_email    (email)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 

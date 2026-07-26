@@ -19,7 +19,17 @@ require_once __DIR__ . '/../db.php';
 
 $db = getDb();
 $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
-$guestDefaultModel = trim(getSetting('default_model', ''));
+$guestDefaultModel  = trim(getSetting('default_model', ''));
+$newUserDefaultModel = trim(getSetting('new_user_default_model', ''));
+
+// ── SMTP settings ─────────────────────────────────────────────────────────────
+$smtpHost       = getSetting('smtp_host', '');
+$smtpPort       = getSetting('smtp_port', '587');
+$smtpEncryption = getSetting('smtp_encryption', 'tls');
+$smtpUser       = getSetting('smtp_user', '');
+$smtpPass       = getSetting('smtp_pass', '');
+$smtpFromEmail  = getSetting('smtp_from_email', '');
+$smtpFromName   = getSetting('smtp_from_name', 'LLMInt');
 
 // ── Generate CSRF token ───────────────────────────────────────────────────────
 
@@ -141,6 +151,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashOk = $guestDefaultModel === ''
                     ? 'Anfragenhandling gespeichert. Neue Anfragen nutzen wieder automatisch das erste aktive Modell.'
                     : 'Anfragenhandling gespeichert.';
+            }
+
+        // ── Save new-user default model ───────────────────────────────────────
+        } elseif ($action === 'save_new_user_model') {
+            $newModel = trim($_POST['new_user_default_model'] ?? '');
+            $newUserDefaultModel = $newModel;
+            setSetting('new_user_default_model', $newModel);
+            $flashOk = 'Standard-Modell für neue Benutzer gespeichert.';
+
+        // ── Save SMTP settings ────────────────────────────────────────────────
+        } elseif ($action === 'save_smtp_settings') {
+            $newSmtpHost       = trim($_POST['smtp_host']        ?? '');
+            $newSmtpPort       = (int) ($_POST['smtp_port']      ?? 587);
+            $newSmtpEncryption = trim($_POST['smtp_encryption']  ?? 'tls');
+            $newSmtpUser       = trim($_POST['smtp_user']        ?? '');
+            $newSmtpPass       = $_POST['smtp_pass']             ?? '';
+            $newSmtpFromEmail  = trim($_POST['smtp_from_email']  ?? '');
+            $newSmtpFromName   = trim($_POST['smtp_from_name']   ?? 'LLMInt');
+
+            if ($newSmtpHost !== '' && !in_array($newSmtpEncryption, ['none', 'tls', 'ssl'], true)) {
+                $flashError = 'Ungültige Verschlüsselungsoption.';
+            } elseif ($newSmtpHost !== '' && ($newSmtpPort < 1 || $newSmtpPort > 65535)) {
+                $flashError = 'Ungültiger SMTP-Port (1–65535).';
+            } elseif ($newSmtpFromEmail !== '' && !filter_var($newSmtpFromEmail, FILTER_VALIDATE_EMAIL)) {
+                $flashError = 'Ungültige Absender-E-Mail-Adresse.';
+            } else {
+                setSetting('smtp_host',       $newSmtpHost);
+                setSetting('smtp_port',       (string) $newSmtpPort);
+                setSetting('smtp_encryption', $newSmtpEncryption);
+                setSetting('smtp_user',       $newSmtpUser);
+                // Only overwrite the password if the field was not left blank
+                if ($newSmtpPass !== '') {
+                    setSetting('smtp_pass', $newSmtpPass);
+                }
+                setSetting('smtp_from_email', $newSmtpFromEmail);
+                setSetting('smtp_from_name',  $newSmtpFromName);
+
+                $smtpHost       = $newSmtpHost;
+                $smtpPort       = (string) $newSmtpPort;
+                $smtpEncryption = $newSmtpEncryption;
+                $smtpUser       = $newSmtpUser;
+                if ($newSmtpPass !== '') { $smtpPass = $newSmtpPass; }
+                $smtpFromEmail  = $newSmtpFromEmail;
+                $smtpFromName   = $newSmtpFromName;
+
+                $flashOk = 'SMTP-Einstellungen gespeichert.';
             }
 
         // ── Add SD endpoint ───────────────────────────────────────────────────
@@ -269,8 +325,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashError = 'Das neue Passwort muss mindestens 8 Zeichen lang sein.';
             } else {
                 $hash = password_hash($newPass, PASSWORD_BCRYPT);
-                $db->prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+                $db->prepare('UPDATE users SET password_hash = ?, requires_password_change = 0 WHERE id = ?')
                    ->execute([$hash, $_SESSION['admin_id']]);
+                unset($_SESSION['requires_password_change']);
                 $flashOk = 'Passwort erfolgreich geändert.';
             }
         }
@@ -284,7 +341,8 @@ $endpoints = $db->query(
 )->fetchAll();
 
 $users = $db->query(
-    'SELECT id, username, email, created_at, last_login FROM users ORDER BY id'
+    'SELECT id, username, email, email_verified, default_model, created_at, last_login
+       FROM users ORDER BY id'
 )->fetchAll();
 
 // ── Load statistics ───────────────────────────────────────────────────────────
@@ -718,10 +776,15 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         #stats-card { order: 1; }
         #load-tree-card { order: 2; }
-        #config-searxng-card { order: 3; }
-        #config-endpoints-card { order: 4; }
-        #config-sd-card { order: 5; }
-        #config-comfy-card { order: 6; }
+        #config-smtp-card { order: 3; }
+        #config-searxng-card { order: 4; }
+        #config-endpoints-card { order: 5; }
+        #config-request-handling-card { order: 6; }
+        #config-sd-card { order: 7; }
+        #config-comfy-card { order: 8; }
+
+        /* ── User row hover ──────────────────────────────────────── */
+        .user-row:hover td { background: rgba(108,99,255,.06); }
 
         .config-panel > summary {
             list-style: none;
@@ -1045,6 +1108,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <a href="#load-tree-card">🌐 Lastverteilung</a>
 
     <span class="sidebar-label">Konfiguration</span>
+    <a href="#config-smtp-card">📧 E-Mail (SMTP)</a>
     <a href="#config-searxng-card">🔎 Websuche</a>
     <a href="#config-endpoints-card">🔗 Endpunkte</a>
     <a href="#config-request-handling-card">📨 Anfragenhandling</a>
@@ -1058,6 +1122,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
 <main>
 
+    <?php if (!empty($_SESSION['requires_password_change'])): ?>
+        <div class="flash-error" style="border-color:var(--warning);color:var(--warning);background:rgba(245,158,11,.1)">
+            ⚠ Du hast dich mit einem temporären Passwort angemeldet.
+            Bitte ändere dein Passwort sofort unter <strong>Passwort ändern</strong>.
+        </div>
+    <?php endif; ?>
+
     <?php if ($flashOk !== ''): ?>
         <div class="flash-ok">✓ <?= htmlspecialchars($flashOk) ?></div>
     <?php endif; ?>
@@ -1066,7 +1137,87 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         <div class="flash-error">✗ <?= htmlspecialchars($flashError) ?></div>
     <?php endif; ?>
 
-    <div class="card" id="config-searxng-card">
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         SMTP / Outgoing Mail Server
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-smtp-card">
+        <details class="config-panel" id="config-smtp">
+            <summary>📧 E-Mail (SMTP)</summary>
+            <form method="POST">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+            <input type="hidden" name="action"     value="save_smtp_settings">
+
+            <div class="form-row">
+                <div class="form-group" style="flex:3">
+                    <label for="smtp-host">SMTP-Host</label>
+                    <input type="text" id="smtp-host" name="smtp_host"
+                           placeholder="smtp.example.com"
+                           value="<?= htmlspecialchars($smtpHost) ?>">
+                </div>
+                <div class="form-group" style="flex:1;min-width:120px">
+                    <label for="smtp-port">Port</label>
+                    <input type="number" id="smtp-port" name="smtp_port"
+                           min="1" max="65535"
+                           value="<?= htmlspecialchars($smtpPort) ?>">
+                </div>
+                <div class="form-group" style="flex:1;min-width:140px">
+                    <label for="smtp-encryption">Verschlüsselung</label>
+                    <select id="smtp-encryption" name="smtp_encryption">
+                        <option value="tls"  <?= $smtpEncryption === 'tls'  ? 'selected' : '' ?>>STARTTLS (587)</option>
+                        <option value="ssl"  <?= $smtpEncryption === 'ssl'  ? 'selected' : '' ?>>SSL/TLS (465)</option>
+                        <option value="none" <?= $smtpEncryption === 'none' ? 'selected' : '' ?>>Keine</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="smtp-user">SMTP-Benutzername</label>
+                    <input type="text" id="smtp-user" name="smtp_user"
+                           autocomplete="off"
+                           placeholder="nutzer@example.com"
+                           value="<?= htmlspecialchars($smtpUser) ?>">
+                </div>
+                <div class="form-group">
+                    <label for="smtp-pass">SMTP-Passwort</label>
+                    <input type="password" id="smtp-pass" name="smtp_pass"
+                           autocomplete="new-password"
+                           placeholder="<?= $smtpPass !== '' ? '(gespeichert – leer lassen zum Beibehalten)' : 'Passwort eingeben' ?>">
+                    <p class="hint">Leer lassen, um das gespeicherte Passwort beizubehalten.</p>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="smtp-from-email">Absender-E-Mail</label>
+                    <input type="email" id="smtp-from-email" name="smtp_from_email"
+                           placeholder="noreply@example.com"
+                           value="<?= htmlspecialchars($smtpFromEmail) ?>">
+                </div>
+                <div class="form-group">
+                    <label for="smtp-from-name">Absender-Name</label>
+                    <input type="text" id="smtp-from-name" name="smtp_from_name"
+                           placeholder="LLMInt"
+                           value="<?= htmlspecialchars($smtpFromName) ?>">
+                </div>
+            </div>
+
+            <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
+                <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                <button type="button" id="smtp-test-btn" class="btn"
+                        <?= $smtpHost === '' ? 'disabled title="Zuerst SMTP-Einstellungen speichern"' : '' ?>>
+                    🔌 Test-E-Mail senden
+                </button>
+                <input type="email" id="smtp-test-to" name="smtp_test_to"
+                       placeholder="empfänger@example.com"
+                       style="padding:8px 12px;background:var(--bg);border:1px solid var(--border);
+                              border-radius:var(--radius);color:var(--text);font-size:.88rem;
+                              font-family:var(--font);flex:1;min-width:200px;max-width:320px">
+                <span id="smtp-test-result" style="font-size:.85rem"></span>
+            </div>
+            </form>
+        </details>
+    </div>
         <details class="config-panel" id="config-searxng" open>
             <summary>🔎 Websuche</summary>
             <form method="POST">
@@ -1270,6 +1421,42 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                            Aktuell sind keine aktiven Modellgruppen verfügbar. Bitte zuerst unter <strong>Endpunkte</strong> mindestens ein Standard-Modell konfigurieren.
                        </p>
                    <?php endif; ?>
+               </div>
+
+               <div class="action-row">
+                   <button type="submit" class="btn btn-primary">💾 Speichern</button>
+               </div>
+           </form>
+
+           <hr style="border:none;border-top:1px solid var(--border);margin:20px 0">
+
+           <form method="POST">
+               <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+               <input type="hidden" name="action" value="save_new_user_model">
+
+               <div class="form-group">
+                   <label for="new-user-default-model">Standard-Modell für neu registrierte Benutzer</label>
+                   <select id="new-user-default-model" name="new_user_default_model">
+                       <option value="" <?= $newUserDefaultModel === '' ? 'selected' : '' ?>>
+                           Kein Standard-Modell (systemweites Standard-Modell verwenden)
+                       </option>
+                       <?php foreach ($availableGuestModels as $model): ?>
+                           <?php $intelligence = modelIntelligenceLabel($model); ?>
+                           <option value="<?= htmlspecialchars($model) ?>"
+                               <?= $newUserDefaultModel === $model ? 'selected' : '' ?>>
+                               <?= htmlspecialchars($model) ?><?= $intelligence !== '–' ? ' · ' . htmlspecialchars($intelligence) : '' ?>
+                           </option>
+                       <?php endforeach; ?>
+                       <?php if ($newUserDefaultModel !== '' && !isset($availableGuestModels[$newUserDefaultModel])): ?>
+                           <option value="<?= htmlspecialchars($newUserDefaultModel) ?>" selected>
+                               <?= htmlspecialchars($newUserDefaultModel) ?> · derzeit nicht verfügbar
+                           </option>
+                       <?php endif; ?>
+                   </select>
+                   <p class="hint">
+                       Dieses Modell wird neu registrierten Benutzern automatisch als persönliches Standard-Modell zugewiesen.
+                       Leer lassen, um das systemweite Standard-Modell zu verwenden.
+                   </p>
                </div>
 
                <div class="action-row">
@@ -1731,13 +1918,22 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <tr>
                     <th>Benutzername</th>
                     <th>E-Mail</th>
+                    <th>Bestätigt</th>
+                    <th>Standard-Modell</th>
                     <th>Erstellt am</th>
                     <th>Letzter Login</th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($users as $u): ?>
-                    <tr>
+                    <tr class="user-row" data-user='<?= htmlspecialchars(json_encode([
+                        'id'           => (int) $u['id'],
+                        'username'     => $u['username'],
+                        'email'        => $u['email'] ?? '',
+                        'email_verified' => (int) ($u['email_verified'] ?? 0),
+                        'default_model'  => $u['default_model'] ?? '',
+                    ]), ENT_QUOTES) ?>'
+                    style="cursor:pointer" title="Klicken für Benutzerdetails">
                         <td>
                             <?= htmlspecialchars($u['username']) ?>
                             <?php if ($u['username'] === $_SESSION['admin_user']): ?>
@@ -1745,12 +1941,91 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                             <?php endif; ?>
                         </td>
                         <td><?= $u['email'] !== null ? htmlspecialchars($u['email']) : '<span style="color:var(--text-muted)">–</span>' ?></td>
+                        <td>
+                            <?php if ((int)($u['email_verified'] ?? 0) === 1): ?>
+                                <span style="color:var(--success)">✓</span>
+                            <?php else: ?>
+                                <span style="color:var(--text-muted)">–</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if (($u['default_model'] ?? '') !== ''): ?>
+                                <span style="font-size:.8rem;font-family:monospace" title="<?= htmlspecialchars($u['default_model']) ?>">
+                                    <?= htmlspecialchars(strlen($u['default_model']) > 28 ? substr($u['default_model'], 0, 26) . '…' : $u['default_model']) ?>
+                                </span>
+                            <?php else: ?>
+                                <span style="color:var(--text-muted);font-size:.8rem">Standard</span>
+                            <?php endif; ?>
+                        </td>
                         <td><?= htmlspecialchars($u['created_at']) ?></td>
                         <td><?= $u['last_login'] !== null ? htmlspecialchars($u['last_login']) : '<span style="color:var(--text-muted)">noch nie</span>' ?></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
         </table>
+
+        <p class="hint" style="margin-top:12px">Klicke auf einen Benutzer, um Einstellungen zu ändern oder ein Passwort-Reset zu senden.</p>
+
+        <div style="margin-top:12px;font-size:.82rem">
+            <a href="../register.php" style="color:var(--accent);text-decoration:none">+ Registrierungsseite öffnen</a>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         User overlay
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="user-overlay" style="display:none;position:fixed;inset:0;z-index:1000;
+         background:rgba(0,0,0,.55);backdrop-filter:blur(4px);
+         align-items:center;justify-content:center">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+                    padding:28px 32px;max-width:480px;width:calc(100% - 32px);
+                    box-shadow:0 24px 60px rgba(0,0,0,.6);position:relative">
+            <button id="user-overlay-close"
+                    style="position:absolute;top:14px;right:16px;background:none;border:none;
+                           color:var(--text-muted);font-size:1.2rem;cursor:pointer;line-height:1"
+                    aria-label="Schließen">✕</button>
+
+            <h2 style="font-size:1rem;margin-bottom:4px" id="overlay-username"></h2>
+            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:20px" id="overlay-email"></p>
+
+            <!-- Model selector -->
+            <div class="form-group">
+                <label for="overlay-model">Standard-Modell für diesen Benutzer</label>
+                <select id="overlay-model" style="width:100%;padding:8px 12px;background:var(--bg);
+                        border:1px solid var(--border);border-radius:var(--radius);
+                        color:var(--text);font-size:.88rem;font-family:var(--font)">
+                    <option value="">Systemweites Standard-Modell verwenden</option>
+                    <?php foreach ($availableGuestModels as $model): ?>
+                        <?php $intelligence = modelIntelligenceLabel($model); ?>
+                        <option value="<?= htmlspecialchars($model) ?>">
+                            <?= htmlspecialchars($model) ?><?= $intelligence !== '–' ? ' · ' . htmlspecialchars($intelligence) : '' ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <p class="hint">
+                    Ist das gewählte Modell nicht verfügbar, wird automatisch das Modell mit der nächst-geringeren Intelligenz verwendet.
+                </p>
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px">
+                <button id="overlay-save-model" class="btn btn-primary">💾 Modell speichern</button>
+                <span id="overlay-model-result" style="font-size:.82rem"></span>
+            </div>
+
+            <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+
+            <!-- Password reset -->
+            <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:12px">
+                Sendet eine E-Mail mit einem Link zum Zurücksetzen des Passworts.
+                Das Konto wird beim nächsten Login zur Passwortänderung aufgefordert.
+            </p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                <button id="overlay-reset-pw" class="btn">📧 Passwort-Reset senden</button>
+                <span id="overlay-reset-result" style="font-size:.82rem"></span>
+            </div>
+
+            <input type="hidden" id="overlay-user-id" value="">
+        </div>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
@@ -2916,12 +3191,190 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 </script>
 
 <script>
+// ── SMTP connection test ──────────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    const testBtn    = document.getElementById('smtp-test-btn');
+    const testResult = document.getElementById('smtp-test-result');
+    const toInput    = document.getElementById('smtp-test-to');
+
+    if (!testBtn) return;
+
+    testBtn.addEventListener('click', async function () {
+        const to = (toInput?.value || '').trim();
+        if (!to) {
+            testResult.style.color = 'var(--error)';
+            testResult.textContent = '✗ Bitte eine Empfänger-E-Mail eingeben.';
+            return;
+        }
+
+        testBtn.disabled    = true;
+        testBtn.textContent = '⟳ Sende …';
+        testResult.textContent = '';
+
+        try {
+            const res  = await fetch('../api/test_smtp.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ to }),
+            });
+            const data = await res.json();
+            testResult.style.color = data.ok ? 'var(--success)' : 'var(--error)';
+            testResult.textContent = (data.ok ? '✓ ' : '✗ ') + data.message;
+        } catch (e) {
+            testResult.style.color = 'var(--error)';
+            testResult.textContent = '✗ Netzwerkfehler: ' + e.message;
+        } finally {
+            testBtn.disabled    = false;
+            testBtn.textContent = '🔌 Test-E-Mail senden';
+        }
+    });
+})();
+
+// ── User overlay ──────────────────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    const overlay     = document.getElementById('user-overlay');
+    const closeBtn    = document.getElementById('user-overlay-close');
+    const usernameEl  = document.getElementById('overlay-username');
+    const emailEl     = document.getElementById('overlay-email');
+    const modelSelect = document.getElementById('overlay-model');
+    const userIdInput = document.getElementById('overlay-user-id');
+    const saveModelBtn = document.getElementById('overlay-save-model');
+    const modelResult  = document.getElementById('overlay-model-result');
+    const resetPwBtn   = document.getElementById('overlay-reset-pw');
+    const resetResult  = document.getElementById('overlay-reset-result');
+
+    const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    function openOverlay(user) {
+        if (!overlay) return;
+        userIdInput.value      = user.id;
+        usernameEl.textContent = user.username;
+        emailEl.textContent    = user.email || '(keine E-Mail hinterlegt)';
+
+        // Pre-select current model
+        if (modelSelect) {
+            modelSelect.value = user.default_model || '';
+            // Fallback: if option doesn't exist, add it temporarily
+            if (modelSelect.value !== (user.default_model || '')) {
+                const opt = document.createElement('option');
+                opt.value       = user.default_model;
+                opt.textContent = user.default_model + ' (derzeit nicht verfügbar)';
+                modelSelect.appendChild(opt);
+                modelSelect.value = user.default_model;
+            }
+        }
+
+        if (modelResult)  modelResult.textContent  = '';
+        if (resetResult)  resetResult.textContent   = '';
+
+        overlay.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeOverlay() {
+        if (!overlay) return;
+        overlay.style.display = 'none';
+        document.body.style.overflow = '';
+    }
+
+    // Open overlay on row click
+    document.querySelectorAll('.user-row').forEach(row => {
+        row.addEventListener('click', function () {
+            try {
+                const user = JSON.parse(this.dataset.user);
+                openOverlay(user);
+            } catch (_) {}
+        });
+    });
+
+    if (closeBtn) closeBtn.addEventListener('click', closeOverlay);
+    if (overlay) {
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeOverlay();
+        });
+    }
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeOverlay();
+    });
+
+    // ── Save model ────────────────────────────────────────────────────────────
+    if (saveModelBtn) {
+        saveModelBtn.addEventListener('click', async function () {
+            const userId = userIdInput.value;
+            const model  = modelSelect ? modelSelect.value : '';
+
+            saveModelBtn.disabled    = true;
+            saveModelBtn.textContent = '⟳ Speichern …';
+            if (modelResult) modelResult.textContent = '';
+
+            try {
+                const res  = await fetch('../api/admin_user_action.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_user_model', user_id: parseInt(userId), model, csrf_token: CSRF }),
+                });
+                const data = await res.json();
+                if (modelResult) {
+                    modelResult.style.color = data.ok ? 'var(--success)' : 'var(--error)';
+                    modelResult.textContent = (data.ok ? '✓ ' : '✗ ') + data.message;
+                }
+            } catch (e) {
+                if (modelResult) {
+                    modelResult.style.color = 'var(--error)';
+                    modelResult.textContent = '✗ Netzwerkfehler: ' + e.message;
+                }
+            } finally {
+                saveModelBtn.disabled    = false;
+                saveModelBtn.textContent = '💾 Modell speichern';
+            }
+        });
+    }
+
+    // ── Send password reset ───────────────────────────────────────────────────
+    if (resetPwBtn) {
+        resetPwBtn.addEventListener('click', async function () {
+            const userId = userIdInput.value;
+
+            resetPwBtn.disabled    = true;
+            resetPwBtn.textContent = '⟳ Sende …';
+            if (resetResult) resetResult.textContent = '';
+
+            try {
+                const res  = await fetch('../api/admin_user_action.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'send_password_reset', user_id: parseInt(userId), csrf_token: CSRF }),
+                });
+                const data = await res.json();
+                if (resetResult) {
+                    resetResult.style.color = data.ok ? 'var(--success)' : 'var(--error)';
+                    resetResult.textContent = (data.ok ? '✓ ' : '✗ ') + data.message;
+                }
+            } catch (e) {
+                if (resetResult) {
+                    resetResult.style.color = 'var(--error)';
+                    resetResult.textContent = '✗ Netzwerkfehler: ' + e.message;
+                }
+            } finally {
+                resetPwBtn.disabled    = false;
+                resetPwBtn.textContent = '📧 Passwort-Reset senden';
+            }
+        });
+    }
+})();
+</script>
+
+<script>
 // ── Sidebar active link highlighting ──────────────────────────────────────────
 (function () {
     'use strict';
 
     const sectionIds = [
-        'stats-card', 'load-tree-card', 'config-searxng-card',
+        'stats-card', 'load-tree-card', 'config-smtp-card', 'config-searxng-card',
         'config-endpoints-card', 'config-request-handling-card',
         'config-sd-card', 'config-comfy-card', 'users-card', 'password-card'
     ];

@@ -179,6 +179,19 @@ function ensureRuntimeSchema(PDO $pdo): void
 
     // Conversation sessions: persists chat history so a failed endpoint can be
     // replaced transparently. Rows expire 30 minutes after the last activity.
+    // Extend users table with email-verification, password-reset and per-user model columns.
+    foreach ([
+        "ALTER TABLE users ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0 AFTER email",
+        "ALTER TABLE users ADD COLUMN email_verification_token VARCHAR(64) NULL AFTER email_verified",
+        "ALTER TABLE users ADD COLUMN verification_expires TIMESTAMP NULL AFTER email_verification_token",
+        "ALTER TABLE users ADD COLUMN password_reset_token VARCHAR(64) NULL AFTER verification_expires",
+        "ALTER TABLE users ADD COLUMN password_reset_expires TIMESTAMP NULL AFTER password_reset_token",
+        "ALTER TABLE users ADD COLUMN default_model VARCHAR(255) NOT NULL DEFAULT '' AFTER password_reset_expires",
+        "ALTER TABLE users ADD COLUMN requires_password_change TINYINT(1) NOT NULL DEFAULT 0 AFTER default_model",
+    ] as $alter) {
+        try { $pdo->exec($alter); } catch (Throwable $_e) { /* column already exists */ }
+    }
+
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS conversation_sessions (
             session_id  CHAR(64)     NOT NULL,
@@ -346,4 +359,81 @@ function purgeExpiredConversationSessions(): void
     } catch (Throwable $e) {
         // Best-effort
     }
+}
+
+/**
+ * Extract the highest "Xb" parameter count from a model name.
+ * Returns null when no numeric "Xb" label is found.
+ */
+function modelIntelligenceScore(string $modelName): ?float
+{
+    if ($modelName === '' || !preg_match_all('/(\d+(?:[.,]\d+)?)\s*b\b/i', $modelName, $m)) {
+        return null;
+    }
+    $best = null;
+    foreach ($m[1] as $raw) {
+        $n = (float) str_replace(',', '.', $raw);
+        if ($n > 0 && ($best === null || $n > $best)) {
+            $best = $n;
+        }
+    }
+    return $best;
+}
+
+/**
+ * Resolve the effective model for a user, applying the intelligence-fallback rule.
+ *
+ * Logic:
+ *  1. If $preferredModel is available in active endpoints → return $preferredModel.
+ *  2. Otherwise, collect all active endpoint models sorted by intelligence score
+ *     descending. Return the first model whose score is strictly lower than the
+ *     preferred model's score.
+ *  3. If no lower-intelligence model exists, return the lowest-scored available
+ *     model (last resort).
+ *  4. If no active models exist at all → return ''.
+ *
+ * @param string $preferredModel The model stored in users.default_model.
+ * @return string The model to actually use.
+ */
+function resolveUserModel(string $preferredModel): string
+{
+    if ($preferredModel === '') {
+        return '';
+    }
+    try {
+        $db   = getDb();
+        $rows = $db->query(
+            'SELECT DISTINCT default_model FROM endpoints WHERE is_active = 1 AND default_model != \'\''
+        )->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {
+        return $preferredModel; // best-effort: assume available
+    }
+
+    if (empty($rows)) {
+        return '';
+    }
+
+    // Preferred model is available → use it as-is
+    if (in_array($preferredModel, $rows, true)) {
+        return $preferredModel;
+    }
+
+    // Sort available models by intelligence score descending
+    $scored = [];
+    foreach ($rows as $m) {
+        $scored[$m] = modelIntelligenceScore($m) ?? -1.0;
+    }
+    arsort($scored);
+
+    $preferredScore = modelIntelligenceScore($preferredModel) ?? -1.0;
+
+    // Find the first model whose score is strictly lower than the preferred one
+    foreach ($scored as $model => $score) {
+        if ($score < $preferredScore) {
+            return $model;
+        }
+    }
+
+    // No lower-intelligence model found – return the one with the lowest available score
+    return array_key_last($scored) ?: '';
 }
