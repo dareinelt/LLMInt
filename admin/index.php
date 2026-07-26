@@ -807,8 +807,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             margin: 20px 0 12px;
         }
 
-        #stats-card { order: 1; }
-        #load-tree-card { order: 2; }
+        #dashboard-card { order: 1; }
         #config-smtp-card { order: 3; }
         #config-searxng-card { order: 4; }
         #config-endpoints-card { order: 5; }
@@ -1057,18 +1056,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         /* ── Separator ───────────────────────────────────────────── */
         .sep { color: var(--text-muted); }
 
-        /* ── Load-distribution tree ──────────────────────────────── */
-        #load-tree-container {
-            overflow-x: auto;
-            padding: 8px 0 4px;
-        }
-
-        #load-tree-svg {
-            display: block;
-            width: 100%;
-        }
-
-        .tree-header-row {
+        /* ── Dashboard header row ────────────────────────────────── */
+        #dashboard-card .tree-header-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -1079,7 +1068,64 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             border-bottom: 1px solid var(--border);
         }
 
-        .tree-header-row h2 { margin: 0; padding: 0; border: none; }
+        /* ── Load-distribution tree ──────────────────────────────── */
+        #load-tree-container {
+            position: relative;
+            overflow: hidden;
+            border-radius: var(--radius);
+            background: var(--bg);
+            height: 520px;
+            cursor: grab;
+            user-select: none;
+            touch-action: none;
+            margin-bottom: 4px;
+        }
+
+        #load-tree-container.grabbing { cursor: grabbing; }
+
+        #load-tree-svg {
+            display: block;
+            width: 100%;
+            height: 100%;
+            overflow: visible;
+        }
+
+        /* ── Zoom controls ───────────────────────────────────────── */
+        .tree-zoom-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .tree-zoom-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--surface-alt);
+            color: var(--text-muted);
+            font-size: .9rem;
+            cursor: pointer;
+            transition: background .15s, color .15s;
+            line-height: 1;
+        }
+        .tree-zoom-btn:hover { background: var(--surface); color: var(--text); }
+
+        /* ── Animated flow along connector paths ─────────────────── */
+        @keyframes flow-pulse {
+            0%   { opacity: 0; }
+            15%  { opacity: 1; }
+            85%  { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+        .flow-particle {
+            pointer-events: none;
+        }
 
         .tree-refresh-info {
             font-size: .75rem;
@@ -1137,8 +1183,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 <!-- ── Left sidebar navigation ──────────────────────────────────────────────── -->
 <aside class="sidebar">
     <span class="sidebar-label">Übersicht</span>
-    <a href="#stats-card">📊 Statistik</a>
-    <a href="#load-tree-card">🌐 Lastverteilung</a>
+    <a href="#dashboard-card">📊 Dashboard</a>
 
     <span class="sidebar-label">Konfiguration</span>
     <a href="#config-smtp-card">📧 E-Mail (SMTP)</a>
@@ -1733,212 +1778,112 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-         Statistics
+         Dashboard (Statistik + Lastverteilung – live)
     ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card" id="stats-card">
-        <h2>📊 Statistik &amp; Verteilung</h2>
+    <div class="card" id="dashboard-card">
 
-        <!-- Summary boxes -->
-        <div class="stat-grid">
-            <div class="stat-box">
-                <div class="stat-val stat-running"><?= number_format((int) $totals['total_running']) ?></div>
-                <div class="stat-lbl">LLM laufend</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $totals['total_done_24h']) ?></div>
-                <div class="stat-lbl">LLM erledigt (24 h)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $totals['total_done']) ?></div>
-                <div class="stat-lbl">LLM erledigt (gesamt)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-error"><?= number_format((int) $totals['total_error']) ?></div>
-                <div class="stat-lbl">LLM Fehler (gesamt)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_prompt_tokens']) ?></div>
-                <div class="stat-lbl">Prompt Token (gesamt)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_completion_tokens']) ?></div>
-                <div class="stat-lbl">Completion Token (gesamt)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-tokens"><?= number_format((int) $totals['grand_tokens']) ?></div>
-                <div class="stat-lbl">Total Token (gesamt)</div>
-            </div>
-            <?php if ($searxngBaseUrl !== ''): ?>
-            <div class="stat-box">
-                <div class="stat-val stat-running"><?= number_format($searxngStats['running']) ?></div>
-                <div class="stat-lbl">Suchen laufend</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format($searxngStats['today_jobs']) ?></div>
-                <div class="stat-lbl">Suchen heute</div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($sdEndpoints)): ?>
-            <div class="stat-box">
-                <div class="stat-val stat-running"><?= number_format((int) $sdTotals['total_running']) ?></div>
-                <div class="stat-lbl">SD laufend</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $sdTotals['total_done_24h']) ?></div>
-                <div class="stat-lbl">SD Bilder (24 h)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $sdTotals['total_done']) ?></div>
-                <div class="stat-lbl">SD Bilder (gesamt)</div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($comfyEndpoints)): ?>
-            <div class="stat-box">
-                <div class="stat-val stat-running"><?= number_format((int) $comfyTotals['total_running']) ?></div>
-                <div class="stat-lbl">ComfyUI laufend</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $comfyTotals['total_done_24h']) ?></div>
-                <div class="stat-lbl">ComfyUI (24 h)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done"><?= number_format((int) $comfyTotals['total_done']) ?></div>
-                <div class="stat-lbl">ComfyUI (gesamt)</div>
-            </div>
-            <?php endif; ?>
-        </div>
-
-        <?php if (empty($epStats)): ?>
-            <p style="color:var(--text-muted)">Noch keine Aufgaben verarbeitet.</p>
-        <?php else: ?>
-
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Endpunkt</th>
-                    <th>Modell-Gruppe</th>
-                    <th style="text-align:right">Laufend</th>
-                    <th style="text-align:right">Erledigt (24 h)</th>
-                    <th style="text-align:right">Erledigt (gesamt)</th>
-                    <th style="text-align:right">Fehler</th>
-                    <th style="text-align:right">⌀ Token</th>
-                    <th style="text-align:right">Prompt Token</th>
-                    <th style="text-align:right">Completion Token</th>
-                    <th style="text-align:right">Total Token</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($epStats as $s): ?>
-                <tr>
-                    <td style="font-family:monospace;font-size:.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($s['base_url']) ?>">
-                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= htmlspecialchars($s['alias'] !== '' ? $s['alias'] : $s['base_url']) ?>
-                    </td>
-                    <td>
-                        <?php if ($s['default_model'] !== ''): ?>
-                            <span class="model-badge"
-                                  style="background:<?= htmlspecialchars($modelColorMap[$s['default_model']] ?? '#555') ?>">
-                                <?= htmlspecialchars($s['default_model']) ?>
-                            </span>
-                        <?php else: ?>
-                            <span class="model-badge badge-empty">–</span>
-                        <?php endif; ?>
-                    </td>
-                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
-                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
-                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
-                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
-                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['avg_tokens']) ?></td>
-                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['sum_prompt_tokens']) ?></td>
-                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['sum_completion_tokens']) ?></td>
-                    <td style="text-align:right;color:var(--accent)"><?= number_format((int) $s['sum_tokens']) ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-
-        <?php endif; ?>
-
-        <?php if (!empty($sdStats)): ?>
-        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🎨 Bildgenerierung (AUTOMATIC1111)</h3>
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>SD-Endpunkt</th>
-                    <th style="text-align:right">Laufend</th>
-                    <th style="text-align:right">Erledigt (24 h)</th>
-                    <th style="text-align:right">Erledigt (gesamt)</th>
-                    <th style="text-align:right">Fehler</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($sdStats as $s): ?>
-                <tr>
-                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($s['base_url']) ?>">
-                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= htmlspecialchars($s['base_url']) ?>
-                    </td>
-                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
-                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
-                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
-                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-        <?php endif; ?>
-
-        <?php if (!empty($comfyStats)): ?>
-        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🖼️ Bildgenerierung (ComfyUI)</h3>
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>ComfyUI-Endpunkt</th>
-                    <th style="text-align:right">Laufend</th>
-                    <th style="text-align:right">Erledigt (24 h)</th>
-                    <th style="text-align:right">Erledigt (gesamt)</th>
-                    <th style="text-align:right">Fehler</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($comfyStats as $s): ?>
-                <tr>
-                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($s['base_url']) ?>">
-                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= htmlspecialchars($s['base_url']) ?>
-                    </td>
-                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
-                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
-                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
-                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-        <?php endif; ?>
-
-    </div>
-
-    <!-- ═══════════════════════════════════════════════════════════════════════
-         Load distribution tree
-    ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card" id="load-tree-card">
+        <!-- Card header with live indicator -->
         <div class="tree-header-row">
-            <h2 style="margin-bottom:0;padding-bottom:0;border:none">🌐 Lastverteilung – Live</h2>
+            <h2 style="margin:0;padding:0;border:none">📊 Dashboard</h2>
             <div class="tree-refresh-info">
                 <span class="tree-refresh-dot" id="tree-live-dot"></span>
                 <span id="tree-status">Initialisierung …</span>
             </div>
         </div>
+
+        <!-- ── Stat summary boxes (live-updated) ───────────────────────────── -->
+        <div class="stat-grid" id="dashboard-stat-grid">
+            <div class="stat-box">
+                <div class="stat-val stat-running" id="stat-llm-running"><?= number_format((int) $totals['total_running']) ?></div>
+                <div class="stat-lbl">LLM laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="stat-llm-done-24h"><?= number_format((int) $totals['total_done_24h']) ?></div>
+                <div class="stat-lbl">LLM erledigt (24 h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="stat-llm-done"><?= number_format((int) $totals['total_done']) ?></div>
+                <div class="stat-lbl">LLM erledigt (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-error" id="stat-llm-error"><?= number_format((int) $totals['total_error']) ?></div>
+                <div class="stat-lbl">LLM Fehler (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-tokens" id="stat-prompt-tokens"><?= number_format((int) $totals['grand_prompt_tokens']) ?></div>
+                <div class="stat-lbl">Prompt Token (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-tokens" id="stat-completion-tokens"><?= number_format((int) $totals['grand_completion_tokens']) ?></div>
+                <div class="stat-lbl">Completion Token (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-tokens" id="stat-total-tokens"><?= number_format((int) $totals['grand_tokens']) ?></div>
+                <div class="stat-lbl">Total Token (gesamt)</div>
+            </div>
+            <?php if ($searxngBaseUrl !== ''): ?>
+            <div class="stat-box">
+                <div class="stat-val stat-running" id="stat-srxng-running"><?= number_format($searxngStats['running']) ?></div>
+                <div class="stat-lbl">Suchen laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="stat-srxng-today"><?= number_format($searxngStats['today_jobs']) ?></div>
+                <div class="stat-lbl">Suchen heute</div>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($sdEndpoints)): ?>
+            <div class="stat-box">
+                <div class="stat-val stat-running" id="stat-sd-running"><?= number_format((int) $sdTotals['total_running']) ?></div>
+                <div class="stat-lbl">SD laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="stat-sd-done-24h"><?= number_format((int) $sdTotals['total_done_24h']) ?></div>
+                <div class="stat-lbl">SD Bilder (24 h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="stat-sd-done"><?= number_format((int) $sdTotals['total_done']) ?></div>
+                <div class="stat-lbl">SD Bilder (gesamt)</div>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($comfyEndpoints)): ?>
+            <div class="stat-box">
+                <div class="stat-val stat-running" id="stat-comfy-running"><?= number_format((int) $comfyTotals['total_running']) ?></div>
+                <div class="stat-lbl">ComfyUI laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="stat-comfy-done-24h"><?= number_format((int) $comfyTotals['total_done_24h']) ?></div>
+                <div class="stat-lbl">ComfyUI (24 h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="stat-comfy-done"><?= number_format((int) $comfyTotals['total_done']) ?></div>
+                <div class="stat-lbl">ComfyUI (gesamt)</div>
+            </div>
+            <?php endif; ?>
+        </div>
+
+        <!-- ── Load distribution tree ──────────────────────────────────────── -->
+        <div style="border-top:1px solid var(--border);margin:20px 0 14px"></div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+            <span style="font-size:.82rem;font-weight:600;color:var(--text-muted)">🌐 Lastverteilung – Live</span>
+            <div class="tree-zoom-controls">
+                <button class="tree-zoom-btn" id="tree-zoom-in"  title="Vergrößern">＋</button>
+                <button class="tree-zoom-btn" id="tree-zoom-out" title="Verkleinern">－</button>
+                <button class="tree-zoom-btn" id="tree-zoom-fit" title="Auf Bereich einpassen">↺</button>
+            </div>
+        </div>
+
         <div id="load-tree-container">
             <svg id="load-tree-svg"
                  xmlns="http://www.w3.org/2000/svg"
                  aria-label="Horizontale Lastverteilung der Endpunkte">
+                <g id="load-tree-vp"></g>
             </svg>
         </div>
+
+        <!-- ── Per-endpoint detail tables (JS-rendered, live) ──────────────── -->
+        <div id="dashboard-ep-tables" style="margin-top:4px"></div>
+
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
@@ -2538,12 +2483,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const INITIAL_DATA = <?= json_encode(
         array_map(function ($s) {
             return [
-                'id'            => (int) $s['id'],
-                'alias'         => (string) ($s['alias'] ?? ''),
-                'base_url'      => $s['base_url'],
-                'default_model' => $s['default_model'],
-                'is_active'     => (int) $s['is_active'],
+                'id'                      => (int) $s['id'],
+                'alias'                   => (string) ($s['alias'] ?? ''),
+                'base_url'                => $s['base_url'],
+                'default_model'           => $s['default_model'],
+                'is_active'               => (int) $s['is_active'],
                 'running'                 => (int) $s['cnt_running'],
+                'cnt_done'                => (int) $s['cnt_done'],
+                'cnt_done_24h'            => (int) $s['cnt_done_24h'],
+                'cnt_error'               => (int) $s['cnt_error'],
+                'avg_tokens'              => (int) $s['avg_tokens'],
+                'sum_prompt_tokens'       => (int) $s['sum_prompt_tokens'],
+                'sum_completion_tokens'   => (int) $s['sum_completion_tokens'],
+                'sum_tokens'              => (int) $s['sum_tokens'],
                 'today_jobs'              => (int) $s['today_jobs'],
                 'today_prompt_tokens'     => (int) $s['today_prompt_tokens'],
                 'today_completion_tokens' => (int) $s['today_completion_tokens'],
@@ -2552,6 +2504,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         }, $epStats),
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
     ) ?>;
+
+    const INITIAL_TOTALS = <?= json_encode([
+        'total_running'           => (int) $totals['total_running'],
+        'total_done_24h'          => (int) $totals['total_done_24h'],
+        'total_done'              => (int) $totals['total_done'],
+        'total_error'             => (int) $totals['total_error'],
+        'grand_prompt_tokens'     => (int) $totals['grand_prompt_tokens'],
+        'grand_completion_tokens' => (int) $totals['grand_completion_tokens'],
+        'grand_tokens'            => (int) $totals['grand_tokens'],
+    ], JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
     const INITIAL_SEARXNG = <?= json_encode([
         'enabled'              => $searxngBaseUrl !== '',
@@ -2564,28 +2526,46 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const INITIAL_SD = <?= json_encode(
         array_map(function ($s) {
             return [
-                'id'         => (int) $s['id'],
-                'base_url'   => $s['base_url'],
-                'is_active'  => (int) $s['is_active'],
-                'running'    => (int) $s['cnt_running'],
-                'today_jobs' => (int) $s['today_jobs'],
+                'id'           => (int) $s['id'],
+                'base_url'     => $s['base_url'],
+                'is_active'    => (int) $s['is_active'],
+                'running'      => (int) $s['cnt_running'],
+                'cnt_done'     => (int) $s['cnt_done'],
+                'cnt_done_24h' => (int) $s['cnt_done_24h'],
+                'cnt_error'    => (int) $s['cnt_error'],
+                'today_jobs'   => (int) $s['today_jobs'],
             ];
         }, $sdStats),
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
     ) ?>;
 
+    const INITIAL_SD_TOTALS = <?= json_encode([
+        'total_running'  => (int) $sdTotals['total_running'],
+        'total_done_24h' => (int) $sdTotals['total_done_24h'],
+        'total_done'     => (int) $sdTotals['total_done'],
+    ], JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
     const INITIAL_COMFY = <?= json_encode(
         array_map(function ($s) {
             return [
-                'id'         => (int) $s['id'],
-                'base_url'   => $s['base_url'],
-                'is_active'  => (int) $s['is_active'],
-                'running'    => (int) $s['cnt_running'],
-                'today_jobs' => (int) $s['today_jobs'],
+                'id'           => (int) $s['id'],
+                'base_url'     => $s['base_url'],
+                'is_active'    => (int) $s['is_active'],
+                'running'      => (int) $s['cnt_running'],
+                'cnt_done'     => (int) $s['cnt_done'],
+                'cnt_done_24h' => (int) $s['cnt_done_24h'],
+                'cnt_error'    => (int) $s['cnt_error'],
+                'today_jobs'   => (int) $s['today_jobs'],
             ];
         }, $comfyStats),
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
     ) ?>;
+
+    const INITIAL_COMFY_TOTALS = <?= json_encode([
+        'total_running'  => (int) $comfyTotals['total_running'],
+        'total_done_24h' => (int) $comfyTotals['total_done_24h'],
+        'total_done'     => (int) $comfyTotals['total_done'],
+    ], JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
     const INITIAL_CLIENTS = <?= json_encode([
         'current'   => $clientStats['current'],
@@ -2600,10 +2580,113 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const PALETTE = ['#6c63ff','#22c55e','#f59e0b','#ef4444',
                      '#06b6d4','#a855f7','#f97316','#84cc16'];
 
-    const svg      = document.getElementById('load-tree-svg');
-    const statusEl = document.getElementById('tree-status');
-    const liveDot  = document.getElementById('tree-live-dot');
-    const NS       = 'http://www.w3.org/2000/svg';
+    const svg       = document.getElementById('load-tree-svg');
+    const vp        = document.getElementById('load-tree-vp');
+    const container = document.getElementById('load-tree-container');
+    const statusEl  = document.getElementById('tree-status');
+    const liveDot   = document.getElementById('tree-live-dot');
+    const NS        = 'http://www.w3.org/2000/svg';
+
+    // ── Pan / zoom state ──────────────────────────────────────────────────────
+
+    let panX = 0, panY = 0, scaleVal = 1;
+    let treeW = 800, treeH = 400; // updated after each render
+
+    function applyVpTransform() {
+        vp.setAttribute('transform', `translate(${panX},${panY}) scale(${scaleVal})`);
+    }
+
+    function fitToContainer() {
+        const cw = container.clientWidth  || 800;
+        const ch = container.clientHeight || 520;
+        const s  = Math.min(cw / treeW, ch / treeH) * 0.92;
+        scaleVal = s;
+        panX = (cw - treeW * s) / 2;
+        panY = Math.max(10, (ch - treeH * s) / 2);
+        applyVpTransform();
+    }
+
+    // Mouse wheel zoom
+    container.addEventListener('wheel', function (e) {
+        e.preventDefault();
+        const rect   = container.getBoundingClientRect();
+        const mx     = e.clientX - rect.left;
+        const my     = e.clientY - rect.top;
+        const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+        const newS   = Math.max(0.08, Math.min(12, scaleVal * factor));
+        panX = mx - (mx - panX) * (newS / scaleVal);
+        panY = my - (my - panY) * (newS / scaleVal);
+        scaleVal = newS;
+        applyVpTransform();
+    }, { passive: false });
+
+    // Mouse drag pan
+    let dragging = false, dragX0 = 0, dragY0 = 0;
+    container.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        dragging = true;
+        dragX0 = e.clientX - panX;
+        dragY0 = e.clientY - panY;
+        container.classList.add('grabbing');
+    });
+    window.addEventListener('mousemove', function (e) {
+        if (!dragging) return;
+        panX = e.clientX - dragX0;
+        panY = e.clientY - dragY0;
+        applyVpTransform();
+    });
+    window.addEventListener('mouseup', function () {
+        dragging = false;
+        container.classList.remove('grabbing');
+    });
+
+    // Touch pan + pinch-zoom
+    let touches0 = null;
+    container.addEventListener('touchstart', function (e) {
+        touches0 = Array.from(e.touches).map(t => ({ id: t.identifier, x: t.clientX, y: t.clientY }));
+    }, { passive: true });
+    container.addEventListener('touchmove', function (e) {
+        e.preventDefault();
+        const touches = Array.from(e.touches).map(t => ({ id: t.identifier, x: t.clientX, y: t.clientY }));
+        if (touches.length === 1 && touches0 && touches0.length === 1) {
+            panX += touches[0].x - touches0[0].x;
+            panY += touches[0].y - touches0[0].y;
+            applyVpTransform();
+        } else if (touches.length === 2 && touches0 && touches0.length === 2) {
+            const d0 = Math.hypot(touches0[1].x - touches0[0].x, touches0[1].y - touches0[0].y);
+            const d1 = Math.hypot(touches[1].x  - touches[0].x,  touches[1].y  - touches[0].y);
+            if (d0 > 0) {
+                const mid0x = (touches0[0].x + touches0[1].x) / 2;
+                const mid0y = (touches0[0].y + touches0[1].y) / 2;
+                const rect  = container.getBoundingClientRect();
+                const mx    = mid0x - rect.left;
+                const my    = mid0y - rect.top;
+                const factor = d1 / d0;
+                const newS   = Math.max(0.08, Math.min(12, scaleVal * factor));
+                panX = mx - (mx - panX) * (newS / scaleVal);
+                panY = my - (my - panY) * (newS / scaleVal);
+                scaleVal = newS;
+                applyVpTransform();
+            }
+        }
+        touches0 = touches;
+    }, { passive: false });
+
+    // Zoom buttons
+    document.getElementById('tree-zoom-in')?.addEventListener('click', () => {
+        scaleVal = Math.min(12, scaleVal * 1.25);
+        applyVpTransform();
+    });
+    document.getElementById('tree-zoom-out')?.addEventListener('click', () => {
+        scaleVal = Math.max(0.08, scaleVal / 1.25);
+        applyVpTransform();
+    });
+    document.getElementById('tree-zoom-fit')?.addEventListener('click', fitToContainer);
+
+    // Refit on container resize (e.g. window resize, sidebar toggle)
+    if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(() => fitToContainer()).observe(container);
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -2662,21 +2745,21 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     // ── Tree renderer ─────────────────────────────────────────────────────────
 
     function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints, clients) {
-        svg.innerHTML = '';
+        vp.innerHTML = '';
 
         const hasSearxng  = searxng && searxng.enabled;
         const hasSd       = Array.isArray(sdEndpoints) && sdEndpoints.length > 0;
         const hasComfy    = Array.isArray(comfyEndpoints) && comfyEndpoints.length > 0;
 
         if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasSd && !hasComfy) {
-            svg.setAttribute('viewBox', '0 0 400 60');
-            svg.setAttribute('height', '60');
-            txt(svg, 'Keine Endpunkte konfiguriert.', {
+            treeW = 400; treeH = 60;
+            txt(vp, 'Keine Endpunkte konfiguriert.', {
                 x: 16, y: 38,
                 fill: '#8e8ea0',
                 'font-size': 13,
                 'font-family': 'sans-serif',
             });
+            fitToContainer();
             return;
         }
 
@@ -2781,23 +2864,50 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             comfyCurY += COMFY_H + V_GAP;
         }
 
-        svg.setAttribute('viewBox', `0 0 ${TOTAL_W} ${TOTAL_H}`);
-        svg.setAttribute('height', TOTAL_H);
+        treeW = TOTAL_W;
+        treeH = TOTAL_H;
+
+        // ── Animated-flow helper ───────────────────────────────────────────────
+
+        function addFlowParticle(pathD, color, duration, delay) {
+            const pathEl = mk('path', {
+                d: pathD, fill: 'none', stroke: 'none',
+                id: `fp-${Math.random().toString(36).slice(2)}`,
+            });
+            vp.appendChild(pathEl);
+            const circ = mk('circle', {
+                class: 'flow-particle',
+                r: 3, fill: color, opacity: 0.9,
+            });
+            const anim = document.createElementNS(NS, 'animateMotion');
+            anim.setAttribute('dur',           `${duration}s`);
+            anim.setAttribute('begin',         `${delay}s`);
+            anim.setAttribute('repeatCount',   'indefinite');
+            anim.setAttribute('calcMode',      'linear');
+            const mpath = document.createElementNS(NS, 'mpath');
+            mpath.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', `#${pathEl.getAttribute('id')}`);
+            anim.appendChild(mpath);
+            circ.appendChild(anim);
+            vp.appendChild(circ);
+        }
 
         // ── Connector curves ──────────────────────────────────────────────────
 
         const CURVE_CTRL = H_GAP * 0.65;
 
         // Root → each model group
-        for (const [model] of groups) {
+        for (const [model, eps] of groups) {
             const mY = modCY[model];
             const rX = COL1_X + ROOT_W;
-            svg.appendChild(mk('path', {
-                d: `M ${rX},${rootCY} C ${rX + CURVE_CTRL},${rootCY} ${COL2_X - CURVE_CTRL},${mY} ${COL2_X},${mY}`,
+            const pathD = `M ${rX},${rootCY} C ${rX + CURVE_CTRL},${rootCY} ${COL2_X - CURVE_CTRL},${mY} ${COL2_X},${mY}`;
+            vp.appendChild(mk('path', {
+                d: pathD,
                 fill: 'none',
                 stroke: 'rgba(255,255,255,0.11)',
                 'stroke-width': 1.5,
             }));
+            const groupRunning = eps.reduce((s, e) => s + e.running, 0);
+            addFlowParticle(pathD, colorMap[model] || '#6c63ff', groupRunning > 0 ? 1.8 : 4.5, Math.random() * 2);
         }
 
         // Each model group → its endpoints
@@ -2805,27 +2915,31 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const mY = modCY[model];
             const mX = COL2_X + MOD_W;
             for (const ep of eps) {
-                const eY = epCY[ep.id];
-                svg.appendChild(mk('path', {
-                    d: `M ${mX},${mY} C ${mX + CURVE_CTRL},${mY} ${COL3_X - CURVE_CTRL},${eY} ${COL3_X},${eY}`,
+                const eY    = epCY[ep.id];
+                const pathD = `M ${mX},${mY} C ${mX + CURVE_CTRL},${mY} ${COL3_X - CURVE_CTRL},${eY} ${COL3_X},${eY}`;
+                vp.appendChild(mk('path', {
+                    d: pathD,
                     fill: 'none',
                     stroke: 'rgba(255,255,255,0.11)',
                     'stroke-width': 1.5,
                 }));
+                addFlowParticle(pathD, colorMap[model] || '#6c63ff', ep.running > 0 ? 1.5 : 5, Math.random() * 2.5);
             }
         }
 
         // Root → SearXNG tile (direct, bypassing model groups)
         if (hasSearxng) {
-            const rX = COL1_X + ROOT_W;
+            const rX   = COL1_X + ROOT_W;
             const ctrl = (COL3_X - rX) * 0.55;
-            svg.appendChild(mk('path', {
-                d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${searxngCY} ${COL3_X},${searxngCY}`,
+            const pathD = `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${searxngCY} ${COL3_X},${searxngCY}`;
+            vp.appendChild(mk('path', {
+                d: pathD,
                 fill: 'none',
                 stroke: 'rgba(6,182,212,0.3)',
                 'stroke-width': 1.5,
                 'stroke-dasharray': '4 3',
             }));
+            addFlowParticle(pathD, '#06b6d4', searxng.running > 0 ? 1.5 : 5, Math.random() * 2.5);
         }
 
         // Root → SD endpoint tiles (direct, bypassing model groups)
@@ -2834,13 +2948,15 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 const rX   = COL1_X + ROOT_W;
                 const eY   = sdCY[sdEp.id];
                 const ctrl = (COL3_X - rX) * 0.55;
-                svg.appendChild(mk('path', {
-                    d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
+                const pathD = `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`;
+                vp.appendChild(mk('path', {
+                    d: pathD,
                     fill: 'none',
                     stroke: 'rgba(249,115,22,0.3)',
                     'stroke-width': 1.5,
                     'stroke-dasharray': '4 3',
                 }));
+                addFlowParticle(pathD, '#f97316', sdEp.running > 0 ? 1.5 : 5, Math.random() * 2.5);
             }
         }
 
@@ -2850,26 +2966,32 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 const rX   = COL1_X + ROOT_W;
                 const eY   = comfyCY[comfyEp.id];
                 const ctrl = (COL3_X - rX) * 0.55;
-                svg.appendChild(mk('path', {
-                    d: `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
+                const pathD = `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`;
+                vp.appendChild(mk('path', {
+                    d: pathD,
                     fill: 'none',
                     stroke: 'rgba(168,85,247,0.3)',
                     'stroke-width': 1.5,
                     'stroke-dasharray': '4 3',
                 }));
+                addFlowParticle(pathD, '#a855f7', comfyEp.running > 0 ? 1.5 : 5, Math.random() * 2.5);
             }
         }
 
         // ── Client node → Root connector ──────────────────────────────────────
         {
-            const cRX  = COL0_X + CLIENT_W;
-            const ctrl = CLIENT_GAP * 0.5;
-            svg.appendChild(mk('path', {
-                d: `M ${cRX},${rootCY} C ${cRX + ctrl},${rootCY} ${COL1_X - ctrl},${rootCY} ${COL1_X},${rootCY}`,
+            const cRX   = COL0_X + CLIENT_W;
+            const ctrl  = CLIENT_GAP * 0.5;
+            const pathD = `M ${cRX},${rootCY} C ${cRX + ctrl},${rootCY} ${COL1_X - ctrl},${rootCY} ${COL1_X},${rootCY}`;
+            vp.appendChild(mk('path', {
+                d: pathD,
                 fill: 'none',
                 stroke: 'rgba(255,255,255,0.18)',
                 'stroke-width': 1.5,
             }));
+            const cl      = clients || {};
+            const current = cl.current ?? 0;
+            addFlowParticle(pathD, '#22c55e', current > 0 ? 2 : 6, Math.random() * 2);
         }
 
         // ── Client node ───────────────────────────────────────────────────────
@@ -2919,7 +3041,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'font-family': 'sans-serif',
             });
 
-            svg.appendChild(g);
+            vp.appendChild(g);
         }
 
         // ── Root node ─────────────────────────────────────────────────────────
@@ -2956,7 +3078,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'font-family': 'sans-serif',
             });
 
-            svg.appendChild(g);
+            vp.appendChild(g);
         }
 
         // ── Model group nodes ─────────────────────────────────────────────────
@@ -3015,7 +3137,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 g.appendChild(dot);
             }
 
-            svg.appendChild(g);
+            vp.appendChild(g);
         }
 
         // ── Endpoint nodes ────────────────────────────────────────────────────
@@ -3108,7 +3230,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'font-family': 'sans-serif',
             });
 
-            svg.appendChild(g);
+            vp.appendChild(g);
         }
 
         // ── SearXNG tile ──────────────────────────────────────────────────────
@@ -3189,7 +3311,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'font-family': 'sans-serif',
             });
 
-            svg.appendChild(g);
+            vp.appendChild(g);
         }
 
         // ── SD endpoint tiles ─────────────────────────────────────────────────
@@ -3257,7 +3379,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     'font-family': 'sans-serif',
                 });
 
-                svg.appendChild(g);
+                vp.appendChild(g);
             }
         }
 
@@ -3326,12 +3448,152 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     'font-family': 'sans-serif',
                 });
 
-                svg.appendChild(g);
+                vp.appendChild(g);
             }
         }
+
+        fitToContainer();
     }
 
-    // ── Status bar ────────────────────────────────────────────────────────────
+    // ── Live stat-grid updater ────────────────────────────────────────────────
+
+    function setVal(id, n) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = Number(n).toLocaleString('de-DE');
+    }
+
+    function updateDashboard(data) {
+        const t = data.totals || {};
+        setVal('stat-llm-running',       t.total_running           ?? 0);
+        setVal('stat-llm-done-24h',      t.total_done_24h          ?? 0);
+        setVal('stat-llm-done',          t.total_done              ?? 0);
+        setVal('stat-llm-error',         t.total_error             ?? 0);
+        setVal('stat-prompt-tokens',     t.grand_prompt_tokens     ?? 0);
+        setVal('stat-completion-tokens', t.grand_completion_tokens ?? 0);
+        setVal('stat-total-tokens',      t.grand_tokens            ?? 0);
+
+        const sr = data.searxng || {};
+        setVal('stat-srxng-running', sr.running    ?? 0);
+        setVal('stat-srxng-today',   sr.today_jobs ?? 0);
+
+        const sdt = data.sd_totals || {};
+        setVal('stat-sd-running',   sdt.total_running  ?? 0);
+        setVal('stat-sd-done-24h',  sdt.total_done_24h ?? 0);
+        setVal('stat-sd-done',      sdt.total_done     ?? 0);
+
+        const cft = data.comfy_totals || {};
+        setVal('stat-comfy-running',   cft.total_running  ?? 0);
+        setVal('stat-comfy-done-24h',  cft.total_done_24h ?? 0);
+        setVal('stat-comfy-done',      cft.total_done     ?? 0);
+    }
+
+    // ── Live per-endpoint table renderer ─────────────────────────────────────
+
+    function fmtN(n)  { return Number(n).toLocaleString('de-DE'); }
+    function dotHtml(active) {
+        return `<span class="dot ${active ? 'dot-on' : 'dot-off'}"></span>`;
+    }
+
+    function updateEpTables(data) {
+        const wrap = document.getElementById('dashboard-ep-tables');
+        if (!wrap) return;
+
+        const eps    = data.endpoints        || [];
+        const sdEps  = data.sd_endpoints     || [];
+        const cfEps  = data.comfy_endpoints  || [];
+
+        let html = '';
+
+        if (eps.length > 0) {
+            html += '<div style="border-top:1px solid var(--border);margin:20px 0 14px"></div>';
+            html += '<table class="data-table"><thead><tr>' +
+                '<th>Endpunkt</th><th>Modell-Gruppe</th>' +
+                '<th style="text-align:right">Laufend</th>' +
+                '<th style="text-align:right">Erledigt (24 h)</th>' +
+                '<th style="text-align:right">Erledigt (gesamt)</th>' +
+                '<th style="text-align:right">Fehler</th>' +
+                '<th style="text-align:right">⌀ Token</th>' +
+                '<th style="text-align:right">Prompt Token</th>' +
+                '<th style="text-align:right">Completion Token</th>' +
+                '<th style="text-align:right">Total Token</th>' +
+                '</tr></thead><tbody>';
+            for (const ep of eps) {
+                const label = ep.alias ? ep.alias : shortUrl(ep.base_url);
+                const model = ep.default_model || '–';
+                const color = MODEL_COLORS[ep.default_model] || (ep.default_model ? '#555' : '');
+                const badge = ep.default_model
+                    ? `<span class="model-badge" style="background:${color}">${escH(ep.default_model)}</span>`
+                    : '<span class="model-badge badge-empty">–</span>';
+                html += `<tr>
+                    <td style="font-family:monospace;font-size:.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escH(ep.base_url)}">
+                        ${dotHtml(ep.is_active === 1)}${escH(truncate(label, 28))}
+                    </td>
+                    <td>${badge}</td>
+                    <td style="text-align:right;color:var(--warning)">${fmtN(ep.running)}</td>
+                    <td style="text-align:right">${fmtN(ep.cnt_done_24h ?? 0)}</td>
+                    <td style="text-align:right;color:var(--success)">${fmtN(ep.cnt_done ?? 0)}</td>
+                    <td style="text-align:right;color:var(--error)">${fmtN(ep.cnt_error ?? 0)}</td>
+                    <td style="text-align:right;color:var(--text-muted)">${fmtN(ep.avg_tokens ?? 0)}</td>
+                    <td style="text-align:right;color:var(--text-muted)">${fmtN(ep.sum_prompt_tokens ?? 0)}</td>
+                    <td style="text-align:right;color:var(--text-muted)">${fmtN(ep.sum_completion_tokens ?? 0)}</td>
+                    <td style="text-align:right;color:var(--accent)">${fmtN(ep.sum_tokens ?? 0)}</td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+        }
+
+        if (sdEps.length > 0) {
+            html += '<h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🎨 Bildgenerierung (AUTOMATIC1111)</h3>';
+            html += '<table class="data-table"><thead><tr>' +
+                '<th>SD-Endpunkt</th>' +
+                '<th style="text-align:right">Laufend</th>' +
+                '<th style="text-align:right">Erledigt (24 h)</th>' +
+                '<th style="text-align:right">Erledigt (gesamt)</th>' +
+                '<th style="text-align:right">Fehler</th>' +
+                '</tr></thead><tbody>';
+            for (const ep of sdEps) {
+                html += `<tr>
+                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escH(ep.base_url)}">
+                        ${dotHtml(ep.is_active === 1)}${escH(shortUrl(ep.base_url))}
+                    </td>
+                    <td style="text-align:right;color:var(--warning)">${fmtN(ep.running)}</td>
+                    <td style="text-align:right">${fmtN(ep.cnt_done_24h ?? 0)}</td>
+                    <td style="text-align:right;color:var(--success)">${fmtN(ep.cnt_done ?? 0)}</td>
+                    <td style="text-align:right;color:var(--error)">${fmtN(ep.cnt_error ?? 0)}</td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+        }
+
+        if (cfEps.length > 0) {
+            html += '<h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🖼️ Bildgenerierung (ComfyUI)</h3>';
+            html += '<table class="data-table"><thead><tr>' +
+                '<th>ComfyUI-Endpunkt</th>' +
+                '<th style="text-align:right">Laufend</th>' +
+                '<th style="text-align:right">Erledigt (24 h)</th>' +
+                '<th style="text-align:right">Erledigt (gesamt)</th>' +
+                '<th style="text-align:right">Fehler</th>' +
+                '</tr></thead><tbody>';
+            for (const ep of cfEps) {
+                html += `<tr>
+                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escH(ep.base_url)}">
+                        ${dotHtml(ep.is_active === 1)}${escH(shortUrl(ep.base_url))}
+                    </td>
+                    <td style="text-align:right;color:var(--warning)">${fmtN(ep.running)}</td>
+                    <td style="text-align:right">${fmtN(ep.cnt_done_24h ?? 0)}</td>
+                    <td style="text-align:right;color:var(--success)">${fmtN(ep.cnt_done ?? 0)}</td>
+                    <td style="text-align:right;color:var(--error)">${fmtN(ep.cnt_error ?? 0)}</td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+        }
+
+        wrap.innerHTML = html;
+    }
+
+    function escH(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
 
     function setStatus(label, loading) {
         if (statusEl) statusEl.textContent = label;
@@ -3357,6 +3619,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const data = await res.json();
             if (data.ok && Array.isArray(data.endpoints)) {
                 renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || [], data.clients || null);
+                updateDashboard(data);
+                updateEpTables(data);
                 setStatus(tsLabel(data.ts), false);
             } else {
                 setStatus('Fehler beim Laden', false);
@@ -3369,10 +3633,18 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     // Initial render using PHP-injected data
     renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD, INITIAL_COMFY, INITIAL_CLIENTS);
+    updateEpTables({
+        endpoints:       INITIAL_DATA,
+        sd_endpoints:    INITIAL_SD,
+        comfy_endpoints: INITIAL_COMFY,
+        totals:          INITIAL_TOTALS,
+        sd_totals:       INITIAL_SD_TOTALS,
+        comfy_totals:    INITIAL_COMFY_TOTALS,
+    });
     setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
 
-    // Refresh every 15 seconds
-    setInterval(refreshTree, 15000);
+    // Refresh every 10 seconds
+    setInterval(refreshTree, 10000);
 
 })();
 </script>
@@ -3734,7 +4006,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     'use strict';
 
     const sectionIds = [
-        'stats-card', 'load-tree-card', 'config-smtp-card', 'config-searxng-card',
+        'dashboard-card', 'config-smtp-card', 'config-searxng-card',
         'config-endpoints-card', 'config-request-handling-card',
         'config-sd-card', 'config-comfy-card', 'users-card', 'password-card'
     ];

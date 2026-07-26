@@ -40,6 +40,19 @@ try {
             e.is_active,
             COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0)
                 AS running,
+            COALESCE(SUM(CASE WHEN t.status = 'done'    THEN 1 ELSE 0 END), 0)
+                AS cnt_done,
+            COALESCE(SUM(CASE WHEN t.status = 'error'   THEN 1 ELSE 0 END), 0)
+                AS cnt_error,
+            COALESCE(SUM(CASE WHEN t.status = 'done'
+                              AND t.started_at >= NOW() - INTERVAL 24 HOUR
+                         THEN 1 ELSE 0 END), 0)
+                AS cnt_done_24h,
+            COALESCE(SUM(t.prompt_tokens), 0)     AS sum_prompt_tokens,
+            COALESCE(SUM(t.completion_tokens), 0) AS sum_completion_tokens,
+            COALESCE(SUM(t.total_tokens), 0)      AS sum_tokens,
+            COALESCE(ROUND(AVG(CASE WHEN t.total_tokens IS NOT NULL
+                                    THEN t.total_tokens END)), 0) AS avg_tokens,
             COALESCE(SUM(CASE WHEN t.status = 'done'
                               AND DATE(t.started_at) = CURDATE()
                          THEN 1 ELSE 0 END), 0)
@@ -60,15 +73,46 @@ try {
     ")->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($rows as &$r) {
-        $r['id']           = (int) $r['id'];
-        $r['is_active']    = (int) $r['is_active'];
+        $r['id']                      = (int) $r['id'];
+        $r['is_active']               = (int) $r['is_active'];
         $r['running']                 = (int) $r['running'];
+        $r['cnt_done']                = (int) $r['cnt_done'];
+        $r['cnt_error']               = (int) $r['cnt_error'];
+        $r['cnt_done_24h']            = (int) $r['cnt_done_24h'];
+        $r['sum_prompt_tokens']       = (int) $r['sum_prompt_tokens'];
+        $r['sum_completion_tokens']   = (int) $r['sum_completion_tokens'];
+        $r['sum_tokens']              = (int) $r['sum_tokens'];
+        $r['avg_tokens']              = (int) $r['avg_tokens'];
         $r['today_jobs']              = (int) $r['today_jobs'];
         $r['today_prompt_tokens']     = (int) $r['today_prompt_tokens'];
         $r['today_completion_tokens'] = (int) $r['today_completion_tokens'];
         $r['today_tokens']            = (int) $r['today_tokens'];
     }
     unset($r);
+
+    $totalsRow = getDb()->query("
+        SELECT
+            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
+            COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
+            COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
+            COALESCE(SUM(CASE WHEN status = 'done'
+                              AND started_at >= NOW() - INTERVAL 24 HOUR
+                         THEN 1 ELSE 0 END), 0) AS total_done_24h,
+            COALESCE(SUM(prompt_tokens), 0)     AS grand_prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0) AS grand_completion_tokens,
+            COALESCE(SUM(total_tokens), 0)      AS grand_tokens
+        FROM tasks
+    ")->fetch(PDO::FETCH_ASSOC);
+
+    $totals = [
+        'total_running'            => (int) $totalsRow['total_running'],
+        'total_done'               => (int) $totalsRow['total_done'],
+        'total_error'              => (int) $totalsRow['total_error'],
+        'total_done_24h'           => (int) $totalsRow['total_done_24h'],
+        'grand_prompt_tokens'      => (int) $totalsRow['grand_prompt_tokens'],
+        'grand_completion_tokens'  => (int) $totalsRow['grand_completion_tokens'],
+        'grand_tokens'             => (int) $totalsRow['grand_tokens'],
+    ];
 
     $searxngEnabled = trim(getSetting('searxng_base_url', '')) !== '';
     $searxng = ['enabled' => $searxngEnabled, 'running' => 0, 'today_jobs' => 0, 'avg_duration_seconds' => null];
@@ -100,7 +144,8 @@ try {
 
     // ── SD endpoint stats ─────────────────────────────────────────────────────
 
-    $sdRows = [];
+    $sdRows   = [];
+    $sdTotals = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
     try {
         $sdRows = getDb()->query("
             SELECT
@@ -109,6 +154,14 @@ try {
                 e.is_active,
                 COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0)
                     AS running,
+                COALESCE(SUM(CASE WHEN t.status = 'done'    THEN 1 ELSE 0 END), 0)
+                    AS cnt_done,
+                COALESCE(SUM(CASE WHEN t.status = 'error'   THEN 1 ELSE 0 END), 0)
+                    AS cnt_error,
+                COALESCE(SUM(CASE WHEN t.status = 'done'
+                                  AND t.started_at >= NOW() - INTERVAL 24 HOUR
+                             THEN 1 ELSE 0 END), 0)
+                    AS cnt_done_24h,
                 COALESCE(SUM(CASE WHEN t.status = 'done'
                                   AND DATE(t.started_at) = CURDATE()
                              THEN 1 ELSE 0 END), 0)
@@ -120,19 +173,42 @@ try {
         ")->fetchAll(PDO::FETCH_ASSOC);
 
         foreach ($sdRows as &$r) {
-            $r['id']         = (int) $r['id'];
-            $r['is_active']  = (int) $r['is_active'];
-            $r['running']    = (int) $r['running'];
-            $r['today_jobs'] = (int) $r['today_jobs'];
+            $r['id']          = (int) $r['id'];
+            $r['is_active']   = (int) $r['is_active'];
+            $r['running']     = (int) $r['running'];
+            $r['cnt_done']    = (int) $r['cnt_done'];
+            $r['cnt_error']   = (int) $r['cnt_error'];
+            $r['cnt_done_24h']= (int) $r['cnt_done_24h'];
+            $r['today_jobs']  = (int) $r['today_jobs'];
         }
         unset($r);
+
+        $sdTotRow = getDb()->query("
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
+                COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
+                COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
+                COALESCE(SUM(CASE WHEN status = 'done'
+                                  AND started_at >= NOW() - INTERVAL 24 HOUR
+                             THEN 1 ELSE 0 END), 0) AS total_done_24h
+            FROM sd_tasks
+        ")->fetch(PDO::FETCH_ASSOC);
+        if ($sdTotRow) {
+            $sdTotals = [
+                'total_running'  => (int) $sdTotRow['total_running'],
+                'total_done'     => (int) $sdTotRow['total_done'],
+                'total_error'    => (int) $sdTotRow['total_error'],
+                'total_done_24h' => (int) $sdTotRow['total_done_24h'],
+            ];
+        }
     } catch (PDOException $e) {
         // sd_endpoints / sd_tasks tables may not exist yet
     }
 
     // ── ComfyUI endpoint stats ────────────────────────────────────────────────
 
-    $comfyRows = [];
+    $comfyRows   = [];
+    $comfyTotals = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
     try {
         $comfyRows = getDb()->query("
             SELECT
@@ -141,6 +217,14 @@ try {
                 e.is_active,
                 COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0)
                     AS running,
+                COALESCE(SUM(CASE WHEN t.status = 'done'    THEN 1 ELSE 0 END), 0)
+                    AS cnt_done,
+                COALESCE(SUM(CASE WHEN t.status = 'error'   THEN 1 ELSE 0 END), 0)
+                    AS cnt_error,
+                COALESCE(SUM(CASE WHEN t.status = 'done'
+                                  AND t.started_at >= NOW() - INTERVAL 24 HOUR
+                             THEN 1 ELSE 0 END), 0)
+                    AS cnt_done_24h,
                 COALESCE(SUM(CASE WHEN t.status = 'done'
                                   AND DATE(t.started_at) = CURDATE()
                              THEN 1 ELSE 0 END), 0)
@@ -152,12 +236,34 @@ try {
         ")->fetchAll(PDO::FETCH_ASSOC);
 
         foreach ($comfyRows as &$r) {
-            $r['id']         = (int) $r['id'];
-            $r['is_active']  = (int) $r['is_active'];
-            $r['running']    = (int) $r['running'];
-            $r['today_jobs'] = (int) $r['today_jobs'];
+            $r['id']           = (int) $r['id'];
+            $r['is_active']    = (int) $r['is_active'];
+            $r['running']      = (int) $r['running'];
+            $r['cnt_done']     = (int) $r['cnt_done'];
+            $r['cnt_error']    = (int) $r['cnt_error'];
+            $r['cnt_done_24h'] = (int) $r['cnt_done_24h'];
+            $r['today_jobs']   = (int) $r['today_jobs'];
         }
         unset($r);
+
+        $comfyTotRow = getDb()->query("
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
+                COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
+                COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
+                COALESCE(SUM(CASE WHEN status = 'done'
+                                  AND started_at >= NOW() - INTERVAL 24 HOUR
+                             THEN 1 ELSE 0 END), 0) AS total_done_24h
+            FROM comfy_tasks
+        ")->fetch(PDO::FETCH_ASSOC);
+        if ($comfyTotRow) {
+            $comfyTotals = [
+                'total_running'  => (int) $comfyTotRow['total_running'],
+                'total_done'     => (int) $comfyTotRow['total_done'],
+                'total_error'    => (int) $comfyTotRow['total_error'],
+                'total_done_24h' => (int) $comfyTotRow['total_done_24h'],
+            ];
+        }
     } catch (PDOException $e) {
         // comfy_endpoints / comfy_tasks tables may not exist yet
     }
@@ -188,8 +294,18 @@ try {
     }
 
     echo json_encode(
-        ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng,
-         'sd_endpoints' => $sdRows, 'comfy_endpoints' => $comfyRows, 'clients' => $clientStats],
+        [
+            'ok'              => true,
+            'ts'              => time(),
+            'totals'          => $totals,
+            'endpoints'       => $rows,
+            'searxng'         => $searxng,
+            'sd_totals'       => $sdTotals,
+            'sd_endpoints'    => $sdRows,
+            'comfy_totals'    => $comfyTotals,
+            'comfy_endpoints' => $comfyRows,
+            'clients'         => $clientStats,
+        ],
         JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     );
 
