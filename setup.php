@@ -176,12 +176,37 @@ $db->exec("
         file_size      INT UNSIGNED    NOT NULL DEFAULT 0,
         status         ENUM('pending','processing','done','error') NOT NULL DEFAULT 'pending',
         extracted_text MEDIUMTEXT      NULL,
+        chunk_count    INT UNSIGNED    NOT NULL DEFAULT 0,
         error_message  TEXT            NULL,
         uploaded_at    TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
         processed_at   TIMESTAMP(3)    NULL,
         PRIMARY KEY (id),
         KEY idx_du_user_status (user_id, status),
         KEY idx_du_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+");
+
+try {
+    $db->exec("ALTER TABLE document_uploads ADD COLUMN chunk_count INT UNSIGNED NOT NULL DEFAULT 0 AFTER extracted_text");
+} catch (Throwable $_e) {
+    // column already exists
+}
+
+$db->exec("
+    CREATE TABLE IF NOT EXISTS document_chunks (
+        id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        document_upload_id BIGINT UNSIGNED NOT NULL,
+        user_id            INT             NOT NULL,
+        chunk_index        INT UNSIGNED    NOT NULL,
+        chunk_text         MEDIUMTEXT      NOT NULL,
+        created_at         TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        PRIMARY KEY (id),
+        UNIQUE KEY uniq_doc_chunk (document_upload_id, chunk_index),
+        KEY idx_dc_user (user_id),
+        KEY idx_dc_doc (document_upload_id),
+        CONSTRAINT fk_dc_doc_upload
+            FOREIGN KEY (document_upload_id) REFERENCES document_uploads(id)
+            ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 

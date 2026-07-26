@@ -28,6 +28,87 @@ if (!isset($_SESSION['admin_id'])) {
 
 require_once __DIR__ . '/../db.php';
 
+function normalizeDocumentText(string $text): string
+{
+    $text = str_replace("\r\n", "\n", $text);
+    $text = str_replace("\r", "\n", $text);
+    $text = preg_replace("/[ \t]+/u", ' ', $text) ?? $text;
+    $text = preg_replace("/\n{3,}/u", "\n\n", $text) ?? $text;
+    return trim($text);
+}
+
+function buildDocumentChunks(string $text, int $maxChars = 1800, int $overlapChars = 250): array
+{
+    $text = normalizeDocumentText($text);
+    if ($text === '') {
+        return [];
+    }
+
+    $paragraphs = preg_split("/\n{2,}/u", $text) ?: [];
+    $chunks = [];
+    $current = '';
+
+    foreach ($paragraphs as $paragraph) {
+        $paragraph = trim($paragraph);
+        if ($paragraph === '') {
+            continue;
+        }
+
+        $candidate = $current === '' ? $paragraph : ($current . "\n\n" . $paragraph);
+        if (mb_strlen($candidate) <= $maxChars) {
+            $current = $candidate;
+            continue;
+        }
+
+        if ($current !== '') {
+            $chunks[] = $current;
+            $tail = mb_substr($current, max(0, mb_strlen($current) - $overlapChars));
+            $current = trim($tail . "\n\n" . $paragraph);
+            while (mb_strlen($current) > $maxChars) {
+                $chunks[] = mb_substr($current, 0, $maxChars);
+                $tail = mb_substr($current, max(0, $maxChars - $overlapChars), $overlapChars);
+                $current = trim($tail . mb_substr($current, $maxChars));
+            }
+            continue;
+        }
+
+        $remaining = $paragraph;
+        while (mb_strlen($remaining) > $maxChars) {
+            $chunks[] = mb_substr($remaining, 0, $maxChars);
+            $tail = mb_substr($remaining, max(0, $maxChars - $overlapChars), $overlapChars);
+            $remaining = trim($tail . mb_substr($remaining, $maxChars));
+        }
+        $current = $remaining;
+    }
+
+    if ($current !== '') {
+        $chunks[] = $current;
+    }
+
+    return array_values(array_filter(array_map(static fn($chunk) => trim($chunk), $chunks), static fn($chunk) => $chunk !== ''));
+}
+
+function persistDocumentChunks(PDO $db, int $uploadId, int $userId, array $chunks): int
+{
+    $db->prepare('DELETE FROM document_chunks WHERE document_upload_id = ?')->execute([$uploadId]);
+    if (empty($chunks)) {
+        return 0;
+    }
+
+    $insert = $db->prepare(
+        'INSERT INTO document_chunks (document_upload_id, user_id, chunk_index, chunk_text, created_at)
+         VALUES (?, ?, ?, ?, NOW(3))'
+    );
+
+    $count = 0;
+    foreach ($chunks as $index => $chunkText) {
+        $insert->execute([$uploadId, $userId, $index, $chunkText]);
+        $count++;
+    }
+
+    return $count;
+}
+
 $userId = (int) $_SESSION['admin_id'];
 $db     = getDb();
 
@@ -280,13 +361,24 @@ try {
 } catch (Throwable $_e) {}
 
 // Save result.
+$content = normalizeDocumentText($content);
+$chunks = buildDocumentChunks($content);
+$chunkCount = 0;
+
+try {
+    $chunkCount = persistDocumentChunks($db, $uploadId, $userId, $chunks);
+} catch (Throwable $_e) {
+    $chunkCount = 0;
+}
+
 $db->prepare(
     "UPDATE document_uploads
         SET status = 'done',
             extracted_text = ?,
+            chunk_count = ?,
             processed_at = NOW(3)
       WHERE id = ?"
-)->execute([$content, $uploadId]);
+)->execute([$content, $chunkCount, $uploadId]);
 
 echo json_encode([
     'ok'      => true,

@@ -9,6 +9,7 @@ Die Anwendung kombiniert:
 - optionale **Websuche über SearXNG**,
 - optionale **Bildgenerierung über AUTOMATIC1111**,
 - optionale **Bildgenerierung über ComfyUI**,
+- dokumentbasierte **RAG-Suche** über hochgeladene Inhalte,
 - sowie eine einfache Statistik- und Monitoring-Ansicht.
 
 Die Oberfläche ist bewusst schlank gehalten: kein Framework, kein Build-Schritt, kein Node-Setup – nur PHP, MySQL und die angebundenen KI-Dienste.
@@ -67,6 +68,7 @@ Die Oberfläche ist bewusst schlank gehalten: kein Framework, kein Build-Schritt
 - optionales Tool `search_web` über SearXNG – Websuche im Chat
 - optionales Tool `generate_image` für AUTOMATIC1111 – Bildgenerierung mit Stable Diffusion
 - optionales Tool `generate_image_comfy` für ComfyUI – alternative Bildgenerierung
+- optionales Tool `query_documents` – chunk-basierte RAG-Suche über eigene Dokumente
 
 ---
 

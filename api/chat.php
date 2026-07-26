@@ -323,15 +323,107 @@ function callSdGenerate(array $params, int $timeout = 120): array
     ];
 }
 
-/**
- * Returns true when at least one analysed (done) document upload exists.
- */
-function hasDocumentUploads(): bool
+function tokenizeQueryTerms(string $query): array
 {
+    $query = mb_strtolower(trim($query));
+    if ($query === '') {
+        return [];
+    }
+    $parts = preg_split('/[^\p{L}\p{N}_-]+/u', $query) ?: [];
+    $terms = [];
+    foreach ($parts as $term) {
+        $term = trim($term);
+        if (mb_strlen($term) < 2) {
+            continue;
+        }
+        $terms[$term] = true;
+    }
+    return array_keys($terms);
+}
+
+function buildRagSnippet(string $text, array $terms, int $maxLen = 1200): string
+{
+    $text = trim($text);
+    if ($text === '') {
+        return '';
+    }
+
+    if (mb_strlen($text) <= $maxLen) {
+        return $text;
+    }
+
+    $lower = mb_strtolower($text);
+    $pos = null;
+    foreach ($terms as $term) {
+        $idx = mb_strpos($lower, $term);
+        if ($idx !== false && ($pos === null || $idx < $pos)) {
+            $pos = $idx;
+        }
+    }
+
+    if ($pos === null) {
+        return mb_substr($text, 0, $maxLen) . ' … [gekürzt]';
+    }
+
+    $start = max(0, $pos - (int) floor($maxLen / 3));
+    $snippet = mb_substr($text, $start, $maxLen);
+    if ($start > 0) {
+        $snippet = '… ' . $snippet;
+    }
+    if (($start + $maxLen) < mb_strlen($text)) {
+        $snippet .= ' …';
+    }
+    return $snippet;
+}
+
+function scoreRagChunk(string $chunkText, string $query, array $terms): float
+{
+    $lowerChunk = mb_strtolower($chunkText);
+    $score = 0.0;
+    $matchedTerms = 0;
+
+    $queryLower = mb_strtolower($query);
+    if ($queryLower !== '' && mb_strpos($lowerChunk, $queryLower) !== false) {
+        $score += 8.0;
+    }
+
+    foreach ($terms as $term) {
+        $hits = substr_count($lowerChunk, $term);
+        if ($hits > 0) {
+            $matchedTerms++;
+            $score += min(4.0, 1.2 * $hits);
+        }
+    }
+
+    if ($matchedTerms > 0) {
+        $coverage = $matchedTerms / max(1, count($terms));
+        $score += $coverage * 4.0;
+    }
+
+    $len = max(1, mb_strlen($chunkText));
+    $score += min(1.5, 700 / $len);
+
+    return $score;
+}
+
+/**
+ * Returns true when at least one analysed (done) document upload with chunks exists.
+ */
+function hasDocumentUploads(?int $userId): bool
+{
+    if ($userId === null || $userId <= 0) {
+        return false;
+    }
     try {
-        $count = (int) getDb()->query(
-            "SELECT COUNT(*) FROM document_uploads WHERE status = 'done'"
-        )->fetchColumn();
+        $stmt = getDb()->prepare(
+            "SELECT COUNT(*)
+               FROM document_uploads
+              WHERE user_id = ?
+                AND status = 'done'
+                AND chunk_count > 0"
+        );
+        $stmt->execute([$userId]);
+        $count = (int) $stmt->fetchColumn();
         return $count > 0;
     } catch (Throwable $e) {
         return false;
@@ -344,7 +436,7 @@ function createDocumentQueryToolDefinition(): array
         'type' => 'function',
         'function' => [
             'name' => 'query_documents',
-            'description' => 'Durchsucht die hochgeladenen und analysierten Dokumente nach relevanten Informationen. Nutze dieses Tool, wenn der Benutzer nach etwas fragt, das in hochgeladenen Dokumenten enthalten sein könnte.',
+            'description' => 'Durchsucht die hochgeladenen und analysierten Dokumente des aktuellen Nutzers per chunk-basierter RAG-Suche. Gib in deiner Antwort an, aus welchem Dokument die Informationen stammen.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -363,68 +455,79 @@ function createDocumentQueryToolDefinition(): array
  * Search through extracted document texts for relevant content.
  * Returns an array with matching document excerpts.
  */
-function queryDocuments(string $query): array
+function queryDocuments(string $query, ?int $userId): array
 {
+    $query = trim($query);
     if ($query === '') {
         return ['error' => 'Leere Suchanfrage.'];
+    }
+    if ($userId === null || $userId <= 0) {
+        return ['error' => 'Dokumentsuche ist nur für angemeldete Nutzer verfügbar.'];
     }
 
     try {
         $db = getDb();
+        $terms = array_slice(tokenizeQueryTerms($query), 0, 12);
 
-        // Full text search: LIKE on extracted_text with the query terms.
-        $terms = array_filter(array_map('trim', explode(' ', $query)));
-        $terms = array_slice($terms, 0, 10); // limit to 10 terms
-
-        // Build WHERE conditions for each term.
-        $conditions = [];
-        $params     = [];
-        foreach ($terms as $term) {
-            if (strlen($term) >= 2) {
-                $conditions[] = 'extracted_text LIKE ?';
-                $params[] = '%' . $term . '%';
-            }
-        }
-
-        if (empty($conditions)) {
-            // Fallback: return all documents.
-            $stmt = $db->query(
-                "SELECT original_name, extracted_text FROM document_uploads
-                  WHERE status = 'done' AND extracted_text IS NOT NULL
-                  ORDER BY uploaded_at DESC LIMIT 5"
-            );
-        } else {
-            $whereClause = implode(' OR ', $conditions);
-            $stmt = $db->prepare(
-                "SELECT original_name, extracted_text FROM document_uploads
-                  WHERE status = 'done' AND extracted_text IS NOT NULL
-                    AND ({$whereClause})
-                  ORDER BY uploaded_at DESC LIMIT 5"
-            );
-            $stmt->execute($params);
-        }
-
+        $stmt = $db->prepare(
+            "SELECT du.id AS document_id, du.original_name, dc.chunk_index, dc.chunk_text
+               FROM document_chunks dc
+               JOIN document_uploads du ON du.id = dc.document_upload_id
+              WHERE du.user_id = ?
+                AND du.status = 'done'
+                AND dc.user_id = ?
+              ORDER BY du.uploaded_at DESC, dc.chunk_index ASC
+              LIMIT 500"
+        );
+        $stmt->execute([$userId, $userId]);
         $rows = $stmt->fetchAll();
 
         if (empty($rows)) {
+            return [
+                'found' => false,
+                'message' => 'Es sind noch keine analysierten Dokument-Chunks verfügbar.',
+            ];
+        }
+
+        $ranked = [];
+        foreach ($rows as $row) {
+            $chunkText = trim((string) ($row['chunk_text'] ?? ''));
+            if ($chunkText === '') {
+                continue;
+            }
+            $score = scoreRagChunk($chunkText, $query, $terms);
+            if ($score <= 0.0) {
+                continue;
+            }
+            $ranked[] = [
+                'document_id' => (int) ($row['document_id'] ?? 0),
+                'document' => (string) ($row['original_name'] ?? 'Unbekannt'),
+                'chunk_index' => (int) ($row['chunk_index'] ?? 0),
+                'content' => buildRagSnippet($chunkText, $terms),
+                'score' => $score,
+            ];
+        }
+
+        usort($ranked, static function (array $a, array $b): int {
+            return $b['score'] <=> $a['score'];
+        });
+
+        $ranked = array_slice($ranked, 0, 5);
+        if (empty($ranked)) {
             return [
                 'found' => false,
                 'message' => 'Keine passenden Informationen in den analysierten Dokumenten gefunden.',
             ];
         }
 
-        $results = [];
-        foreach ($rows as $row) {
-            $text = (string) ($row['extracted_text'] ?? '');
-            // Truncate very long texts to 4000 chars to avoid token overflow.
-            if (mb_strlen($text) > 4000) {
-                $text = mb_substr($text, 0, 4000) . ' … [gekürzt]';
-            }
-            $results[] = [
-                'document' => (string) ($row['original_name'] ?? 'Unbekannt'),
-                'content'  => $text,
+        $results = array_map(static function (array $row): array {
+            return [
+                'document' => $row['document'],
+                'chunk' => $row['chunk_index'] + 1,
+                'relevance' => round((float) $row['score'], 3),
+                'content' => $row['content'],
             ];
-        }
+        }, $ranked);
 
         return [
             'found'   => true,
@@ -1050,7 +1153,7 @@ $clientRequestedStream = isset($payload['stream']) && $payload['stream'] === tru
 $useSearchTool   = $searxngBaseUrl !== '';
 $useSdTool       = hasSdEndpoints();
 $useComfyTool    = hasComfyEndpoints();
-$useDocQueryTool = hasDocumentUploads();
+$useDocQueryTool = hasDocumentUploads($sessionUserId);
 $useTools        = $useSearchTool || $useSdTool || $useComfyTool || $useDocQueryTool;
 $stream = $clientRequestedStream && !$useTools;
 
@@ -1250,7 +1353,7 @@ if ($useTools) {
             } elseif ($toolName === 'query_documents' && $useDocQueryTool) {
                 $args  = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
                 $query = trim((string) ($args['query'] ?? ''));
-                $toolResult = queryDocuments($query);
+                $toolResult = queryDocuments($query, $sessionUserId);
             }
 
             $messages[] = [
