@@ -1911,7 +1911,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
          User accounts
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="users-card">
-        <h2>👤 Benutzerkonten</h2>
+        <h2 style="display:flex;align-items:center;gap:10px">
+            👤 Benutzerkonten
+            <button id="create-user-btn"
+                    class="btn btn-primary"
+                    style="font-size:.8rem;padding:4px 10px;line-height:1.4"
+                    title="Neuen Benutzer anlegen">＋</button>
+        </h2>
 
         <table class="data-table">
             <thead>
@@ -2025,6 +2031,64 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             </div>
 
             <input type="hidden" id="overlay-user-id" value="">
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Create user overlay
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="create-user-overlay" style="display:none;position:fixed;inset:0;z-index:1000;
+         background:rgba(0,0,0,.55);backdrop-filter:blur(4px);
+         align-items:center;justify-content:center">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+                    padding:28px 32px;max-width:480px;width:calc(100% - 32px);
+                    box-shadow:0 24px 60px rgba(0,0,0,.6);position:relative">
+            <button id="create-user-overlay-close"
+                    style="position:absolute;top:14px;right:16px;background:none;border:none;
+                           color:var(--text-muted);font-size:1.2rem;cursor:pointer;line-height:1"
+                    aria-label="Schließen">✕</button>
+
+            <h2 style="font-size:1rem;margin-bottom:20px">➕ Neuen Benutzer anlegen</h2>
+
+            <div id="create-user-error" style="display:none;background:rgba(224,92,92,.12);
+                 border:1px solid rgba(224,92,92,.4);border-radius:var(--radius);color:var(--error);
+                 font-size:.85rem;padding:10px 14px;margin-bottom:16px"></div>
+
+            <div class="form-group">
+                <label for="cu-username">Benutzername <span style="color:var(--error)">*</span></label>
+                <input type="text" id="cu-username" name="cu_username"
+                       autocomplete="off" placeholder="z. B. max_mustermann"
+                       style="width:100%;padding:9px 12px;background:var(--bg);
+                              border:1px solid var(--border);border-radius:var(--radius);
+                              color:var(--text);font-size:.9rem;font-family:var(--font)">
+                <p class="hint">Erlaubt: Buchstaben, Ziffern und _ (max. 100 Zeichen). Keine E-Mail-Adresse nötig.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="cu-password">Passwort <span style="color:var(--error)">*</span></label>
+                <input type="password" id="cu-password" autocomplete="new-password"
+                       style="width:100%;padding:9px 12px;background:var(--bg);
+                              border:1px solid var(--border);border-radius:var(--radius);
+                              color:var(--text);font-size:.9rem;font-family:var(--font)">
+                <div style="height:6px;background:var(--surface-alt);border-radius:3px;margin-top:8px;overflow:hidden">
+                    <div id="cu-strength-bar" style="height:100%;width:0%;border-radius:3px;transition:width .25s,background .25s"></div>
+                </div>
+                <div id="cu-strength-label" style="font-size:.75rem;margin-top:4px;min-height:1.1em;transition:color .25s"></div>
+                <p class="hint">Min. 8 Zeichen, Groß-/Kleinbuchstaben, Ziffer und Sonderzeichen (#?!@$%^&amp;*-).</p>
+            </div>
+
+            <div class="form-group">
+                <label for="cu-password2">Passwort wiederholen <span style="color:var(--error)">*</span></label>
+                <input type="password" id="cu-password2" autocomplete="new-password"
+                       style="width:100%;padding:9px 12px;background:var(--bg);
+                              border:1px solid var(--border);border-radius:var(--radius);
+                              color:var(--text);font-size:.9rem;font-family:var(--font)">
+            </div>
+
+            <div style="display:flex;gap:10px;align-items:center;margin-top:4px">
+                <button id="cu-submit" class="btn btn-primary">✔ Benutzer anlegen</button>
+                <span id="cu-result" style="font-size:.82rem"></span>
+            </div>
         </div>
     </div>
 
@@ -3362,6 +3426,179 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             } finally {
                 resetPwBtn.disabled    = false;
                 resetPwBtn.textContent = '📧 Passwort-Reset senden';
+            }
+        });
+    }
+})();
+</script>
+
+<script>
+// ── Create user overlay ────────────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    const overlay      = document.getElementById('create-user-overlay');
+    const openBtn      = document.getElementById('create-user-btn');
+    const closeBtn     = document.getElementById('create-user-overlay-close');
+    const usernameEl   = document.getElementById('cu-username');
+    const passwordEl   = document.getElementById('cu-password');
+    const password2El  = document.getElementById('cu-password2');
+    const strengthBar  = document.getElementById('cu-strength-bar');
+    const strengthLbl  = document.getElementById('cu-strength-label');
+    const submitBtn    = document.getElementById('cu-submit');
+    const resultEl     = document.getElementById('cu-result');
+    const errorBox     = document.getElementById('create-user-error');
+
+    const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    const pwRules = {
+        len:     p => p.length >= 8,
+        upper:   p => /[A-Z]/.test(p),
+        lower:   p => /[a-z]/.test(p),
+        digit:   p => /[0-9]/.test(p),
+        special: p => /[#?!@$%^&*\-]/.test(p),
+    };
+    const pwLevels = [
+        { label: '',             color: 'transparent', width:  '0%' },
+        { label: 'Sehr schwach', color: '#ef4444',     width: '10%' },
+        { label: 'Schwach',      color: '#f97316',     width: '25%' },
+        { label: 'Mittel',       color: '#f59e0b',     width: '50%' },
+        { label: 'Stark',        color: '#22c55e',     width: '75%' },
+        { label: 'Sehr stark',   color: '#16a34a',     width: '100%' },
+    ];
+
+    function evalPassword(p) {
+        return Object.values(pwRules).filter(fn => fn(p)).length;
+    }
+
+    function updateStrength() {
+        const p     = passwordEl ? passwordEl.value : '';
+        const score = evalPassword(p);
+        const lvl   = p.length === 0 ? pwLevels[0] : (pwLevels[score] || pwLevels[pwLevels.length - 1]);
+        if (strengthBar) { strengthBar.style.width = lvl.width; strengthBar.style.background = lvl.color; }
+        if (strengthLbl) { strengthLbl.textContent = lvl.label; strengthLbl.style.color = lvl.color; }
+    }
+
+    function resetForm() {
+        if (usernameEl)  usernameEl.value  = '';
+        if (passwordEl)  passwordEl.value  = '';
+        if (password2El) password2El.value = '';
+        if (resultEl)    resultEl.textContent = '';
+        if (errorBox)  { errorBox.style.display = 'none'; errorBox.textContent = ''; }
+        updateStrength();
+    }
+
+    function openOverlay() {
+        if (!overlay) return;
+        resetForm();
+        overlay.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        if (usernameEl) usernameEl.focus();
+    }
+
+    function closeOverlay() {
+        if (!overlay) return;
+        overlay.style.display = 'none';
+        document.body.style.overflow = '';
+    }
+
+    if (openBtn)  openBtn.addEventListener('click', openOverlay);
+    if (closeBtn) closeBtn.addEventListener('click', closeOverlay);
+    if (overlay) {
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeOverlay();
+        });
+    }
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && overlay && overlay.style.display !== 'none') closeOverlay();
+    });
+
+    if (passwordEl) passwordEl.addEventListener('input', updateStrength);
+
+    if (submitBtn) {
+        submitBtn.addEventListener('click', async function () {
+            const username  = usernameEl  ? usernameEl.value.trim()  : '';
+            const password  = passwordEl  ? passwordEl.value          : '';
+            const password2 = password2El ? password2El.value         : '';
+
+            if (errorBox) { errorBox.style.display = 'none'; errorBox.textContent = ''; }
+            if (resultEl) resultEl.textContent = '';
+
+            if (!username || !password) {
+                if (errorBox) { errorBox.textContent = 'Bitte alle Pflichtfelder ausfüllen.'; errorBox.style.display = 'block'; }
+                return;
+            }
+            if (evalPassword(password) < 5) {
+                if (errorBox) { errorBox.textContent = 'Das Passwort erfüllt nicht die Sicherheitsanforderungen.'; errorBox.style.display = 'block'; }
+                return;
+            }
+            if (password !== password2) {
+                if (errorBox) { errorBox.textContent = 'Die Passwörter stimmen nicht überein.'; errorBox.style.display = 'block'; }
+                return;
+            }
+
+            submitBtn.disabled    = true;
+            submitBtn.textContent = '⟳ Anlegen …';
+
+            try {
+                const res  = await fetch('../api/admin_user_action.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'create_user', username, password, password2, csrf_token: CSRF }),
+                });
+                const data = await res.json();
+
+                if (data.ok) {
+                    // Add new row to the users table
+                    const tbody = document.querySelector('#users-card table tbody');
+                    if (tbody && data.user) {
+                        const u = data.user;
+                        const tr = document.createElement('tr');
+                        tr.className = 'user-row';
+                        tr.style.cursor = 'pointer';
+                        tr.title = 'Klicken für Benutzerdetails';
+                        tr.dataset.user = JSON.stringify({
+                            id: u.id, username: u.username, email: u.email || '',
+                            email_verified: u.email_verified, default_model: u.default_model || '',
+                        });
+                        tr.innerHTML =
+                            '<td>' + u.username.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</td>' +
+                            '<td><span style="color:var(--text-muted)">–</span></td>' +
+                            '<td><span style="color:var(--success)">✓</span></td>' +
+                            '<td><span style="color:var(--text-muted);font-size:.8rem">Standard</span></td>' +
+                            '<td>' + (u.created_at || '').replace(/&/g,'&amp;') + '</td>' +
+                            '<td><span style="color:var(--text-muted)">noch nie</span></td>';
+                        tbody.appendChild(tr);
+
+                        // Make the new row clickable (same as existing rows)
+                        tr.addEventListener('click', function () {
+                            try {
+                                const user = JSON.parse(this.dataset.user);
+                                const editOverlay = document.getElementById('user-overlay');
+                                if (!editOverlay) return;
+                                document.getElementById('overlay-user-id').value      = user.id;
+                                document.getElementById('overlay-username').textContent = user.username;
+                                document.getElementById('overlay-email').textContent    = user.email || '(keine E-Mail hinterlegt)';
+                                const ms = document.getElementById('overlay-model');
+                                if (ms) ms.value = user.default_model || '';
+                                const mr = document.getElementById('overlay-model-result');
+                                const rr = document.getElementById('overlay-reset-result');
+                                if (mr) mr.textContent = '';
+                                if (rr) rr.textContent = '';
+                                editOverlay.style.display = 'flex';
+                                document.body.style.overflow = 'hidden';
+                            } catch (_) {}
+                        });
+                    }
+                    closeOverlay();
+                } else {
+                    if (errorBox) { errorBox.textContent = data.message || 'Unbekannter Fehler.'; errorBox.style.display = 'block'; }
+                }
+            } catch (err) {
+                if (errorBox) { errorBox.textContent = '✗ Netzwerkfehler: ' + err.message; errorBox.style.display = 'block'; }
+            } finally {
+                submitBtn.disabled    = false;
+                submitBtn.textContent = '✔ Benutzer anlegen';
             }
         });
     }
