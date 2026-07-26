@@ -623,16 +623,74 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         .header-right a { color: var(--text-muted); text-decoration: none; }
         .header-right a:hover { color: var(--text); }
 
+        /* ── Page body (sidebar + main) ─────────────────────────── */
+        .page-body {
+            display: flex;
+            flex: 1;
+            align-items: flex-start;
+            min-height: 0;
+        }
+
+        /* ── Left navigation sidebar ─────────────────────────────── */
+        .sidebar {
+            position: sticky;
+            top: 0;
+            height: 100dvh;
+            width: 200px;
+            min-width: 200px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 20px 0 20px;
+            gap: 2px;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+
+        .sidebar-label {
+            font-size: .7rem;
+            font-weight: 600;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            padding: 14px 16px 6px;
+        }
+
+        .sidebar a {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 16px;
+            font-size: .82rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            border-left: 2px solid transparent;
+            transition: color .12s, background .12s, border-color .12s;
+            white-space: nowrap;
+        }
+
+        .sidebar a:hover {
+            color: var(--text);
+            background: rgba(255,255,255,.04);
+        }
+
+        .sidebar a.active {
+            color: var(--accent);
+            border-left-color: var(--accent);
+            background: rgba(108,99,255,.08);
+        }
+
         /* ── Main layout ─────────────────────────────────────────── */
         main {
             flex: 1;
-            padding: 28px 24px;
-            max-width: 980px;
+            padding: 28px 32px;
+            max-width: 1440px;
             width: 100%;
-            margin: 0 auto;
             display: flex;
             flex-direction: column;
             gap: 28px;
+            min-width: 0;
         }
 
         /* ── Card ────────────────────────────────────────────────── */
@@ -977,6 +1035,26 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         <a href="logout.php">Abmelden</a>
     </div>
 </header>
+
+<div class="page-body">
+
+<!-- ── Left sidebar navigation ──────────────────────────────────────────────── -->
+<aside class="sidebar">
+    <span class="sidebar-label">Übersicht</span>
+    <a href="#stats-card">📊 Statistik</a>
+    <a href="#load-tree-card">🌐 Lastverteilung</a>
+
+    <span class="sidebar-label">Konfiguration</span>
+    <a href="#config-searxng-card">🔎 Websuche</a>
+    <a href="#config-endpoints-card">🔗 Endpunkte</a>
+    <a href="#config-request-handling-card">📨 Anfragenhandling</a>
+    <a href="#config-sd-card">🎨 AUTOMATIC1111</a>
+    <a href="#config-comfy-card">🖼️ ComfyUI</a>
+
+    <span class="sidebar-label">Verwaltung</span>
+    <a href="#users-card">👤 Benutzerkonten</a>
+    <a href="#password-card">🔑 Passwort ändern</a>
+</aside>
 
 <main>
 
@@ -1645,7 +1723,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <!-- ═══════════════════════════════════════════════════════════════════════
          User accounts
     ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card">
+    <div class="card" id="users-card">
         <h2>👤 Benutzerkonten</h2>
 
         <table class="data-table">
@@ -1678,7 +1756,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <!-- ═══════════════════════════════════════════════════════════════════════
          Change password
     ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card">
+    <div class="card" id="password-card">
         <h2>🔑 Passwort ändern</h2>
         <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
@@ -1709,6 +1787,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
 </main>
+
+</div><!-- /.page-body -->
 
 <script>
 (function () {
@@ -2832,6 +2912,40 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     // Refresh every 15 seconds
     setInterval(refreshTree, 15000);
 
+})();
+</script>
+
+<script>
+// ── Sidebar active link highlighting ──────────────────────────────────────────
+(function () {
+    'use strict';
+
+    const sectionIds = [
+        'stats-card', 'load-tree-card', 'config-searxng-card',
+        'config-endpoints-card', 'config-request-handling-card',
+        'config-sd-card', 'config-comfy-card', 'users-card', 'password-card'
+    ];
+
+    const links = {};
+    sectionIds.forEach(id => {
+        const el = document.querySelector(`.sidebar a[href="#${id}"]`);
+        if (el) links[id] = el;
+    });
+
+    function updateActive() {
+        let current = null;
+        sectionIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const rect = el.getBoundingClientRect();
+            if (rect.top <= 80) current = id;
+        });
+        Object.values(links).forEach(a => a.classList.remove('active'));
+        if (current && links[current]) links[current].classList.add('active');
+    }
+
+    window.addEventListener('scroll', updateActive, { passive: true });
+    updateActive();
 })();
 </script>
 
