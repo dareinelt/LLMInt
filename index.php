@@ -172,6 +172,42 @@ if ($defaultModel === '') {
             font-size: .8rem;
         }
 
+        .message.intelligence-upgrade {
+            justify-content: flex-start;
+            padding-top: 0;
+        }
+
+        .intelligence-upgrade-card {
+            margin-left: 40px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 10px 12px;
+            max-width: min(760px, 100%);
+            font-size: .84rem;
+            line-height: 1.45;
+            color: var(--text-muted);
+        }
+
+        .intelligence-upgrade-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .intelligence-upgrade-actions button {
+            border: none;
+            border-radius: 8px;
+            padding: 6px 12px;
+            font-size: .8rem;
+            cursor: pointer;
+            background: var(--surface-alt);
+            color: var(--text);
+        }
+
+        .intelligence-upgrade-actions button:hover { opacity: .92; }
+        .intelligence-upgrade-actions .yes { background: var(--accent); color: #fff; }
+
         /* Streaming cursor */
         .message.assistant .bubble.streaming::after {
             content: '▋';
@@ -469,6 +505,7 @@ if ($defaultModel === '') {
     /* Chat history (role / content pairs sent to the API) */
     let history = [];
     let isStreaming = false;
+    let activeUpgradePrompt = null;
 
     /* ── Session ID (persists conversation server-side) ─── */
     let sessionId = sessionStorage.getItem('chat_session_id') || '';
@@ -677,6 +714,170 @@ if ($defaultModel === '') {
         scrollToBottom();
     }
 
+    function clearUpgradePrompt() {
+        if (activeUpgradePrompt) {
+            activeUpgradePrompt.remove();
+            activeUpgradePrompt = null;
+        }
+    }
+
+    async function executeStreamingRequest(payload, bubble) {
+        const res = await fetch('api/chat.php', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: 'Unbekannter Fehler' }));
+            throw new Error(err.error || 'HTTP ' + res.status);
+        }
+
+        const reader  = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer  = '';
+        let queueNoticeShown = false;
+        let accumulated = '';
+        let upgradeSuggestion = null;
+
+        function processSseLine(line) {
+            const match = line.match(/^data:\s?(.*)$/);
+            if (!match) return false;
+            const raw = match[1].trim();
+            if (!raw) return false;
+            if (raw === '[DONE]') {
+                return true;
+            }
+
+            let obj;
+            try { obj = JSON.parse(raw); } catch { return false; }
+
+            if (obj.error) throw new Error(obj.error);
+            if (obj.status === 'queued' && obj.message) {
+                if (!queueNoticeShown) {
+                    appendSystemMessage(obj.message);
+                    queueNoticeShown = true;
+                }
+                setStatus(obj.message, 'info');
+                return false;
+            }
+            if (obj.type === 'intelligence_upgrade' && obj.upgrade) {
+                upgradeSuggestion = obj.upgrade;
+                return false;
+            }
+
+            const delta = obj.choices?.[0]?.delta?.content ?? '';
+            if (delta && queueNoticeShown) {
+                setStatus('Antwort wird generiert …', 'info');
+            }
+            accumulated += delta;
+            bubble.innerHTML = renderMarkdown(accumulated);
+            scrollToBottom();
+            return false;
+        }
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                processSseLine(line.trimEnd());
+            }
+        }
+
+        buffer += decoder.decode();
+        const remaining = buffer.trim();
+        if (remaining !== '') {
+            processSseLine(remaining);
+        }
+
+        return { accumulated, upgradeSuggestion };
+    }
+
+    function showUpgradePrompt(upgrade, requestMessages, historyAssistantIndex) {
+        if (!upgrade || !upgrade.available || !upgrade.suggested_model) {
+            return;
+        }
+        clearUpgradePrompt();
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message intelligence-upgrade';
+
+        const card = document.createElement('div');
+        card.className = 'intelligence-upgrade-card';
+        card.textContent = upgrade.message || 'Es stehen freie Ressourcen für ein intelligenteres Modell bereit. Fortfahren?';
+
+        const actions = document.createElement('div');
+        actions.className = 'intelligence-upgrade-actions';
+
+        const yesBtn = document.createElement('button');
+        yesBtn.className = 'yes';
+        yesBtn.type = 'button';
+        yesBtn.textContent = 'Ja';
+
+        const noBtn = document.createElement('button');
+        noBtn.type = 'button';
+        noBtn.textContent = 'Nein';
+
+        actions.appendChild(yesBtn);
+        actions.appendChild(noBtn);
+        card.appendChild(actions);
+        wrapper.appendChild(card);
+        chatArea.appendChild(wrapper);
+        activeUpgradePrompt = wrapper;
+        scrollToBottom();
+
+        noBtn.addEventListener('click', () => {
+            clearUpgradePrompt();
+            setStatus('Bereit.', 'ok');
+        });
+
+        yesBtn.addEventListener('click', async () => {
+            if (isStreaming) return;
+            clearUpgradePrompt();
+
+            isStreaming = true;
+            sendBtn.disabled = true;
+            setStatus(`Antwort wird mit ${upgrade.suggested_intelligence || 'größerer'} Intelligenz neu generiert …`, 'info');
+
+            const bubble = appendMessage('assistant', '', true);
+            try {
+                const retryPayload = {
+                    model: upgrade.suggested_model,
+                    messages: JSON.parse(JSON.stringify(requestMessages)),
+                    session_id: sessionId,
+                    stream: true,
+                    temperature: 0.7,
+                };
+                const result = await executeStreamingRequest(retryPayload, bubble);
+                const finalText = result.accumulated || '(Leere Antwort)';
+                bubble.innerHTML = renderMarkdown(finalText);
+                bubble.classList.remove('streaming');
+
+                if (historyAssistantIndex >= 0 && historyAssistantIndex < history.length && history[historyAssistantIndex]?.role === 'assistant') {
+                    history[historyAssistantIndex] = { role: 'assistant', content: finalText };
+                } else {
+                    history.push({ role: 'assistant', content: finalText });
+                }
+
+                setStatus('Bereit.', 'ok');
+            } catch (err) {
+                bubble.textContent = '⚠ Fehler: ' + err.message;
+                bubble.classList.remove('streaming');
+                bubble.style.color = 'var(--error)';
+                setStatus('Fehler: ' + err.message, 'error');
+            } finally {
+                isStreaming = false;
+                sendBtn.disabled = false;
+                userInput.focus();
+            }
+        });
+    }
+
     /* ── Send message ────────────────────────────────────── */
 
     async function sendMessage() {
@@ -686,6 +887,8 @@ if ($defaultModel === '') {
         if (!text)  { userInput.focus(); return; }
         if (!model) { setStatus('Kein Standardmodell konfiguriert. Bitte im Admin-Bereich ein Modell festlegen.', 'error'); return; }
         if (isStreaming) return;
+
+        clearUpgradePrompt();
 
         // Add user message to UI + history.
         appendMessage('user', text);
@@ -704,8 +907,6 @@ if ($defaultModel === '') {
         setStatus('Antwort wird generiert …', 'info');
 
         const bubble = appendMessage('assistant', '', true);
-        let   accumulated = '';
-        let   queueNoticeShown = false;
 
         const payload = {
             model,
@@ -716,81 +917,15 @@ if ($defaultModel === '') {
         };
 
         try {
-            const res = await fetch('api/chat.php', {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify(payload),
-            });
-
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({ error: 'Unbekannter Fehler' }));
-                throw new Error(err.error || 'HTTP ' + res.status);
-            }
-
-            const reader  = res.body.getReader();
-            const decoder = new TextDecoder('utf-8');
-            let   buffer  = '';
-            let   streamEnded = false;
-
-            function processSseLine(line) {
-                const match = line.match(/^data:\s?(.*)$/);
-                if (!match) return;
-                const raw = match[1].trim();
-                if (!raw) return;
-                if (raw === '[DONE]') {
-                    streamEnded = true;
-                    return;
-                }
-
-                let obj;
-                try { obj = JSON.parse(raw); } catch { return; }
-
-                if (obj.error) throw new Error(obj.error);
-                if (obj.status === 'queued' && obj.message) {
-                    if (!queueNoticeShown) {
-                        appendSystemMessage(obj.message);
-                        queueNoticeShown = true;
-                    }
-                    setStatus(obj.message, 'info');
-                    return;
-                }
-
-                const delta = obj.choices?.[0]?.delta?.content ?? '';
-                if (delta && queueNoticeShown) {
-                    setStatus('Antwort wird generiert …', 'info');
-                }
-                accumulated += delta;
-                bubble.innerHTML = renderMarkdown(accumulated);
-                scrollToBottom();
-            }
-
-            while (!streamEnded) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // keep incomplete line
-
-                for (const line of lines) {
-                    processSseLine(line.trimEnd());
-                    if (streamEnded) break;
-                }
-            }
-
-            buffer += decoder.decode();
-
-            // Flush remaining buffer.
-            const remaining = buffer.trim();
-            if (remaining !== '' && !streamEnded) {
-                processSseLine(remaining);
-            }
-
+            const result = await executeStreamingRequest(payload, bubble);
+            const accumulated = result.accumulated;
             bubble.innerHTML = accumulated ? renderMarkdown(accumulated) : '(Leere Antwort)';
             bubble.classList.remove('streaming');
 
             // Store assistant reply in history.
             history.push({ role: 'assistant', content: accumulated });
+            const assistantHistoryIndex = history.length - 1;
+            showUpgradePrompt(result.upgradeSuggestion, messages, assistantHistoryIndex);
             setStatus('Bereit.', 'ok');
         } catch (err) {
             bubble.textContent = '⚠ Fehler: ' + err.message;
@@ -822,6 +957,7 @@ if ($defaultModel === '') {
     clearBtn.addEventListener('click', () => {
         history    = [];
         chatArea.innerHTML = '';
+        clearUpgradePrompt();
         showWelcome();
         setStatus('Verlauf gelöscht.', 'info');
         // Start a new server-side session so the old history is no longer used.

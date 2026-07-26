@@ -97,6 +97,108 @@ function hasActiveEndpointForModel(string $model): bool
 }
 
 /**
+ * Extracts a model "intelligence" value from common model names (e.g. 1b, 4b, 11b, 27b).
+ * Returns null when no such marker can be found.
+ */
+function extractModelIntelligenceB(string $model): ?float
+{
+    if ($model === '') {
+        return null;
+    }
+
+    if (!preg_match_all('/(\d+(?:[.,]\d+)?)\s*b\b/i', $model, $matches) || empty($matches[1])) {
+        return null;
+    }
+
+    $best = null;
+    foreach ($matches[1] as $raw) {
+        $num = (float) str_replace(',', '.', $raw);
+        if ($num <= 0) {
+            continue;
+        }
+        if ($best === null || $num > $best) {
+            $best = $num;
+        }
+    }
+
+    return $best;
+}
+
+/**
+ * Returns a larger model with free capacity (if available) for a given requested model.
+ * Shape:
+ *   [
+ *     'requested_model' => string,
+ *     'requested_intelligence' => float,
+ *     'model' => string,
+ *     'suggested_intelligence' => float,
+ *     'free_endpoints' => int
+ *   ]
+ */
+function getUpgradeModelSuggestionForRequestedModel(string $requestedModel): ?array
+{
+    $requestedIntelligence = extractModelIntelligenceB($requestedModel);
+    if ($requestedIntelligence === null) {
+        return null;
+    }
+
+    $stmt = getDb()->query('
+        SELECT
+            e.default_model,
+            SUM(CASE WHEN COALESCE(r.running_count, 0) < 4 THEN 1 ELSE 0 END) AS free_endpoints
+        FROM endpoints e
+        LEFT JOIN (
+            SELECT endpoint_id, COUNT(*) AS running_count
+            FROM tasks
+            WHERE status = \'running\'
+            GROUP BY endpoint_id
+        ) r ON r.endpoint_id = e.id
+        WHERE e.is_active = 1
+          AND e.default_model <> \'\'
+        GROUP BY e.default_model
+    ');
+
+    $bestModel = null;
+    $bestIntelligence = null;
+    $bestFreeEndpoints = 0;
+
+    foreach ($stmt->fetchAll() as $row) {
+        $candidateModel = (string) ($row['default_model'] ?? '');
+        $freeEndpoints  = (int) ($row['free_endpoints'] ?? 0);
+        if ($candidateModel === '' || $freeEndpoints <= 0) {
+            continue;
+        }
+
+        $candidateIntelligence = extractModelIntelligenceB($candidateModel);
+        if ($candidateIntelligence === null || $candidateIntelligence <= $requestedIntelligence) {
+            continue;
+        }
+
+        if (
+            $bestModel === null
+            || $candidateIntelligence < $bestIntelligence
+            || ($candidateIntelligence === $bestIntelligence && $freeEndpoints > $bestFreeEndpoints)
+        ) {
+            $bestModel = $candidateModel;
+            $bestIntelligence = $candidateIntelligence;
+            $bestFreeEndpoints = $freeEndpoints;
+        }
+    }
+
+    if ($bestModel === null) {
+        return null;
+    }
+
+    return [
+        'requested_model' => $requestedModel,
+        'requested_intelligence' => $requestedIntelligence,
+        'model' => $bestModel,
+        'suggested_intelligence' => $bestIntelligence,
+        'free_endpoints' => $bestFreeEndpoints,
+    ];
+}
+
+/**
  * Mark a task as finished and store optional token usage counts.
  *
  * @param int    $taskId           Primary key of the task row.
