@@ -758,8 +758,7 @@ if ($defaultModel === '') {
             body.className = 'response-details-body';
             body.innerHTML = 'Antwort bearbeitet durch: <strong>Unbekannt</strong>';
 
-            const editorEl = body.querySelector('strong');
-            bubble._responseDetailsEditorEl = editorEl;
+            bubble._responseDetailsBodyEl = body;
 
             detailsWrap.appendChild(summary);
             detailsWrap.appendChild(body);
@@ -887,13 +886,28 @@ if ($defaultModel === '') {
     }
 
     function setResponseDetailsForBubble(bubble, responseDetails) {
-        if (!bubble || !bubble._responseDetailsEditorEl) {
+        if (!bubble || !bubble._responseDetailsBodyEl) {
             return;
         }
-        const raw = responseDetails && typeof responseDetails.processed_by === 'string'
+        const alias = (responseDetails && typeof responseDetails.processed_by === 'string' && responseDetails.processed_by.trim())
             ? responseDetails.processed_by.trim()
+            : 'Unbekannt';
+        const elapsed = (responseDetails && typeof responseDetails.elapsed_seconds === 'number')
+            ? responseDetails.elapsed_seconds
+            : null;
+        const searchQuery = (responseDetails && typeof responseDetails.search_query === 'string')
+            ? responseDetails.search_query.trim()
             : '';
-        bubble._responseDetailsEditorEl.textContent = raw || 'Unbekannt';
+
+        let html;
+        if (elapsed !== null && searchQuery) {
+            html = `Bearbeitet durch <strong>${escapeHtmlContent(alias)}</strong> in ${elapsed} Sekunde${elapsed === 1 ? '' : 'n'} unter zur Hilfenahme aktueller Suchergebnisse zum Thema <strong>${escapeHtmlContent(searchQuery)}</strong>`;
+        } else if (elapsed !== null) {
+            html = `Bearbeitet durch <strong>${escapeHtmlContent(alias)}</strong> in ${elapsed} Sekunde${elapsed === 1 ? '' : 'n'}`;
+        } else {
+            html = `Antwort bearbeitet durch: <strong>${escapeHtmlContent(alias)}</strong>`;
+        }
+        bubble._responseDetailsBodyEl.innerHTML = html;
     }
 
     function showUpgradePrompt(upgrade, requestMessages, historyAssistantIndex) {

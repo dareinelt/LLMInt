@@ -870,6 +870,7 @@ $baseUrl  = rtrim($endpoint['base_url'], '/');
 $timeout  = max(1, (int) $endpoint['timeout']);
 $responseDetails = buildResponseDetails($endpoint);
 $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
+$requestStart = microtime(true);
 
 // Ensure the task is always marked finished, even on unexpected PHP termination.
 $taskFinished = false;
@@ -942,6 +943,7 @@ if ($useTools) {
     $messages = $payload['messages'];
     $usage = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     $finalData = null;
+    $searchQueryUsed = '';
 
     // Build the tool list from active integrations.
     $tools = [];
@@ -1054,6 +1056,7 @@ if ($useTools) {
                     try {
                         $toolResult = runSearxngSearch($searxngBaseUrl, substr($query, 0, 400), min($timeout, 15));
                         completeSearchLog($searchLogId, 'done');
+                        $searchQueryUsed = $query;
                     } catch (Throwable $e) {
                         completeSearchLog($searchLogId, 'error');
                         $toolResult = ['error' => $e->getMessage()];
@@ -1108,6 +1111,10 @@ if ($useTools) {
     ];
     if ($intelligenceUpgrade !== null) {
         $finalData['intelligence_upgrade'] = buildIntelligenceUpgradePayload($intelligenceUpgrade);
+    }
+    $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
+    if ($searchQueryUsed !== '') {
+        $responseDetails['search_query'] = $searchQueryUsed;
     }
     $finalData['response_details'] = $responseDetails;
 
@@ -1252,6 +1259,7 @@ if ($stream) {
         saveConversationSession($sessionId, $model, $sessionMessages);
     }
     if ($streamStatus === 'done' && ($dataWritten || headers_sent())) {
+        $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
         emitIntelligenceUpgradeSse($intelligenceUpgrade);
         emitResponseDetailsSse($responseDetails);
     }
@@ -1344,10 +1352,12 @@ if ($sessionId !== '' && is_array($data)) {
 
 // Forward the raw LM Studio response.
 if (is_array($data) && $intelligenceUpgrade !== null) {
+    $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
     $data['intelligence_upgrade'] = buildIntelligenceUpgradePayload($intelligenceUpgrade);
     $data['response_details'] = $responseDetails;
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } elseif (is_array($data)) {
+    $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
     $data['response_details'] = $responseDetails;
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } else {
