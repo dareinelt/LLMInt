@@ -1,91 +1,104 @@
 # LLMInt / KHWF KI
 
-Eine PHP-Webanwendung für lokale oder interne KI-Infrastrukturen.  
-Die Anwendung kombiniert:
-
-- einen Chat-Proxy für **LM Studio**-kompatible LLM-Endpunkte,
-- eine Admin-Oberfläche für **mehrere Endpunkte mit Load-Balancing**,
-- persistente **Gesprächssitzungen** mit automatischer Verfallszeit,
-- optionale **Websuche über SearXNG**,
-- optionale **Bildgenerierung über AUTOMATIC1111**,
-- optionale **Bildgenerierung über ComfyUI**,
-- dokumentbasierte **RAG-Suche** über hochgeladene Inhalte,
-- sowie eine einfache Statistik- und Monitoring-Ansicht.
-
-Die Oberfläche ist bewusst schlank gehalten: kein Framework, kein Build-Schritt, kein Node-Setup – nur PHP, MySQL und die angebundenen KI-Dienste.
+LLMInt ist eine leichtgewichtige PHP-Webanwendung für lokale oder interne KI-Infrastrukturen.  
+Sie bündelt Chat, Tool-Aufrufe, Endpunkt-Verwaltung und Monitoring in einer Oberfläche – ohne Framework-Ballast und ohne Build-Pipeline.
 
 ---
 
 ## Inhaltsverzeichnis
 
-- [Funktionsumfang](#funktionsumfang)
-- [Architektur im Überblick](#architektur-im-überblick)
+- [Ziel und Einsatzbereich](#ziel-und-einsatzbereich)
+- [Kernfunktionen](#kernfunktionen)
+- [Systemüberblick](#systemüberblick)
 - [Voraussetzungen](#voraussetzungen)
 - [Installation](#installation)
-- [Starten der Anwendung](#starten-der-anwendung)
-- [Ersteinrichtung im Admin-Bereich](#ersteinrichtung-im-admin-bereich)
-- [Load-Balancing und Routing](#load-balancing-und-routing)
-- [Intelligence Upgrade](#intelligence-upgrade)
-- [Gesprächssitzungen](#gesprächssitzungen)
+- [Schnellstart](#schnellstart)
+- [Admin-Ersteinrichtung](#admin-ersteinrichtung)
+- [Funktionsweise im Betrieb](#funktionsweise-im-betrieb)
 - [Optionale Integrationen](#optionale-integrationen)
 - [Projektstruktur](#projektstruktur)
 - [Wichtige API-Endpunkte](#wichtige-api-endpunkte)
 - [Datenbanktabellen](#datenbanktabellen)
-- [Sicherheitshinweise](#sicherheitshinweise)
-- [Betriebshinweise](#betriebshinweise)
+- [Sicherheit](#sicherheit)
+- [Betrieb und Wartung](#betrieb-und-wartung)
 - [Troubleshooting](#troubleshooting)
 - [Lizenz](#lizenz)
 
 ---
 
-## Funktionsumfang
+## Ziel und Einsatzbereich
 
-### Chat / LLM
+LLMInt richtet sich an Teams, Labore und interne Plattformen, die:
 
-- Chat-Oberfläche mit Streaming-Antworten per SSE (Server-Sent Events)
-- optionaler System-Prompt pro Unterhaltung
-- Markdown-Rendering für Assistentenantworten
-- persistente Gesprächssitzungen – Nachrichtenverlauf wird serverseitig gespeichert und verfällt automatisch nach 30 Minuten Inaktivität
-- zentrale Auswahl eines Standardmodells über den Admin-Bereich
-- Weiterleitung von Chat-Anfragen an den jeweils passendsten LLM-Endpunkt
-- optionaler Hinweis auf ein leistungsfähigeres Modell (Intelligence Upgrade), wenn freie Kapazität vorhanden ist
-- Anzeige des verarbeitenden Endpunkts (`processed_by`) in der Chat-Antwort
-- Erfassung von Tasks und Token-Nutzung für Statistikzwecke
+- mehrere LLM-Endpunkte parallel betreiben,
+- Nutzeranfragen stabil und fair verteilen wollen,
+- Websuche/Bildgenerierung als Tools im Chat benötigen,
+- und eine nachvollziehbare, wartbare Lösung mit klassischem PHP/MySQL-Stack bevorzugen.
 
-### Administration
+Typische Szenarien:
 
-- Login-geschützter Admin-Bereich
-- Verwaltung mehrerer LM-Studio-kompatibler Endpunkte inkl. optionalem **Alias**
-- Aktivieren/Deaktivieren einzelner Endpunkte
-- Laden verfügbarer Modelle direkt vom konfigurierten Endpunkt
-- Verwaltung von AUTOMATIC1111- und ComfyUI-Endpunkten
-- Testen externer Verbindungen aus der Oberfläche heraus
-- Passwortänderung für den Admin-Benutzer
-- Live-Ansicht der Lastverteilung
-
-### Erweiterungen / Tools
-
-- optionales Tool `search_web` über SearXNG – Websuche im Chat
-- optionales Tool `generate_image` für AUTOMATIC1111 – Bildgenerierung mit Stable Diffusion
-- optionales Tool `generate_image_comfy` für ComfyUI – alternative Bildgenerierung
-- optionales Tool `query_documents` – chunk-basierte RAG-Suche über eigene und global freigegebene Dokumente
+- Campus- oder Unternehmensinterne KI-Assistenz,
+- Multi-Host-Betrieb von LM-Studio-kompatiblen Modellen,
+- zentrale Oberfläche für Chat + RAG + Bildgenerierung,
+- robuste Entwicklungs- und Testumgebungen für lokale KI-Dienste.
 
 ---
 
-## Architektur im Überblick
+## Kernfunktionen
 
-Die Anwendung besteht aus drei zentralen Bereichen:
+### 1) Chat-Proxy mit Streaming
+
+- SSE-Streaming (Server-Sent Events) für unmittelbare Antwortausgabe
+- Persistente Konversationen in `conversation_sessions`
+- Optionaler System-Prompt pro Sitzung
+- Nachvollziehbarkeit über `response_details.processed_by` (Alias oder Base URL)
+
+### 2) Multi-Endpunkt-Routing mit Lastverteilung
+
+- Endpunkte in `endpoints`, Task-Tracking in `tasks`
+- Gruppierung über `default_model`
+- Least-Loaded-Auswahl mit Fairness-Verhalten bei gleicher Last
+- Maximal 4 parallele Tasks je Endpunkt
+- Wartelogik bei voller Auslastung
+
+### 3) Intelligente Modell-Empfehlung
+
+- Optionales `intelligence_upgrade`-Signal nach Antworten
+- Hinweis auf stärkeres freies Modell (z. B. 8b → 70b)
+- Kein automatischer Modellwechsel ohne Nutzereinwilligung
+
+### 4) Erweiterbare Tool-Nutzung im Chat
+
+- `search_web` über SearXNG (optional)
+- `generate_image` über AUTOMATIC1111 (optional)
+- `generate_image_comfy` über ComfyUI (optional)
+- `query_documents` für RAG über eigene + global freigegebene Dokumente
+
+### 5) Admin-Oberfläche für Betrieb und Kontrolle
+
+- Login-geschützter Admin-Bereich
+- Endpunktverwaltung inkl. Alias, Aktivstatus, Timeout, Sortierung
+- Modellabruf je Endpunkt
+- Verbindungstests und Laststatistiken
+- Passwortverwaltung für Admin-Konto
+
+---
+
+## Systemüberblick
+
+Die Anwendung gliedert sich in drei Ebenen:
 
 1. **Frontend (`index.php`)**  
-   Stellt die Chat-Oberfläche bereit und sendet Anfragen an den PHP-Proxy.
+   Chat-UI mit Streaming, Modell- und Tool-Interaktion.
 
-2. **Proxy- und Integrations-APIs (`api/`)**  
-   Regeln die Kommunikation mit LLM-, Websuche- und Bildgenerierungs-Endpunkten.
+2. **API-Schicht (`api/`)**  
+   Routing, Tool-Ausführung, externe Integrationen, Antwort-Forwarding.
 
-3. **Admin-Bereich (`admin/`)**  
-   Dient zur Konfiguration, Überwachung und Pflege der angebundenen Dienste.
+3. **Administration (`admin/`)**  
+   Konfiguration, Überwachung und Pflege der Infrastruktur.
 
-Die Konfiguration liegt überwiegend in der MySQL-Datenbank. Beim Start stellt `db.php` fehlende Kern-Tabellen automatisch bereit; `setup.php` richtet die vollständige Struktur inklusive Default-Admin ein.
+Konfigurationsdaten werden primär in MySQL gespeichert.  
+`setup.php` initialisiert die vollständige Struktur, `db.php` ergänzt bei Bedarf fehlende Kern-Tabellen zur Laufzeit.
 
 ---
 
@@ -93,27 +106,25 @@ Die Konfiguration liegt überwiegend in der MySQL-Datenbank. Beim Start stellt `
 
 ### Pflicht
 
-| Komponente | Empfohlen |
+| Komponente | Empfehlung |
 |---|---|
-| PHP | >= 8.0 mit `curl` und `pdo_mysql` |
-| MySQL / MariaDB | aktuelle Version |
-| LM Studio oder kompatibler OpenAI-/REST-Endpunkt | erreichbar im Netzwerk |
+| PHP | >= 8.0 mit `curl`, `pdo_mysql` |
+| MySQL/MariaDB | aktuelle Version |
+| LLM-Endpunkt(e) | LM-Studio-kompatibel, im Netzwerk erreichbar |
 
 ### Optional
 
 | Komponente | Zweck |
 |---|---|
-| SearXNG | aktuelle Websuche im Chat |
-| AUTOMATIC1111 | Bildgenerierung über Stable Diffusion |
-| ComfyUI | alternative Bildgenerierung |
+| SearXNG | Websuche im Chat (`search_web`) |
+| AUTOMATIC1111 | Stable-Diffusion-Bildgenerierung (`generate_image`) |
+| ComfyUI | Alternative Bildpipeline (`generate_image_comfy`) |
 
 ---
 
 ## Installation
 
 ### 1. Repository bereitstellen
-
-Projekt in ein Webverzeichnis oder lokales Arbeitsverzeichnis legen:
 
 ```bash
 git clone https://github.com/dareinelt/LLMInt.git
@@ -122,17 +133,13 @@ cd LLMInt
 
 ### 2. Datenbank anlegen
 
-Eine Datenbank anlegen, z. B.:
-
 ```sql
 CREATE DATABASE llmint CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-### 3. Datenbankzugang per Umgebungsvariablen setzen
+### 3. DB-Umgebungsvariablen setzen
 
-Die Anwendung liest die Verbindung aus folgenden Variablen:
-
-| Variable | Standardwert |
+| Variable | Standard |
 |---|---|
 | `DB_HOST` | `localhost` |
 | `DB_PORT` | `3306` |
@@ -147,7 +154,7 @@ export DB_HOST=127.0.0.1
 export DB_PORT=3306
 export DB_NAME=llmint
 export DB_USER=llmint
-export DB_PASS='mein-passwort'
+export DB_PASS='starkes-passwort'
 ```
 
 ### 4. Setup ausführen
@@ -156,184 +163,127 @@ export DB_PASS='mein-passwort'
 php setup.php
 ```
 
-Das Setup:
+Das Setup ist idempotent und kann bei Bedarf erneut ausgeführt werden.
 
-- erstellt alle benötigten Tabellen (idempotent – kann gefahrlos mehrfach aufgerufen werden),
-- initialisiert Standardwerte in der `settings`-Tabelle,
-- legt bei Bedarf einen ersten LLM-Endpunkt an,
-- und erzeugt einen Standard-Admin-Benutzer.
-
-**Standard-Zugang nach dem ersten Setup:**
+Standardzugang nach Erstinstallation:
 
 - Benutzername: `admin`
 - Passwort: `admin`
 
-> Dieses Passwort sofort nach dem ersten Login ändern.
-
-> **Hinweis:** `setup.php` nach der Ersteinrichtung schützen oder aus dem Webverzeichnis entfernen.
+> Nach dem ersten Login sofort Passwort ändern und `setup.php` absichern oder entfernen.
 
 ---
 
-## Starten der Anwendung
+## Schnellstart
 
-Für lokale Entwicklung reicht der eingebaute PHP-Server:
+Für lokale Entwicklung:
 
 ```bash
-cd /pfad/zum/projekt
 php -S localhost:8080
 ```
 
-Danach:
+Danach erreichbar unter:
 
 - Chat: <http://localhost:8080>
 - Admin: <http://localhost:8080/admin/login.php>
 
-Für produktive Nutzung sollte die Anwendung hinter einem regulären Webserver (Apache, nginx) oder Reverse Proxy betrieben werden.
+Für produktive Nutzung wird ein regulärer Webserver oder Reverse Proxy empfohlen.
 
 ---
 
-## Ersteinrichtung im Admin-Bereich
+## Admin-Ersteinrichtung
 
-Nach dem Login unter `/admin/login.php` sollten typischerweise diese Schritte erfolgen:
+Empfohlene Reihenfolge:
 
-1. **Admin-Passwort ändern**
-2. **LLM-Endpunkte eintragen**
-3. optional **SearXNG** aktivieren
-4. optional **AUTOMATIC1111-Endpunkte** eintragen
-5. optional **ComfyUI-Endpunkte** eintragen
-6. gewünschte **Standardmodelle** pro Endpunkt setzen
+1. Admin-Passwort ändern
+2. LLM-Endpunkte eintragen und aktivieren
+3. Standardmodell(e) setzen
+4. Optional SearXNG hinterlegen
+5. Optional SD-/Comfy-Endpunkte hinterlegen
+6. Modell- und Verbindungstests durchführen
 
 ### LLM-Endpunkte
 
-Für jeden LLM-Endpunkt werden gepflegt:
+Pflicht-/Option-Felder:
 
-- **Base URL**, z. B. `http://127.0.0.1:1234/v1`
-- **Alias** (optional) – ein lesbarer Anzeigename, der im Chat als `processed_by` zurückgegeben wird; fehlt er, wird die Base URL verwendet
-- **Timeout** (Sekunden)
-- **Standardmodell** – legt die Load-Balancing-Gruppe fest
-- **Aktiv/Inaktiv-Status**
-- **Sortierreihenfolge**
+- Base URL (z. B. `http://127.0.0.1:1234/v1`)
+- Alias (optional, für lesbare Ausgabe in `processed_by`)
+- Timeout (Sekunden)
+- `default_model` (relevant für Routing-Gruppe)
+- Aktivstatus und Sortierung
 
-Über **„Modelle laden"** kann die Anwendung die verfügbaren Modelle eines Endpunkts direkt abrufen.
+### Bild-Endpunkte
 
-### Bildendpunkte
-
-Zusätzlich können verwaltet werden:
-
-- **AUTOMATIC1111**-Instanzen mit Base URL und Timeout
-- **ComfyUI**-Instanzen mit Base URL, Timeout und optionalem Default-Checkpoint
+- AUTOMATIC1111: Base URL + Timeout
+- ComfyUI: Base URL + Timeout + optionaler Default-Checkpoint
 
 ---
 
-## Load-Balancing und Routing
+## Funktionsweise im Betrieb
 
-### LLM-Endpunkte
+### Routing und Lastverteilung (LLM)
 
-LLM-Endpunkte werden in der Tabelle `endpoints` gespeichert.
+- Alle aktiven Endpunkte einer Modellgruppe (`default_model`) konkurrieren um neue Requests.
+- Die Auswahl erfolgt über die geringste aktuelle Last.
+- Bei Gleichstand werden länger ungenutzte Endpunkte bevorzugt.
+- Pro Endpunkt sind maximal 4 gleichzeitige Tasks zugelassen.
+- Bei Vollauslastung wartet der Request, statt hart fehlzuschlagen.
 
-- Endpunkte mit demselben `default_model` bilden eine **Gruppe**
-- pro Gruppe wird der **am wenigsten belastete Endpunkt** gewählt (Least-Loaded-First)
-- bei gleicher Last bevorzugt der Balancer den Endpunkt, der zuletzt am längsten nicht genutzt wurde (Round-Robin-Effekt)
-- Endpunkte, die noch nie eine Aufgabe erhalten haben, werden bevorzugt
-- pro Endpunkt sind maximal **4 parallele Tasks** vorgesehen
-- sind alle 4 Slots aller passenden Endpunkte belegt, wartet der Chat-Request automatisch und blendet im Chat einen Hinweis ein, bis wieder Kapazität frei wird
-- jede Task-Zuteilung wird innerhalb einer DB-Transaktion atomisch registriert, um Doppelbuchungen unter Last zu verhindern
-- jeder Chat-Request wird in `tasks` protokolliert
-- Token-Werte aus Antworten werden gespeichert und für Statistiken genutzt
+### Task-Tracking
 
-Das Routing erfolgt über:
+- Jede Anfrage wird in `tasks` erfasst.
+- Statuswechsel und Nutzungsdaten (inkl. Token) unterstützen Monitoring und Auswertung.
 
-- `api/balancer.php` – Endpunkt-Auswahl und Task-Registrierung
-- `api/chat.php` – Chat-Proxy inkl. Tool-Ausführung und SSE-Forwarding
+### Konversationsspeicher
 
-### AUTOMATIC1111
+- Sitzungen werden über eine eindeutige `session_id` geführt.
+- Nachrichtenverlauf wird serverseitig gespeichert.
+- Inaktive Sitzungen verfallen nach 30 Minuten und werden automatisch bereinigt.
 
-- Endpunkte: `sd_endpoints`
-- Task-Tracking: `sd_tasks`
-- Routing: `api/sd_balancer.php`
-- Ausgabeordner: `sd_output/`
+### Antwort-Metadaten
 
-### ComfyUI
+SSE kann zusätzlich liefern:
 
-- Endpunkte: `comfy_endpoints`
-- Task-Tracking: `comfy_tasks`
-- Routing: `api/comfy_balancer.php`
-- Ausgabeordner: `sd_output/`
-
----
-
-## Intelligence Upgrade
-
-Nach Abschluss einer Chat-Antwort prüft das System, ob ein **leistungsfähigeres Modell** (d. h. mit höherem Parameteranzahl im Modellnamen, z. B. `11b` statt `4b`) mit freier Kapazität verfügbar ist.
-
-- Ist ein solches Modell verfügbar, sendet `api/chat.php` ein SSE-Ereignis vom Typ `intelligence_upgrade` an den Client.
-- Die Nutzeroberfläche kann diesen Hinweis anzeigen und dem Nutzer anbieten, die Anfrage mit dem stärkeren Modell zu wiederholen.
-- Das Upgrade ist optional und erfordert eine explizite Nutzerinteraktion – die ursprüngliche Antwort bleibt vollständig erhalten.
-- Die Erkennung basiert auf dem Muster `<Zahl>b` im Modellnamen (z. B. `llama-3-8b`, `llama-3.3-70b`).
-
----
-
-## Gesprächssitzungen
-
-Chat-Verläufe werden serverseitig in der Tabelle `conversation_sessions` gespeichert.
-
-- Jede Sitzung ist über eine eindeutige `session_id` (64-stelliger Hex-Token) identifiziert.
-- Bei jedem neuen Beitrag wird der vollständige Nachrichtenverlauf (Role/Content-Paare) aktualisiert.
-- Sitzungen verfallen automatisch nach **30 Minuten Inaktivität** – abgelaufene Einträge werden periodisch bereinigt.
-- Fällt ein Endpunkt während einer laufenden Konversation aus, kann der Verlauf nahtlos an einen anderen Endpunkt übergeben werden.
-- Die Sitzungspersistenz ermöglicht mehrstufige Tool-Dialoge (z. B. Websuche → Folgeantwort) ohne Datenverlust bei einem Verbindungsabbruch.
+- `response_details` mit `processed_by`
+- `intelligence_upgrade` bei verfügbarem stärkerem Modell
 
 ---
 
 ## Optionale Integrationen
 
-### SearXNG
+### SearXNG (`search_web`)
 
-Wenn im Admin-Bereich eine SearXNG-Basis-URL hinterlegt ist:
+Wenn `settings.searxng_base_url` gesetzt ist:
 
-- stellt `api/chat.php` dem Modell automatisch das Tool `search_web` bereit,
-- Suchanfragen werden über SearXNG ausgeführt,
-- Ergebnisse (bis zu 5 Treffer mit Titel, URL, Snippet und Quellenangabe) werden dem Modell zurückgegeben,
-- und Suchläufe werden in `search_logs` protokolliert.
+- wird das Tool `search_web` dem Modell bereitgestellt,
+- Suchen laufen über SearXNG,
+- Treffer werden strukturiert zurückgegeben,
+- Suchvorgänge werden in `search_logs` protokolliert.
 
-Wichtig:
+Wichtig: Nur die Basis-URL eintragen, nicht `/search`.
 
-- nur die **Basis-URL** eintragen, nicht `/search`
-- der Pfad `/search` wird intern automatisch ergänzt
+### AUTOMATIC1111 (`generate_image`)
 
-Beispiel:
+Bei aktivem SD-Endpunkt:
 
-```text
-https://search.example.org
-```
+- Tool-Aufruf über Chat möglich,
+- Generierung via `api/sd_generate.php`,
+- Ergebnisse als Datei in `sd_output/`.
 
-### AUTOMATIC1111
+### ComfyUI (`generate_image_comfy`)
 
-Wenn mindestens ein aktiver SD-Endpunkt konfiguriert ist, kann das Chat-System das Tool `generate_image` bereitstellen.
+Bei aktivem Comfy-Endpunkt:
 
-Parameter des Tools:
+- Tool-Aufruf über Chat möglich,
+- Generierung via `api/comfy_generate.php`,
+- Default-Workflow für txt2img,
+- Ergebnisse in `sd_output/`.
 
-| Parameter | Typ | Beschreibung |
-|---|---|---|
-| `prompt` | string (Pflicht) | Englischer Text-Prompt |
-| `negative_prompt` | string | Elemente, die im Bild vermieden werden sollen |
-| `width` | integer | Bildbreite in Pixeln (64–2048, Standard: 512) |
-| `height` | integer | Bildhöhe in Pixeln (64–2048, Standard: 512) |
+### Dokument-RAG (`query_documents`)
 
-Die eigentliche Bildgenerierung läuft über:
-
-- `api/sd_generate.php`
-- API-Pfade `/sdapi/v1/txt2img` und `/sdapi/v1/img2img`
-
-Gespeicherte Bilder landen unter `sd_output/`. Das Modell erhält einen Markdown-Image-Link zur direkten Einbettung in die Antwort.
-
-### ComfyUI
-
-Wenn mindestens ein aktiver ComfyUI-Endpunkt konfiguriert ist, kann das Chat-System das Tool `generate_image_comfy` bereitstellen.
-
-Die Anwendung verwendet standardmäßig einen einfachen txt2img-Workflow mit KSampler. Falls kein Checkpoint am Endpunkt hinterlegt ist, versucht die Anwendung automatisch den ersten verfügbaren Checkpoint des Servers zu verwenden.
-
-Gespeicherte Bilder landen unter `sd_output/`.
+- Durchsucht eigene Uploads plus global freigegebene Dokumente,
+- liefert Treffer zur Kontextanreicherung im Chat,
+- unterstützt Wissensarbeit ohne externes Vektordatenbank-Setup.
 
 ---
 
@@ -342,27 +292,28 @@ Gespeicherte Bilder landen unter `sd_output/`.
 ```text
 .
 ├── README.md
+├── Demo.md
 ├── index.php                 # Chat-UI
-├── setup.php                 # Initiales Setup für DB und Admin
-├── db.php                    # DB-Verbindung, Settings-Helper, Runtime-Schema, Sitzungsverwaltung
-├── config.php                # Legacy-Kompatibilität für Basis-Konfiguration
+├── setup.php                 # Initiales Setup
+├── db.php                    # DB-Helper, Runtime-Schema, Sessions
+├── config.php                # Legacy-Basis-Konfiguration
 ├── admin/
 │   ├── login.php             # Admin-Login
 │   ├── logout.php            # Admin-Logout
-│   ├── index.php             # Admin-Dashboard (Endpunkte, Einstellungen, Statistiken)
-│   └── load_stats.php        # Live-Statistiken als JSON
+│   ├── index.php             # Admin-Dashboard
+│   └── load_stats.php        # Live-Statistiken (JSON)
 ├── api/
-│   ├── balancer.php          # LLM-Load-Balancing und Intelligence-Upgrade-Logik
-│   ├── chat.php              # Chat-Proxy inkl. Tool-Ausführung und SSE-Streaming
-│   ├── models.php            # Modellliste eines LLM-Endpunkts
-│   ├── test_searxng.php      # Verbindungstest für SearXNG
-│   ├── sd_balancer.php       # Load-Balancing für AUTOMATIC1111
-│   ├── sd_generate.php       # Bildgenerierung über AUTOMATIC1111
-│   ├── sd_checkpoints.php    # Checkpoint-Abfrage für AUTOMATIC1111
-│   ├── comfy_balancer.php    # Load-Balancing für ComfyUI
-│   ├── comfy_generate.php    # Bildgenerierung über ComfyUI
-│   └── comfy_checkpoints.php # Checkpoint-Abfrage für ComfyUI
-└── sd_output/                # gespeicherte generierte Bilder
+│   ├── chat.php              # Chat-Proxy + Tool-Logik
+│   ├── balancer.php          # LLM-Balancing + Task-Handling
+│   ├── models.php            # Modellabruf
+│   ├── test_searxng.php      # SearXNG-Verbindungstest
+│   ├── sd_balancer.php       # SD-Balancing
+│   ├── sd_generate.php       # SD-Generierung
+│   ├── sd_checkpoints.php    # SD-Checkpoint-Liste
+│   ├── comfy_balancer.php    # Comfy-Balancing
+│   ├── comfy_generate.php    # Comfy-Generierung
+│   └── comfy_checkpoints.php # Comfy-Checkpoint-Liste
+└── sd_output/                # Generierte Bilder
 ```
 
 ---
@@ -373,38 +324,38 @@ Gespeicherte Bilder landen unter `sd_output/`.
 
 | Pfad | Methode | Zweck |
 |---|---|---|
-| `api/chat.php` | POST | Chat-Request an den passenden LLM-Endpunkt weiterleiten |
-| `api/models.php` | GET | verfügbare Modelle eines Endpunkts abrufen |
+| `api/chat.php` | POST | Chat-Anfrage an passenden LLM-Endpunkt weiterleiten |
+| `api/models.php` | GET | Modelle eines Endpunkts abrufen |
 
-`api/chat.php` gibt im SSE-Stream zusätzliche Ereignistypen zurück:
+Zusätzliche SSE-Ereignisse:
 
 | SSE-Typ | Inhalt |
 |---|---|
-| `response_details` | `processed_by` – Alias oder Base URL des gewählten Endpunkts |
-| `intelligence_upgrade` | Informationen zu einem leistungsfähigeren Modell mit freier Kapazität |
+| `response_details` | `processed_by` (Alias oder Base URL) |
+| `intelligence_upgrade` | Hinweis auf leistungsfähigeres Modell |
 
 ### Suche
 
 | Pfad | Methode | Zweck |
 |---|---|---|
-| `api/test_searxng.php` | GET | SearXNG-Verbindung aus dem Admin testen |
+| `api/test_searxng.php` | GET | SearXNG-Konnektivität prüfen |
 
 ### Bildgenerierung
 
 | Pfad | Methode | Zweck |
 |---|---|---|
 | `api/sd_generate.php` | POST | Bild über AUTOMATIC1111 erzeugen |
-| `api/sd_checkpoints.php` | GET | AUTOMATIC1111-Checkpoints abrufen |
+| `api/sd_checkpoints.php` | GET | SD-Checkpoints abrufen |
 | `api/comfy_generate.php` | POST | Bild über ComfyUI erzeugen |
-| `api/comfy_checkpoints.php` | GET | ComfyUI-Checkpoints abrufen |
+| `api/comfy_checkpoints.php` | GET | Comfy-Checkpoints abrufen |
 
-### Administration / Monitoring
+### Administration
 
 | Pfad | Methode | Zweck |
 |---|---|---|
 | `admin/login.php` | GET/POST | Anmeldung |
 | `admin/logout.php` | GET | Abmeldung |
-| `admin/load_stats.php` | GET | Live-Metriken für das Dashboard |
+| `admin/load_stats.php` | GET | Live-Metriken |
 
 ---
 
@@ -412,41 +363,39 @@ Gespeicherte Bilder landen unter `sd_output/`.
 
 | Tabelle | Zweck |
 |---|---|
-| `settings` | allgemeine Konfiguration (z. B. `searxng_base_url`, `default_model`) |
-| `users` | Admin-Benutzer |
-| `endpoints` | LLM-Endpunkte inkl. Alias, Modell, Timeout und Sortierung |
-| `tasks` | LLM-Aufgaben inkl. Status und Tokenverbrauch |
-| `conversation_sessions` | persistierter Chat-Verlauf; verfällt nach 30 Min. Inaktivität |
-| `search_logs` | Websuchen über SearXNG |
+| `settings` | globale Konfiguration (u. a. `default_model`, `searxng_base_url`) |
+| `users` | Admin-Accounts |
+| `endpoints` | LLM-Endpunkte inkl. Alias, Modell, Timeout, Aktivstatus |
+| `tasks` | LLM-Task-Lebenszyklus und Nutzungswerte |
+| `conversation_sessions` | serverseitige Chat-Sitzungen |
+| `search_logs` | Protokoll der Websuche |
 | `sd_endpoints` | AUTOMATIC1111-Endpunkte |
-| `sd_tasks` | Bildgenerierungsaufgaben für AUTOMATIC1111 |
-| `comfy_endpoints` | ComfyUI-Endpunkte inkl. Default-Checkpoint |
-| `comfy_tasks` | Bildgenerierungsaufgaben für ComfyUI |
-
-> **Hinweis:** Die Tabellen `conversation_sessions`, `sd_endpoints`, `sd_tasks`, `comfy_endpoints` und `comfy_tasks` werden von `db.php` beim ersten Verbindungsaufbau automatisch angelegt, sofern sie fehlen. Ein erneuter Lauf von `setup.php` ist nicht erforderlich.
+| `sd_tasks` | SD-Task-Verwaltung |
+| `comfy_endpoints` | ComfyUI-Endpunkte |
+| `comfy_tasks` | ComfyUI-Task-Verwaltung |
 
 ---
 
-## Sicherheitshinweise
+## Sicherheit
 
-- `setup.php` nur für die Ersteinrichtung verwenden und **danach schützen oder aus dem Webverzeichnis entfernen**
-- das Standardpasswort `admin / admin` niemals im Betrieb beibehalten
-- den Admin-Bereich nicht ungeschützt öffentlich exponieren
-- Zugriffe möglichst über Reverse Proxy, VPN oder internes Netzwerk begrenzen
-- nur vertrauenswürdige interne KI-Endpunkte anbinden
-- prüfen, ob Schreibrechte für `sd_output/` korrekt gesetzt sind (empfohlen: `755`)
-- Datenbankzugangsdaten ausschließlich per Umgebungsvariablen übergeben – niemals im Quellcode hinterlegen
+- `setup.php` nach Ersteinrichtung absichern oder entfernen
+- Standardpasswort niemals im Betrieb belassen
+- Admin-Bereich nicht offen ins Internet stellen
+- Zugriff nach Möglichkeit auf internes Netz/VPN begrenzen
+- Nur vertrauenswürdige Endpunkte anbinden
+- Schreibrechte für `sd_output/` kontrollieren
+- DB-Zugang ausschließlich über Umgebungsvariablen verwalten
 
 ---
 
-## Betriebshinweise
+## Betrieb und Wartung
 
-- Die Anwendung speichert generierte Bilder lokal unter `sd_output/` – auf ausreichend Speicherplatz achten
-- Der Chat verwendet das im Admin gesetzte Standardmodell; fehlt es, greift die Anwendung auf das erste aktive Endpunkt-Modell zurück
-- Fällt ein Endpunkt aus oder ist ausgelastet, greift das Routing auf andere passende aktive Endpunkte zurück
-- Abgelaufene Gesprächssitzungen werden automatisch bereinigt (probabilistisch bei jeder Anfrage)
-- `config.php` dient primär der Rückwärtskompatibilität älterer Einbindungen
-- Das Runtime-Schema in `db.php` hilft älteren Installationen, neue Kern-Tabellen automatisch nachzuziehen – Datenbankmigrationen müssen daher nicht manuell eingespielt werden
+- Speicherverbrauch in `sd_output/` regelmäßig prüfen
+- Timeout-Werte entsprechend Netzwerklatenz anpassen
+- Endpunktstatus im Admin überwachen
+- Bei Modelländerungen `default_model`-Gruppen konsistent halten
+- Bei Lastspitzen zusätzliche Endpunkte pro Modellgruppe ergänzen
+- Alte Chat-Sitzungen werden automatisch bereinigt (kein manueller Cron nötig)
 
 ---
 
@@ -454,39 +403,39 @@ Gespeicherte Bilder landen unter `sd_output/`.
 
 ### „Datenbankfehler. Bitte zuerst setup.php ausführen."
 
-- prüfen, ob die DB-Umgebungsvariablen korrekt gesetzt sind
-- prüfen, ob die Datenbank existiert und der Benutzer ausreichende Rechte hat
+- DB-Variablen prüfen
+- Benutzerrechte prüfen
 - `php setup.php` erneut ausführen
 
-### Keine Modelle im Admin ladbar
+### Keine Modelle im Admin abrufbar
 
-- prüfen, ob die LLM-Base-URL korrekt ist (z. B. `http://127.0.0.1:1234/v1`)
-- prüfen, ob der Endpunkt den Pfad `/models` bereitstellt
-- prüfen, ob das Zielsystem vom Webserver aus netzwerkseitig erreichbar ist
-- Timeout-Wert im Admin ggf. erhöhen
+- Base URL prüfen (inkl. `/v1`, falls nötig)
+- Erreichbarkeit vom Webserver prüfen
+- Timeout erhöhen
+- API-Kompatibilität des Zielsystems prüfen
 
-### Chat meldet „Kein Standardmodell konfiguriert"
+### „Kein Standardmodell konfiguriert"
 
-- im Admin-Bereich für mindestens einen aktiven LLM-Endpunkt ein `default_model` setzen
-- sicherstellen, dass der Endpunkt als aktiv markiert ist
+- Für mindestens einen aktiven Endpunkt `default_model` setzen
+- Aktivstatus der Endpunkte prüfen
 
-### SearXNG funktioniert nicht
+### SearXNG liefert keine Ergebnisse
 
-- nur die Basis-URL speichern, nicht `/search` (Beispiel: `https://search.example.org`)
-- Verbindung über den Test-Button im Admin prüfen
-- sicherstellen, dass die Instanz JSON-Antworten liefert (`format=json`)
+- Nur Basis-URL speichern
+- Verbindung über Admin testen
+- JSON-Ausgabe sicherstellen (`format=json`)
 
-### Bildgenerierung funktioniert nicht
+### Bildgenerierung schlägt fehl
 
-- Base URL und Netzwerkzugriff prüfen
-- bei AUTOMATIC1111 sicherstellen, dass die API erreichbar ist (`/sdapi/v1/txt2img`)
-- bei ComfyUI prüfen, ob ein Checkpoint verfügbar ist; ggf. Default-Checkpoint im Admin eintragen
-- Schreibrechte für `sd_output/` prüfen
+- Endpunkt und Netzwerk prüfen
+- SD-API-Verfügbarkeit (`/sdapi/v1/txt2img`) prüfen
+- Bei ComfyUI Checkpoint-Verfügbarkeit prüfen
+- Dateirechte von `sd_output/` prüfen
 
-### Intelligence-Upgrade-Hinweis erscheint nie
+### Kein Intelligence-Upgrade-Hinweis
 
-- der Hinweis wird nur angezeigt, wenn ein Modell mit einem höheren `Xb`-Marker im Namen verfügbar und der zugehörige Endpunkt aktiv ist
-- sicherstellen, dass Modellnamen das Muster `<Zahl>b` enthalten (z. B. `llama-3-8b`, `qwen2.5-72b`)
+- Nur verfügbar bei stärkerem freien Modell
+- Modellnamen müssen ein erkennbares `<Zahl>b`-Muster enthalten
 
 ---
 
