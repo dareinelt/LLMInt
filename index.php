@@ -166,6 +166,28 @@ if ($defaultModel === '') {
             white-space: normal;
         }
 
+        .response-details {
+            margin-top: 8px;
+            margin-left: 40px;
+            width: calc(100% - 40px);
+            color: var(--text-muted);
+            font-size: .8rem;
+        }
+
+        .response-details > summary {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .response-details-body {
+            margin-top: 6px;
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface);
+            color: var(--text);
+        }
+
         /* System message */
         .message.system-msg .bubble {
             color: var(--text-muted);
@@ -697,6 +719,26 @@ if ($defaultModel === '') {
         }
 
         wrapper.appendChild(bubble);
+
+        if (role === 'assistant') {
+            const detailsWrap = document.createElement('details');
+            detailsWrap.className = 'response-details';
+
+            const summary = document.createElement('summary');
+            summary.textContent = 'Details zur Antwort';
+
+            const body = document.createElement('div');
+            body.className = 'response-details-body';
+            body.innerHTML = 'Antwort bearbeitet durch: <strong>Unbekannt</strong>';
+
+            const editorEl = body.querySelector('strong');
+            bubble._responseDetailsEditorEl = editorEl;
+
+            detailsWrap.appendChild(summary);
+            detailsWrap.appendChild(body);
+            wrapper.appendChild(detailsWrap);
+        }
+
         chatArea.appendChild(wrapper);
         scrollToBottom();
 
@@ -739,6 +781,7 @@ if ($defaultModel === '') {
         let queueNoticeShown = false;
         let accumulated = '';
         let upgradeSuggestion = null;
+        let responseDetails = null;
 
         function processSseLine(line) {
             const match = line.match(/^data:\s?(.*)$/);
@@ -763,6 +806,10 @@ if ($defaultModel === '') {
             }
             if (obj.type === 'intelligence_upgrade' && obj.upgrade) {
                 upgradeSuggestion = obj.upgrade;
+                return false;
+            }
+            if (obj.type === 'response_details' && obj.details) {
+                responseDetails = obj.details;
                 return false;
             }
 
@@ -795,7 +842,17 @@ if ($defaultModel === '') {
             processSseLine(remaining);
         }
 
-        return { accumulated, upgradeSuggestion };
+        return { accumulated, upgradeSuggestion, responseDetails };
+    }
+
+    function setResponseDetailsForBubble(bubble, responseDetails) {
+        if (!bubble || !bubble._responseDetailsEditorEl) {
+            return;
+        }
+        const raw = responseDetails && typeof responseDetails.processed_by === 'string'
+            ? responseDetails.processed_by.trim()
+            : '';
+        bubble._responseDetailsEditorEl.textContent = raw || 'Unbekannt';
     }
 
     function showUpgradePrompt(upgrade, requestMessages, historyAssistantIndex) {
@@ -856,6 +913,7 @@ if ($defaultModel === '') {
                 const result = await executeStreamingRequest(retryPayload, bubble);
                 const finalText = result.accumulated || '(Leere Antwort)';
                 bubble.innerHTML = renderMarkdown(finalText);
+                setResponseDetailsForBubble(bubble, result.responseDetails);
                 bubble.classList.remove('streaming');
 
                 if (historyAssistantIndex >= 0 && historyAssistantIndex < history.length && history[historyAssistantIndex]?.role === 'assistant') {
@@ -920,6 +978,7 @@ if ($defaultModel === '') {
             const result = await executeStreamingRequest(payload, bubble);
             const accumulated = result.accumulated;
             bubble.innerHTML = accumulated ? renderMarkdown(accumulated) : '(Leere Antwort)';
+            setResponseDetailsForBubble(bubble, result.responseDetails);
             bubble.classList.remove('streaming');
 
             // Store assistant reply in history.

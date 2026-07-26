@@ -671,7 +671,27 @@ function emitIntelligenceUpgradeSse(?array $suggestion): void
     ]);
 }
 
-function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null): void
+function buildResponseDetails(array $endpoint): array
+{
+    $alias = trim((string) ($endpoint['alias'] ?? ''));
+    $baseUrl = trim((string) ($endpoint['base_url'] ?? ''));
+    return [
+        'processed_by' => $alias !== '' ? $alias : $baseUrl,
+    ];
+}
+
+function emitResponseDetailsSse(?array $responseDetails): void
+{
+    if ($responseDetails === null) {
+        return;
+    }
+    emitSseData([
+        'type' => 'response_details',
+        'details' => $responseDetails,
+    ]);
+}
+
+function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null, ?array $responseDetails = null): void
 {
     $content = normalizeAssistantContent($data['choices'][0]['message']['content'] ?? '');
     $id = (string) ($data['id'] ?? ('chatcmpl-' . bin2hex(random_bytes(8))));
@@ -706,6 +726,7 @@ function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null): voi
         ]],
     ]);
     emitIntelligenceUpgradeSse($upgradeSuggestion);
+    emitResponseDetailsSse($responseDetails);
     emitSseData('[DONE]');
 }
 
@@ -847,6 +868,7 @@ $endpoint = $slot['endpoint'];
 $taskId   = $slot['task_id'];
 $baseUrl  = rtrim($endpoint['base_url'], '/');
 $timeout  = max(1, (int) $endpoint['timeout']);
+$responseDetails = buildResponseDetails($endpoint);
 $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
 
 // Ensure the task is always marked finished, even on unexpected PHP termination.
@@ -872,7 +894,7 @@ $endpointRetries = 2;
  */
 $switchEndpoint = function () use (
     $model,
-    &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries
+    &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries, &$responseDetails
 ): bool {
     if ($endpointRetries <= 0) {
         return false;
@@ -893,6 +915,7 @@ $switchEndpoint = function () use (
     $taskId   = $newSlot['task_id'];
     $baseUrl  = rtrim($endpoint['base_url'], '/');
     $timeout  = max(1, (int) $endpoint['timeout']);
+    $responseDetails = buildResponseDetails($endpoint);
     $url      = $baseUrl . '/chat/completions';
     return true;
 };
@@ -1086,6 +1109,7 @@ if ($useTools) {
     if ($intelligenceUpgrade !== null) {
         $finalData['intelligence_upgrade'] = buildIntelligenceUpgradePayload($intelligenceUpgrade);
     }
+    $finalData['response_details'] = $responseDetails;
 
     $taskFinished = true;
     completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total']);
@@ -1103,7 +1127,7 @@ if ($useTools) {
     }
 
     if ($clientRequestedStream) {
-        emitSyntheticStream($finalData, $intelligenceUpgrade);
+        emitSyntheticStream($finalData, $intelligenceUpgrade, $responseDetails);
     } else {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode($finalData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -1229,6 +1253,7 @@ if ($stream) {
     }
     if ($streamStatus === 'done' && ($dataWritten || headers_sent())) {
         emitIntelligenceUpgradeSse($intelligenceUpgrade);
+        emitResponseDetailsSse($responseDetails);
     }
 
     if ($streamCurlErr !== '') {
@@ -1320,6 +1345,10 @@ if ($sessionId !== '' && is_array($data)) {
 // Forward the raw LM Studio response.
 if (is_array($data) && $intelligenceUpgrade !== null) {
     $data['intelligence_upgrade'] = buildIntelligenceUpgradePayload($intelligenceUpgrade);
+    $data['response_details'] = $responseDetails;
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+} elseif (is_array($data)) {
+    $data['response_details'] = $responseDetails;
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } else {
     echo $body;

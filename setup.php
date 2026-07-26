@@ -48,6 +48,7 @@ $db->exec("
 $db->exec("
     CREATE TABLE IF NOT EXISTS endpoints (
         id            INT          NOT NULL AUTO_INCREMENT,
+        alias         VARCHAR(120) NOT NULL DEFAULT '',
         base_url      VARCHAR(500) NOT NULL,
         timeout       INT          NOT NULL DEFAULT 120,
         default_model VARCHAR(255) NOT NULL DEFAULT '',
