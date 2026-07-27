@@ -18,6 +18,7 @@ if (isset($_SESSION['admin_user'])) {
 }
 
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/lib/ldap_auth.php';
 
 $error = '';
 
@@ -27,7 +28,26 @@ if (empty($_SESSION['login_csrf'])) {
 }
 $csrfToken = $_SESSION['login_csrf'];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// ── SSO: auto-login via REMOTE_USER (Windows Authentication / Kerberos) ───────
+if (ldapSsoEnabled()) {
+    $ssoUser = ldapSsoUsername();
+    if ($ssoUser !== '') {
+        $userId = ldapProvisionUser(['username' => $ssoUser, 'dn' => '', 'email' => '', 'display_name' => '']);
+        if ($userId !== null) {
+            session_regenerate_id(true);
+            $_SESSION['admin_user'] = $ssoUser;
+            $_SESSION['admin_id']   = $userId;
+            $_SESSION['requires_password_change'] = false;
+            header('Location: index.php');
+            exit;
+        }
+        // Conflict with a local account of the same name – fall through to manual login
+        $error = 'SSO-Anmeldung fehlgeschlagen: Benutzername wird bereits als lokales Konto verwendet.';
+    }
+}
+
+// ── Form POST ─────────────────────────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $error === '') {
     if (($_POST['csrf_token'] ?? '') !== $csrfToken) {
         $error = 'Ungültiger CSRF-Token. Bitte die Seite neu laden.';
     } else {
@@ -37,34 +57,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($username === '' || $password === '') {
             $error = 'Bitte Benutzername und Passwort eingeben.';
         } else {
-            try {
-                $stmt = getDb()->prepare(
-                    'SELECT id, username, password_hash, requires_password_change
-                       FROM users WHERE username = ? LIMIT 1'
-                );
-                $stmt->execute([$username]);
-                $user = $stmt->fetch();
+            $authenticated = false;
 
-                if ($user && password_verify($password, $user['password_hash'])) {
-                    session_regenerate_id(true);
-                    $_SESSION['admin_user'] = $user['username'];
-                    $_SESSION['admin_id']   = (int) $user['id'];
-                    $_SESSION['requires_password_change'] = !empty($user['requires_password_change']);
-
-                    getDb()->prepare('UPDATE users SET last_login = NOW() WHERE id = ?')
-                           ->execute([$user['id']]);
-
-                    header('Location: index.php');
-                    exit;
-                } else {
-                    $error = 'Ungültige Anmeldedaten.';
+            // ── LDAP auth (tried first when enabled) ──────────────────────────
+            if (ldapEnabled()) {
+                try {
+                    $adInfo = ldapAuthenticate($username, $password);
+                    if ($adInfo !== null) {
+                        $userId = ldapProvisionUser($adInfo);
+                        if ($userId !== null) {
+                            session_regenerate_id(true);
+                            $_SESSION['admin_user'] = $adInfo['username'];
+                            $_SESSION['admin_id']   = $userId;
+                            $_SESSION['requires_password_change'] = false;
+                            header('Location: index.php');
+                            exit;
+                        }
+                        // Conflict: a local account already has this username
+                        $error         = 'AD-Benutzername ist bereits als lokales Konto vergeben. Bitte einen Administrator kontaktieren.';
+                        $authenticated = true; // AD was fine, but provisioning blocked
+                    }
+                } catch (RuntimeException $e) {
+                    // LDAP misconfigured or unreachable – log and fall through to local auth
+                    error_log('[LDAP] ldapAuthenticate failed: ' . $e->getMessage());
                 }
-            } catch (PDOException $e) {
-                $error = 'Datenbankfehler. Bitte zuerst setup.php ausführen.';
+            }
+
+            // ── Local auth (always tried when LDAP did not conclusively succeed) ──
+            if (!$authenticated) {
+                try {
+                    $stmt = getDb()->prepare(
+                        'SELECT id, username, password_hash, requires_password_change, auth_source
+                           FROM users WHERE username = ? LIMIT 1'
+                    );
+                    $stmt->execute([$username]);
+                    $user = $stmt->fetch();
+
+                    if ($user && ($user['auth_source'] ?? 'local') === 'ldap') {
+                        // AD user trying to log in with a password: reject with helpful message
+                        $error = 'Dieses Konto wird über Active Directory verwaltet. Bitte das AD-Passwort verwenden.';
+                    } elseif ($user && password_verify($password, $user['password_hash'])) {
+                        session_regenerate_id(true);
+                        $_SESSION['admin_user'] = $user['username'];
+                        $_SESSION['admin_id']   = (int) $user['id'];
+                        $_SESSION['requires_password_change'] = !empty($user['requires_password_change']);
+
+                        getDb()->prepare('UPDATE users SET last_login = NOW() WHERE id = ?')
+                               ->execute([$user['id']]);
+
+                        header('Location: index.php');
+                        exit;
+                    } else {
+                        $error = 'Ungültige Anmeldedaten.';
+                    }
+                } catch (PDOException $e) {
+                    $error = 'Datenbankfehler. Bitte zuerst setup.php ausführen.';
+                }
             }
         }
     }
 }
+
+$ldapActive = ldapEnabled();
 ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -84,6 +138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             --text:        #ececf1;
             --text-muted:  #8e8ea0;
             --error:       #ef4444;
+            --info:        #3b82f6;
             --radius:      12px;
             --font:        ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
         }
@@ -152,6 +207,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             margin-bottom: 18px;
         }
 
+        .info-msg {
+            background: rgba(59,130,246,.1);
+            border: 1px solid rgba(59,130,246,.35);
+            border-radius: var(--radius);
+            color: var(--info);
+            font-size: .82rem;
+            padding: 8px 12px;
+            margin-bottom: 18px;
+        }
+
         .btn-primary {
             width: 100%;
             padding: 10px;
@@ -199,6 +264,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="error-msg"><?= htmlspecialchars($error) ?></div>
     <?php endif; ?>
 
+    <?php if ($ldapActive && $error === ''): ?>
+        <div class="info-msg">🏢 AD-Anmeldung aktiv – Windows-Benutzername und AD-Passwort verwenden.</div>
+    <?php endif; ?>
+
     <form method="POST" action="">
         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
         <div class="form-group">
@@ -220,3 +289,4 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </div>
 </body>
 </html>
+

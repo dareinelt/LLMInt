@@ -33,6 +33,20 @@ $smtpPass       = getSetting('smtp_pass', '');
 $smtpFromEmail  = getSetting('smtp_from_email', '');
 $smtpFromName   = getSetting('smtp_from_name', 'LLMInt');
 
+// ── LDAP / Active Directory settings ─────────────────────────────────────────
+$ldapEnabled         = getSetting('ldap_enabled',          '0') === '1';
+$ldapHost            = getSetting('ldap_host',             '');
+$ldapPort            = getSetting('ldap_port',             '389');
+$ldapUseSsl          = getSetting('ldap_use_ssl',          '0') === '1';
+$ldapDomain          = getSetting('ldap_domain',           '');
+$ldapBaseDn          = getSetting('ldap_base_dn',          '');
+$ldapBindDn          = getSetting('ldap_bind_dn',          '');
+$ldapBindPassword    = getSetting('ldap_bind_password',    '');
+$ldapUserAttr        = getSetting('ldap_user_attr',        'sAMAccountName');
+$ldapEmailAttr       = getSetting('ldap_email_attr',       'mail');
+$ldapDisplayNameAttr = getSetting('ldap_display_name_attr','displayName');
+$ldapSspiEnabled     = getSetting('ldap_sspi_enabled',     '0') === '1';
+
 // ── Generate CSRF token ───────────────────────────────────────────────────────
 
 if (empty($_SESSION['csrf_token'])) {
@@ -236,6 +250,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashOk = 'SMTP-Einstellungen gespeichert.';
             }
 
+        // ── Save LDAP / AD settings ───────────────────────────────────────────
+        } elseif ($action === 'save_ldap_settings') {
+            $newLdapEnabled         = isset($_POST['ldap_enabled'])      ? '1' : '0';
+            $newLdapHost            = trim($_POST['ldap_host']           ?? '');
+            $newLdapPort            = max(1, min(65535, (int) ($_POST['ldap_port'] ?? 389)));
+            $newLdapUseSsl          = isset($_POST['ldap_use_ssl'])      ? '1' : '0';
+            $newLdapDomain          = trim($_POST['ldap_domain']         ?? '');
+            $newLdapBaseDn          = trim($_POST['ldap_base_dn']        ?? '');
+            $newLdapBindDn          = trim($_POST['ldap_bind_dn']        ?? '');
+            $newLdapBindPassword    = $_POST['ldap_bind_password']       ?? '';
+            $newLdapUserAttr        = trim($_POST['ldap_user_attr']      ?? 'sAMAccountName');
+            $newLdapEmailAttr       = trim($_POST['ldap_email_attr']     ?? 'mail');
+            $newLdapDisplayNameAttr = trim($_POST['ldap_display_name_attr'] ?? 'displayName');
+            $newLdapSspiEnabled     = isset($_POST['ldap_sspi_enabled']) ? '1' : '0';
+
+            if ($newLdapEnabled === '1' && $newLdapHost === '') {
+                $flashError = 'LDAP-Host darf nicht leer sein, wenn LDAP aktiviert ist.';
+            } else {
+                setSetting('ldap_enabled',          $newLdapEnabled);
+                setSetting('ldap_host',             $newLdapHost);
+                setSetting('ldap_port',             (string) $newLdapPort);
+                setSetting('ldap_use_ssl',          $newLdapUseSsl);
+                setSetting('ldap_domain',           $newLdapDomain);
+                setSetting('ldap_base_dn',          $newLdapBaseDn);
+                setSetting('ldap_bind_dn',          $newLdapBindDn);
+                setSetting('ldap_user_attr',        $newLdapUserAttr ?: 'sAMAccountName');
+                setSetting('ldap_email_attr',       $newLdapEmailAttr ?: 'mail');
+                setSetting('ldap_display_name_attr',$newLdapDisplayNameAttr ?: 'displayName');
+                setSetting('ldap_sspi_enabled',     $newLdapSspiEnabled);
+                // Only overwrite password if the field was not left blank
+                if ($newLdapBindPassword !== '') {
+                    setSetting('ldap_bind_password', $newLdapBindPassword);
+                }
+
+                $ldapEnabled         = $newLdapEnabled === '1';
+                $ldapHost            = $newLdapHost;
+                $ldapPort            = (string) $newLdapPort;
+                $ldapUseSsl          = $newLdapUseSsl === '1';
+                $ldapDomain          = $newLdapDomain;
+                $ldapBaseDn          = $newLdapBaseDn;
+                $ldapBindDn          = $newLdapBindDn;
+                $ldapUserAttr        = $newLdapUserAttr ?: 'sAMAccountName';
+                $ldapEmailAttr       = $newLdapEmailAttr ?: 'mail';
+                $ldapDisplayNameAttr = $newLdapDisplayNameAttr ?: 'displayName';
+                $ldapSspiEnabled     = $newLdapSspiEnabled === '1';
+                if ($newLdapBindPassword !== '') { $ldapBindPassword = $newLdapBindPassword; }
+
+                $flashOk = $ldapEnabled
+                    ? 'Active-Directory-Einstellungen gespeichert.'
+                    : 'Active-Directory-Integration deaktiviert.';
+            }
+
         // ── Add SD endpoint ───────────────────────────────────────────────────
         } elseif ($action === 'add_sd_endpoint') {
             $newUrl     = trim($_POST['sd_ep_base_url'] ?? '');
@@ -378,7 +444,7 @@ $endpoints = $db->query(
 )->fetchAll();
 
 $users = $db->query(
-    'SELECT id, username, email, email_verified, default_model, can_upload_documents, created_at, last_login
+    'SELECT id, username, email, email_verified, default_model, can_upload_documents, auth_source, created_at, last_login
        FROM users ORDER BY id'
 )->fetchAll();
 
@@ -1278,6 +1344,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     <span class="sidebar-label">Konfiguration</span>
     <a href="#config-smtp-card">📧 E-Mail (SMTP)</a>
+    <a href="#config-ldap-card">🏢 Active Directory</a>
     <a href="#config-searxng-card">🔎 Websuche</a>
     <a href="#config-endpoints-card">🔗 Endpunkte</a>
     <a href="#config-request-handling-card">📨 Anfragenhandling</a>
@@ -1399,6 +1466,145 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             </form>
         </details>
     </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Active Directory / LDAP
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-ldap-card">
+        <details class="config-panel" id="config-ldap">
+            <summary>🏢 Active Directory (LDAP)</summary>
+            <form method="POST">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+            <input type="hidden" name="action"     value="save_ldap_settings">
+
+            <!-- Enable toggle -->
+            <div class="form-group">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="ldap-enabled" name="ldap_enabled" value="1"
+                           <?= $ldapEnabled ? 'checked' : '' ?>>
+                    LDAP / Active-Directory-Anmeldung aktivieren
+                </label>
+                <p class="hint">
+                    Wenn aktiv, können sich Benutzer mit ihren AD-Zugangsdaten anmelden.
+                    Konten werden beim ersten Login automatisch angelegt (Just-in-Time Provisioning).
+                </p>
+            </div>
+
+            <div id="ldap-settings-fields" <?= $ldapEnabled ? '' : 'style="display:none"' ?>>
+
+            <!-- Server -->
+            <div class="form-row">
+                <div class="form-group" style="flex:3">
+                    <label for="ldap-host">LDAP-/AD-Server</label>
+                    <input type="text" id="ldap-host" name="ldap_host"
+                           placeholder="ad.example.com"
+                           value="<?= htmlspecialchars($ldapHost) ?>">
+                </div>
+                <div class="form-group" style="flex:1;min-width:110px">
+                    <label for="ldap-port">Port</label>
+                    <input type="number" id="ldap-port" name="ldap_port"
+                           min="1" max="65535"
+                           value="<?= htmlspecialchars($ldapPort) ?>">
+                </div>
+                <div class="form-group" style="flex:1;min-width:120px;justify-content:flex-end">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-top:22px">
+                        <input type="checkbox" id="ldap-use-ssl" name="ldap_use_ssl" value="1"
+                               <?= $ldapUseSsl ? 'checked' : '' ?>>
+                        LDAPS (SSL)
+                    </label>
+                </div>
+            </div>
+
+            <!-- Domain / Base-DN -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="ldap-domain">Domain (für UPN-Bind)</label>
+                    <input type="text" id="ldap-domain" name="ldap_domain"
+                           placeholder="example.com"
+                           value="<?= htmlspecialchars($ldapDomain) ?>">
+                    <p class="hint">Wird als <code>benutzername@domain</code> für den Bind verwendet. Leer lassen, wenn kein UPN-Bind gewünscht.</p>
+                </div>
+                <div class="form-group">
+                    <label for="ldap-base-dn">Base-DN (Nutzersuche)</label>
+                    <input type="text" id="ldap-base-dn" name="ldap_base_dn"
+                           placeholder="DC=example,DC=com"
+                           value="<?= htmlspecialchars($ldapBaseDn) ?>">
+                    <p class="hint">Basis-Pfad für die LDAP-Suche nach Benutzerattributen (z. B. E-Mail). Optional.</p>
+                </div>
+            </div>
+
+            <!-- Service account -->
+            <p class="hint" style="margin-bottom:12px">
+                <strong>Optionales Dienstkonto</strong> – wird für die Nutzerattribut-Suche verwendet.
+                Ohne Dienstkonto werden E-Mail und Anzeigename nicht ausgelesen (kein anonymer AD-Zugriff).
+            </p>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="ldap-bind-dn">Dienstkonto-DN</label>
+                    <input type="text" id="ldap-bind-dn" name="ldap_bind_dn"
+                           autocomplete="off"
+                           placeholder="CN=svc-ldap,OU=ServiceAccounts,DC=example,DC=com"
+                           value="<?= htmlspecialchars($ldapBindDn) ?>">
+                </div>
+                <div class="form-group">
+                    <label for="ldap-bind-password">Dienstkonto-Passwort</label>
+                    <input type="password" id="ldap-bind-password" name="ldap_bind_password"
+                           autocomplete="new-password"
+                           placeholder="<?= $ldapBindPassword !== '' ? '(gespeichert – leer lassen zum Beibehalten)' : 'Passwort eingeben' ?>">
+                    <p class="hint">Leer lassen, um das gespeicherte Passwort beizubehalten.</p>
+                </div>
+            </div>
+
+            <!-- Attribute mapping -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="ldap-user-attr">Benutzername-Attribut</label>
+                    <input type="text" id="ldap-user-attr" name="ldap_user_attr"
+                           placeholder="sAMAccountName"
+                           value="<?= htmlspecialchars($ldapUserAttr) ?>">
+                </div>
+                <div class="form-group">
+                    <label for="ldap-email-attr">E-Mail-Attribut</label>
+                    <input type="text" id="ldap-email-attr" name="ldap_email_attr"
+                           placeholder="mail"
+                           value="<?= htmlspecialchars($ldapEmailAttr) ?>">
+                </div>
+                <div class="form-group">
+                    <label for="ldap-display-name-attr">Anzeigename-Attribut</label>
+                    <input type="text" id="ldap-display-name-attr" name="ldap_display_name_attr"
+                           placeholder="displayName"
+                           value="<?= htmlspecialchars($ldapDisplayNameAttr) ?>">
+                </div>
+            </div>
+
+            <!-- SSO -->
+            <div class="form-group">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="ldap-sspi" name="ldap_sspi_enabled" value="1"
+                           <?= $ldapSspiEnabled ? 'checked' : '' ?>>
+                    Windows-SSO via <code>REMOTE_USER</code> aktivieren
+                </label>
+                <p class="hint">
+                    Erfordert Apache <code>mod_auth_kerb</code> / <code>mod_auth_ntlm_winbind</code>
+                    oder IIS Windows Authentication. Der Webserver muss <code>REMOTE_USER</code>
+                    / <code>AUTH_USER</code> setzen.
+                </p>
+            </div>
+
+            </div><!-- #ldap-settings-fields -->
+
+            <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
+                <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                <button type="button" id="ldap-test-btn" class="btn"
+                        <?= $ldapEnabled ? '' : 'disabled title="Zuerst LDAP aktivieren und Einstellungen speichern"' ?>>
+                    🔌 Verbindung testen
+                </button>
+                <span id="ldap-test-result" style="font-size:.85rem"></span>
+            </div>
+            </form>
+        </details>
+    </div>
+
     <div class="card" id="config-searxng-card">
         <details class="config-panel" id="config-searxng" open>
             <summary>🔎 Websuche</summary>
@@ -2222,12 +2428,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         'email_verified'       => (int) ($u['email_verified'] ?? 0),
                         'default_model'        => $u['default_model'] ?? '',
                         'can_upload_documents' => (int) ($u['can_upload_documents'] ?? 0),
+                        'auth_source'          => $u['auth_source'] ?? 'local',
                     ]), ENT_QUOTES) ?>'
                     style="cursor:pointer" title="Klicken für Benutzerdetails">
                         <td>
                             <?= htmlspecialchars($u['username']) ?>
                             <?php if ($u['username'] === $_SESSION['admin_user']): ?>
                                 <span class="badge-you">Du</span>
+                            <?php endif; ?>
+                            <?php if (($u['auth_source'] ?? 'local') === 'ldap'): ?>
+                                <span class="badge-you" style="background:rgba(59,130,246,.18);color:#3b82f6;border-color:rgba(59,130,246,.35)">AD</span>
                             <?php endif; ?>
                         </td>
                         <td><?= $u['email'] !== null ? htmlspecialchars($u['email']) : '<span style="color:var(--text-muted)">–</span>' ?></td>
@@ -2328,14 +2538,21 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
 
-            <!-- Password reset -->
-            <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:12px">
-                Sendet eine E-Mail mit einem Link zum Zurücksetzen des Passworts.
-                Das Konto wird beim nächsten Login zur Passwortänderung aufgefordert.
-            </p>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-                <button id="overlay-reset-pw" class="btn">📧 Passwort-Reset senden</button>
-                <span id="overlay-reset-result" style="font-size:.82rem"></span>
+            <!-- Password reset (hidden for LDAP users) -->
+            <div id="overlay-pw-reset-section">
+                <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:12px">
+                    Sendet eine E-Mail mit einem Link zum Zurücksetzen des Passworts.
+                    Das Konto wird beim nächsten Login zur Passwortänderung aufgefordert.
+                </p>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                    <button id="overlay-reset-pw" class="btn">📧 Passwort-Reset senden</button>
+                    <span id="overlay-reset-result" style="font-size:.82rem"></span>
+                </div>
+            </div>
+            <div id="overlay-ldap-notice" style="display:none">
+                <p style="font-size:.85rem;color:#3b82f6">
+                    🏢 Dieses Konto wird über Active Directory verwaltet. Passwortänderungen erfolgen direkt im AD.
+                </p>
             </div>
 
             <input type="hidden" id="overlay-user-id" value="">
@@ -3801,6 +4018,60 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     });
 })();
 
+// ── LDAP settings toggle ──────────────────────────────────────────────────────
+(function () {
+    'use strict';
+    const enableChk = document.getElementById('ldap-enabled');
+    const fields    = document.getElementById('ldap-settings-fields');
+    const testBtn   = document.getElementById('ldap-test-btn');
+    if (!enableChk || !fields) return;
+    enableChk.addEventListener('change', function () {
+        fields.style.display = enableChk.checked ? '' : 'none';
+        if (testBtn) testBtn.disabled = !enableChk.checked;
+    });
+})();
+
+// ── LDAP connection test ──────────────────────────────────────────────────────
+(function () {
+    'use strict';
+
+    const testBtn    = document.getElementById('ldap-test-btn');
+    const testResult = document.getElementById('ldap-test-result');
+
+    if (!testBtn || !testResult) return;
+
+    const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    testBtn.addEventListener('click', async function () {
+        testBtn.disabled    = true;
+        testBtn.textContent = '⟳ Teste …';
+        testResult.textContent = '';
+
+        const host    = (document.getElementById('ldap-host')          || {}).value || '';
+        const port    = parseInt((document.getElementById('ldap-port') || {}).value) || 389;
+        const useSsl  = !!(document.getElementById('ldap-use-ssl')     || {}).checked;
+        const bindDn  = (document.getElementById('ldap-bind-dn')       || {}).value || '';
+        const bindPass= (document.getElementById('ldap-bind-password') || {}).value || '';
+
+        try {
+            const res  = await fetch('../api/test_ldap.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ csrf_token: CSRF, ldap_host: host, ldap_port: port, ldap_use_ssl: useSsl, ldap_bind_dn: bindDn, ldap_bind_pass: bindPass }),
+            });
+            const data = await res.json();
+            testResult.style.color = data.ok ? 'var(--success)' : 'var(--error)';
+            testResult.textContent = (data.ok ? '✓ ' : '✗ ') + data.message;
+        } catch (e) {
+            testResult.style.color = 'var(--error)';
+            testResult.textContent = '✗ Netzwerkfehler: ' + e.message;
+        } finally {
+            testBtn.disabled    = false;
+            testBtn.textContent = '🔌 Verbindung testen';
+        }
+    });
+})();
+
 // ── User overlay ──────────────────────────────────────────────────────────────
 (function () {
     'use strict';
@@ -3820,6 +4091,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const docUploadThumb = document.getElementById('overlay-doc-upload-thumb');
     const saveDocPermBtn = document.getElementById('overlay-save-doc-perm');
     const docPermResult  = document.getElementById('overlay-doc-perm-result');
+    const pwResetSection = document.getElementById('overlay-pw-reset-section');
+    const ldapNotice     = document.getElementById('overlay-ldap-notice');
 
     const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
@@ -3859,6 +4132,11 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             docUploadChk.checked = !!user.can_upload_documents;
             updateToggleUI(docUploadChk.checked);
         }
+
+        // Show/hide LDAP notice and password-reset section
+        const isLdap = (user.auth_source === 'ldap');
+        if (pwResetSection) pwResetSection.style.display = isLdap ? 'none' : '';
+        if (ldapNotice)     ldapNotice.style.display     = isLdap ? ''     : 'none';
 
         if (modelResult)   modelResult.textContent  = '';
         if (resetResult)   resetResult.textContent   = '';
@@ -4185,7 +4463,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     'use strict';
 
     const sectionIds = [
-        'dashboard-card', 'config-smtp-card', 'config-searxng-card',
+        'dashboard-card', 'config-smtp-card', 'config-ldap-card', 'config-searxng-card',
         'config-endpoints-card', 'config-request-handling-card',
         'config-sd-card', 'config-comfy-card', 'users-card', 'password-card'
     ];

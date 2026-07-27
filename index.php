@@ -4,6 +4,14 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/lib/ldap_auth.php';
+
+// ── SSO redirect: if REMOTE_USER is set and SSO is enabled, let login.php handle it ──
+if (!isset($_SESSION['admin_user']) && ldapSsoEnabled() && ldapSsoUsername() !== '') {
+    header('Location: login.php');
+    exit;
+}
+
 $defaultModel = getSetting('default_model', '');
 if ($defaultModel === '') {
     // Fall back to the first active endpoint's configured model.

@@ -44,6 +44,8 @@ $db->exec("
         default_model              VARCHAR(255) NOT NULL DEFAULT '',
         requires_password_change   TINYINT(1)   NOT NULL DEFAULT 0,
         can_upload_documents       TINYINT(1)   NOT NULL DEFAULT 0,
+        auth_source                VARCHAR(10)  NOT NULL DEFAULT 'local',
+        ldap_dn                    VARCHAR(500) NULL,
         created_at                 TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
         last_login                 TIMESTAMP    NULL,
         PRIMARY KEY (id),
