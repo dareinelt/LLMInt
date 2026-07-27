@@ -88,6 +88,32 @@ function ensureRuntimeSchema(PDO $pdo): void
         // Column already exists or ALTER not possible on this DB state.
     }
 
+    // SSH credentials for system-metric polling (RAM, CPU load, CPU temp via lm-sensors).
+    foreach ([
+        "ALTER TABLE endpoints ADD COLUMN ssh_host     VARCHAR(255) NOT NULL DEFAULT '' AFTER is_active",
+        "ALTER TABLE endpoints ADD COLUMN ssh_port     SMALLINT UNSIGNED NOT NULL DEFAULT 22 AFTER ssh_host",
+        "ALTER TABLE endpoints ADD COLUMN ssh_user     VARCHAR(100) NOT NULL DEFAULT '' AFTER ssh_port",
+        "ALTER TABLE endpoints ADD COLUMN ssh_password TEXT NULL AFTER ssh_user",
+    ] as $sshAlter) {
+        try { $pdo->exec($sshAlter); } catch (Throwable $_e) { /* column already exists */ }
+    }
+
+    // Cache table for SSH-polled system metrics (one row per endpoint).
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS endpoint_sys_stats (
+            endpoint_id  INT              NOT NULL,
+            ram_total    BIGINT UNSIGNED  NULL,
+            ram_used     BIGINT UNSIGNED  NULL,
+            cpu_load_1m  FLOAT            NULL,
+            cpu_load_5m  FLOAT            NULL,
+            cpu_temp     FLOAT            NULL,
+            fetch_ok     TINYINT(1)       NOT NULL DEFAULT 0,
+            fetched_at   TIMESTAMP(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                          ON UPDATE CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (endpoint_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS tasks (
             id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

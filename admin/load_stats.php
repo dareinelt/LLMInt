@@ -38,6 +38,8 @@ try {
             e.base_url,
             e.default_model,
             e.is_active,
+            e.ssh_host,
+            e.ssh_user,
             COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0)
                 AS running,
             COALESCE(SUM(CASE WHEN t.status = 'done'
@@ -55,7 +57,7 @@ try {
                 AS today_tokens
         FROM endpoints e
         LEFT JOIN tasks t ON t.endpoint_id = e.id
-        GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active
+        GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active, e.ssh_host, e.ssh_user
         ORDER BY e.sort_order ASC, e.id ASC
     ")->fetchAll(PDO::FETCH_ASSOC);
 
@@ -67,6 +69,37 @@ try {
         $r['today_prompt_tokens']     = (int) $r['today_prompt_tokens'];
         $r['today_completion_tokens'] = (int) $r['today_completion_tokens'];
         $r['today_tokens']            = (int) $r['today_tokens'];
+        $r['ssh_configured']          = ($r['ssh_host'] ?? '') !== '' && ($r['ssh_user'] ?? '') !== '';
+        // Don't expose credentials in the response
+        unset($r['ssh_host'], $r['ssh_port'], $r['ssh_user'], $r['ssh_password']);
+    }
+    unset($r);
+
+    // ── Attach cached SSH system stats ────────────────────────────────────────
+
+    $sysStatsById = [];
+    try {
+        $sysRows = getDb()->query("
+            SELECT endpoint_id, ram_total, ram_used, cpu_load_1m, cpu_load_5m, cpu_temp, fetch_ok, fetched_at
+            FROM   endpoint_sys_stats
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($sysRows as $sr) {
+            $sysStatsById[(int) $sr['endpoint_id']] = [
+                'ok'          => (bool) $sr['fetch_ok'],
+                'ram_total'   => $sr['ram_total']   !== null ? (int)   $sr['ram_total']   : null,
+                'ram_used'    => $sr['ram_used']    !== null ? (int)   $sr['ram_used']    : null,
+                'cpu_load_1m' => $sr['cpu_load_1m'] !== null ? (float) $sr['cpu_load_1m'] : null,
+                'cpu_load_5m' => $sr['cpu_load_5m'] !== null ? (float) $sr['cpu_load_5m'] : null,
+                'cpu_temp'    => $sr['cpu_temp']    !== null ? (float) $sr['cpu_temp']    : null,
+                'fetched_at'  => $sr['fetched_at'],
+            ];
+        }
+    } catch (PDOException $_e) {
+        // Table may not exist on very old installations – safe to ignore.
+    }
+
+    foreach ($rows as &$r) {
+        $r['sys_stats'] = $sysStatsById[$r['id']] ?? null;
     }
     unset($r);
 
