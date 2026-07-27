@@ -118,12 +118,16 @@ if ($action === 'send_password_reset') {
         exit;
     }
 
-    $stmt = $db->prepare('SELECT id, username, email FROM users WHERE id = ? LIMIT 1');
+    $stmt = $db->prepare('SELECT id, username, email, auth_source FROM users WHERE id = ? LIMIT 1');
     $stmt->execute([$userId]);
     $user = $stmt->fetch();
 
     if (!$user) {
         echo json_encode(['ok' => false, 'message' => 'Benutzer nicht gefunden.']);
+        exit;
+    }
+    if (($user['auth_source'] ?? 'local') === 'ldap') {
+        echo json_encode(['ok' => false, 'message' => 'Passwort-Reset nicht möglich: Dieses Konto wird über Active Directory verwaltet.']);
         exit;
     }
     if (empty($user['email'])) {

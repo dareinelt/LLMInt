@@ -238,6 +238,8 @@ function ensureRuntimeSchema(PDO $pdo): void
         "ALTER TABLE users ADD COLUMN default_model VARCHAR(255) NOT NULL DEFAULT '' AFTER password_reset_expires",
         "ALTER TABLE users ADD COLUMN requires_password_change TINYINT(1) NOT NULL DEFAULT 0 AFTER default_model",
         "ALTER TABLE users ADD COLUMN can_upload_documents TINYINT(1) NOT NULL DEFAULT 0 AFTER requires_password_change",
+        "ALTER TABLE users ADD COLUMN auth_source VARCHAR(10) NOT NULL DEFAULT 'local' AFTER can_upload_documents",
+        "ALTER TABLE users ADD COLUMN ldap_dn VARCHAR(500) NULL AFTER auth_source",
         "ALTER TABLE document_uploads ADD COLUMN chunk_count INT UNSIGNED NOT NULL DEFAULT 0 AFTER extracted_text",
         "ALTER TABLE document_uploads ADD COLUMN is_global_rag TINYINT(1) NOT NULL DEFAULT 1 AFTER chunk_count",
     ] as $alter) {
