@@ -54,11 +54,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // ── Add endpoint ──────────────────────────────────────────────────────
         if ($action === 'add_endpoint') {
-            $newAlias   = trim($_POST['ep_alias'] ?? '');
-            $newUrl     = trim($_POST['ep_base_url'] ?? '');
-            $newTimeout = (int) ($_POST['ep_timeout'] ?? 120);
-            $newModel   = trim($_POST['ep_default_model'] ?? '');
-            $isActive   = isset($_POST['ep_is_active']) ? 1 : 0;
+            $newAlias    = trim($_POST['ep_alias'] ?? '');
+            $newUrl      = trim($_POST['ep_base_url'] ?? '');
+            $newTimeout  = (int) ($_POST['ep_timeout'] ?? 120);
+            $newModel    = trim($_POST['ep_default_model'] ?? '');
+            $isActive    = isset($_POST['ep_is_active']) ? 1 : 0;
+            $sshHost     = trim($_POST['ep_ssh_host'] ?? '');
+            $sshPort     = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
+            $sshUser     = trim($_POST['ep_ssh_user'] ?? '');
+            $sshPassword = $_POST['ep_ssh_password'] ?? '';
 
             if (strlen($newAlias) > 120) {
                 $flashError = 'Alias darf maximal 120 Zeichen lang sein.';
@@ -73,20 +77,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'SELECT COALESCE(MAX(sort_order), -1) FROM endpoints'
                 )->fetchColumn();
                 $db->prepare(
-                    'INSERT INTO endpoints (alias, base_url, timeout, default_model, is_active, sort_order)
-                     VALUES (?, ?, ?, ?, ?, ?)'
-                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $maxOrder + 1]);
+                    'INSERT INTO endpoints (alias, base_url, timeout, default_model, is_active, sort_order,
+                                            ssh_host, ssh_port, ssh_user, ssh_password)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $maxOrder + 1,
+                            $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null]);
                 $flashOk = 'Endpunkt hinzugefügt.';
             }
 
         // ── Update endpoint ───────────────────────────────────────────────────
         } elseif ($action === 'update_endpoint') {
-            $epId       = (int) ($_POST['ep_id'] ?? 0);
-            $newAlias   = trim($_POST['ep_alias'] ?? '');
-            $newUrl     = trim($_POST['ep_base_url'] ?? '');
-            $newTimeout = (int) ($_POST['ep_timeout'] ?? 120);
-            $newModel   = trim($_POST['ep_default_model'] ?? '');
-            $isActive   = isset($_POST['ep_is_active']) ? 1 : 0;
+            $epId        = (int) ($_POST['ep_id'] ?? 0);
+            $newAlias    = trim($_POST['ep_alias'] ?? '');
+            $newUrl      = trim($_POST['ep_base_url'] ?? '');
+            $newTimeout  = (int) ($_POST['ep_timeout'] ?? 120);
+            $newModel    = trim($_POST['ep_default_model'] ?? '');
+            $isActive    = isset($_POST['ep_is_active']) ? 1 : 0;
+            $sshHost     = trim($_POST['ep_ssh_host'] ?? '');
+            $sshPort     = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
+            $sshUser     = trim($_POST['ep_ssh_user'] ?? '');
+            $sshPassword = $_POST['ep_ssh_password'] ?? null;
 
             if ($epId <= 0) {
                 $flashError = 'Ungültige Endpunkt-ID.';
@@ -99,11 +109,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($newTimeout < 1 || $newTimeout > 600) {
                 $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
             } else {
-                $db->prepare(
-                    'UPDATE endpoints
-                        SET alias = ?, base_url = ?, timeout = ?, default_model = ?, is_active = ?
-                      WHERE id = ?'
-                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $epId]);
+                // If the password field was left blank, keep the existing value.
+                if ($sshPassword === '' || $sshPassword === null) {
+                    $db->prepare(
+                        'UPDATE endpoints
+                            SET alias = ?, base_url = ?, timeout = ?, default_model = ?, is_active = ?,
+                                ssh_host = ?, ssh_port = ?, ssh_user = ?
+                          WHERE id = ?'
+                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive,
+                                $sshHost, $sshPort, $sshUser, $epId]);
+                } else {
+                    $db->prepare(
+                        'UPDATE endpoints
+                            SET alias = ?, base_url = ?, timeout = ?, default_model = ?, is_active = ?,
+                                ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?
+                          WHERE id = ?'
+                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive,
+                                $sshHost, $sshPort, $sshUser, $sshPassword, $epId]);
+                }
                 $flashOk = 'Endpunkt gespeichert.';
             }
 
@@ -369,6 +392,8 @@ try {
             e.base_url,
             e.default_model,
             e.is_active,
+            e.ssh_host,
+            e.ssh_user,
             COALESCE(SUM(CASE WHEN t.status = \'running\' THEN 1 ELSE 0 END), 0) AS cnt_running,
             COALESCE(SUM(CASE WHEN t.status = \'done\'    THEN 1 ELSE 0 END), 0) AS cnt_done,
             COALESCE(SUM(CASE WHEN t.status = \'error\'   THEN 1 ELSE 0 END), 0) AS cnt_error,
@@ -391,9 +416,36 @@ try {
                          THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0)      AS today_tokens
         FROM endpoints e
         LEFT JOIN tasks t ON t.endpoint_id = e.id
-        GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active
+        GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active, e.ssh_host, e.ssh_user
         ORDER BY e.sort_order ASC, e.id ASC
     ')->fetchAll();
+
+    // Attach cached SSH system stats
+    $sysStatsByEpId = [];
+    try {
+        $sysRows = $db->query("
+            SELECT endpoint_id, ram_total, ram_used, cpu_load_1m, cpu_load_5m, cpu_temp, fetch_ok, fetched_at
+            FROM   endpoint_sys_stats
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($sysRows as $sr) {
+            $sysStatsByEpId[(int) $sr['endpoint_id']] = [
+                'ok'          => (bool) $sr['fetch_ok'],
+                'ram_total'   => $sr['ram_total']   !== null ? (int)   $sr['ram_total']   : null,
+                'ram_used'    => $sr['ram_used']    !== null ? (int)   $sr['ram_used']    : null,
+                'cpu_load_1m' => $sr['cpu_load_1m'] !== null ? (float) $sr['cpu_load_1m'] : null,
+                'cpu_load_5m' => $sr['cpu_load_5m'] !== null ? (float) $sr['cpu_load_5m'] : null,
+                'cpu_temp'    => $sr['cpu_temp']    !== null ? (float) $sr['cpu_temp']    : null,
+                'fetched_at'  => $sr['fetched_at'],
+            ];
+        }
+    } catch (PDOException $_sse) { /* Table may not exist yet – safe to ignore */ }
+
+    foreach ($epStats as &$epRow) {
+        $epRow['ssh_configured'] = trim((string) ($epRow['ssh_host'] ?? '')) !== ''
+                                && trim((string) ($epRow['ssh_user'] ?? '')) !== '';
+        $epRow['sys_stats'] = $sysStatsByEpId[(int) $epRow['id']] ?? null;
+    }
+    unset($epRow);
 
     $totals = $db->query('
         SELECT
@@ -1426,8 +1478,22 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         <?= $ep['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
                     </td>
                     <td>
+                        <?php
+                        // Build safe edit data — never expose ssh_password in inline JS
+                        $epEdit = [
+                            'id'            => $ep['id'],
+                            'alias'         => $ep['alias'],
+                            'base_url'      => $ep['base_url'],
+                            'timeout'       => $ep['timeout'],
+                            'default_model' => $ep['default_model'],
+                            'is_active'     => $ep['is_active'],
+                            'ssh_host'      => $ep['ssh_host'] ?? '',
+                            'ssh_port'      => $ep['ssh_port'] ?? 22,
+                            'ssh_user'      => $ep['ssh_user'] ?? '',
+                        ];
+                        ?>
                         <button type="button" class="btn btn-sm"
-                                onclick="startEdit(<?= htmlspecialchars(json_encode($ep), ENT_QUOTES) ?>)">
+                                onclick="startEdit(<?= htmlspecialchars(json_encode($epEdit), ENT_QUOTES) ?>)">
                             ✏ Bearbeiten
                         </button>
                         <span class="sep"> </span>
@@ -1505,6 +1571,47 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         Endpunkt aktiv (nimmt Anfragen entgegen)
                     </label>
                 </div>
+
+                <!-- ── SSH-Zugangsdaten (Systemmetriken) ──────────────────────── -->
+                <details id="ep-ssh-details"<?= ($editEp && trim((string) ($editEp['ssh_host'] ?? '')) !== '') ? ' open' : '' ?>>
+                    <summary style="cursor:pointer;font-weight:600;margin:12px 0 8px;color:var(--text-muted)">
+                        🔑 SSH-Zugangsdaten (optional, für Systemmetriken)
+                    </summary>
+                    <p class="hint" style="margin-bottom:8px">
+                        Wenn hinterlegt, werden RAM-Auslastung, CPU-Last und CPU-Temperatur
+                        (lm-sensors) live im Dashboard angezeigt. Erfordert <code>php-ssh2</code>
+                        auf dem Webserver sowie <code>lm-sensors</code> auf dem Zielrechner.
+                    </p>
+                    <div class="form-row">
+                        <div class="form-group" style="flex:3">
+                            <label for="ep-ssh-host">SSH-Host</label>
+                            <input type="text" id="ep-ssh-host" name="ep_ssh_host"
+                                   placeholder="192.168.1.10"
+                                   value="<?= $editEp ? htmlspecialchars($editEp['ssh_host'] ?? '') : '' ?>">
+                        </div>
+                        <div class="form-group" style="flex:1;min-width:100px">
+                            <label for="ep-ssh-port">SSH-Port</label>
+                            <input type="number" id="ep-ssh-port" name="ep_ssh_port"
+                                   min="1" max="65535"
+                                   value="<?= $editEp ? (int) ($editEp['ssh_port'] ?? 22) : 22 ?>">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group" style="flex:1">
+                            <label for="ep-ssh-user">SSH-Benutzer</label>
+                            <input type="text" id="ep-ssh-user" name="ep_ssh_user"
+                                   placeholder="ubuntu"
+                                   autocomplete="off"
+                                   value="<?= $editEp ? htmlspecialchars($editEp['ssh_user'] ?? '') : '' ?>">
+                        </div>
+                        <div class="form-group" style="flex:1">
+                            <label for="ep-ssh-password">SSH-Passwort<?= $editEp && trim((string) ($editEp['ssh_host'] ?? '')) !== '' ? ' <span style="font-weight:400;font-size:.8em">(leer lassen = unverändert)</span>' : '' ?></label>
+                            <input type="password" id="ep-ssh-password" name="ep_ssh_password"
+                                   autocomplete="new-password"
+                                   placeholder="<?= $editEp && trim((string) ($editEp['ssh_host'] ?? '')) !== '' ? '••••••••' : 'Passwort' ?>">
+                        </div>
+                    </div>
+                </details>
 
                 <div class="action-row">
                     <button type="submit" class="btn btn-primary">💾 Speichern</button>
@@ -2346,6 +2453,12 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const loadBtn      = document.getElementById('ep-load-btn');
     const endpointConfigPanel = document.getElementById('config-endpoints');
 
+    const sshDetails  = document.getElementById('ep-ssh-details');
+    const sshHost     = document.getElementById('ep-ssh-host');
+    const sshPort     = document.getElementById('ep-ssh-port');
+    const sshUser     = document.getElementById('ep-ssh-user');
+    const sshPassword = document.getElementById('ep-ssh-password');
+
     // Pre-fill the form when the page loaded with ?edit=<id>
     <?php if ($editEp): ?>
     document.getElementById('ep-form-title').textContent = '✏ Endpunkt bearbeiten';
@@ -2370,6 +2483,12 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         activeCheck.checked    = ep.is_active == 1;
         // Clear datalist options from a previous load-models call.
         modelList.innerHTML    = '';
+        // SSH fields
+        if (sshHost)     sshHost.value     = ep.ssh_host || '';
+        if (sshPort)     sshPort.value     = ep.ssh_port || 22;
+        if (sshUser)     sshUser.value     = ep.ssh_user || '';
+        if (sshPassword) sshPassword.value = '';   // never pre-fill password
+        if (sshDetails && (ep.ssh_host || '').trim() !== '') sshDetails.open = true;
         if (endpointConfigPanel) { endpointConfigPanel.open = true; }
         document.querySelector('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
     };
@@ -2385,6 +2504,11 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         modelInput.value      = '';
         activeCheck.checked   = true;
         modelList.innerHTML   = '';
+        if (sshHost)     sshHost.value     = '';
+        if (sshPort)     sshPort.value     = '22';
+        if (sshUser)     sshUser.value     = '';
+        if (sshPassword) sshPassword.value = '';
+        if (sshDetails)  sshDetails.open   = false;
     };
 
     /** Load available models from the URL currently typed in the form. */
@@ -2715,6 +2839,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'today_prompt_tokens'     => (int) $s['today_prompt_tokens'],
                 'today_completion_tokens' => (int) $s['today_completion_tokens'],
                 'today_tokens'            => (int) $s['today_tokens'],
+                'ssh_configured' => (bool) ($s['ssh_configured'] ?? false),
+                'sys_stats'      => $s['sys_stats'] ?? null,
             ];
         }, $epStats),
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
@@ -3002,12 +3128,18 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const CLIENT_GAP = 40;
         const ROOT_W = 112, ROOT_H = 82;
         const MOD_W  = 178, MOD_H  = 64;
-        const EP_W   = 218, EP_H   = 152;
+        const EP_W        = 218, EP_H      = 152;
+        const EP_H_SYSSTAT = 210;  // extended height when SSH system stats are shown
         const H_GAP  = 60;
         const V_GAP  = 14;
         const SRXNG_W = EP_W, SRXNG_H = 110;
         const SD_W    = EP_W, SD_H    = 90;
         const COMFY_W = EP_W, COMFY_H = 90;
+
+        // Per-endpoint height: extended when sys_stats are available
+        function epHeight(ep) {
+            return (ep.sys_stats || ep.ssh_configured) ? EP_H_SYSSTAT : EP_H;
+        }
 
         const COL0_X = PAD;
         const COL1_X = COL0_X + CLIENT_W + CLIENT_GAP;
@@ -3017,7 +3149,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         const totalEps = (endpoints || []).length;
         const LLM_H = totalEps > 0
-            ? PAD * 2 + totalEps * EP_H + (totalEps - 1) * V_GAP
+            ? PAD * 2 + (endpoints || []).reduce((s, ep) => s + epHeight(ep) + V_GAP, -V_GAP)
             : PAD * 2 + ROOT_H;
 
         const SRXNG_V_GAP = 20;
@@ -3029,13 +3161,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         let curY = PAD;
         const epCY  = {};
+        const epHMap = {};
         const modCY = {};
 
         for (const [model, eps] of groups) {
             const startY = curY;
             for (const ep of eps) {
-                epCY[ep.id] = curY + EP_H / 2;
-                curY += EP_H + V_GAP;
+                const h = epHeight(ep);
+                epHMap[ep.id] = h;
+                epCY[ep.id] = curY + h / 2;
+                curY += h + V_GAP;
             }
             curY -= V_GAP;
             modCY[model] = startY + (curY - startY) / 2;
@@ -3273,11 +3408,12 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const model    = ep.default_model || '–';
             const color    = colorMap[model] || '#555';
             const eY       = epCY[ep.id];
+            const curEpH   = epHMap[ep.id] || EP_H;
             const isActive = ep.is_active === 1;
-            const g        = mk('g', { transform: `translate(${COL3_X},${eY - EP_H / 2})` });
+            const g        = mk('g', { transform: `translate(${COL3_X},${eY - curEpH / 2})` });
 
             g.appendChild(mk('rect', {
-                x: 0, y: 0, width: EP_W, height: EP_H,
+                x: 0, y: 0, width: EP_W, height: curEpH,
                 rx: 10,
                 fill: 'url(#grad-ep)',
                 stroke: isActive ? color + '44' : 'rgba(239,68,68,0.4)',
@@ -3285,7 +3421,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             }));
             // Accent bar (left)
             g.appendChild(mk('rect', {
-                x: 0, y: 10, width: 3, height: EP_H - 20,
+                x: 0, y: 10, width: 3, height: curEpH - 20,
                 rx: 1.5,
                 fill: isActive ? color : '#ef4444',
                 opacity: 0.7,
@@ -3335,6 +3471,48 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             if (ep.running > 0) {
                 const fillW = Math.round(barW * Math.min(1, ep.running / maxSlots));
                 g.appendChild(mk('rect', { x: barX, y: barY, width: fillW, height: barH, rx: 2.5, fill: '#f59e0b' }));
+            }
+
+            // ── SSH system stats (RAM, CPU load, CPU temp) ────────────────────
+            if (ep.sys_stats || ep.ssh_configured) {
+                g.appendChild(mk('line', { x1: 10, y1: 150, x2: EP_W - 10, y2: 150, stroke: 'rgba(255,255,255,0.06)', 'stroke-width': 1 }));
+                const ss = ep.sys_stats || {};
+                const ssOk = ss.ok === true;
+
+                if (!ssOk && !ss.ram_total) {
+                    // SSH configured but no successful fetch yet
+                    txt(g, '🔑  SSH: Warte auf Daten …', {
+                        x: 12, y: 168, fill: '#6b7280', 'font-size': 10, 'font-family': 'sans-serif',
+                    });
+                } else {
+                    // RAM
+                    let ramLabel = '–';
+                    if (ss.ram_total && ss.ram_used !== null && ss.ram_used !== undefined) {
+                        const used  = ss.ram_used  / 1073741824;
+                        const total = ss.ram_total / 1073741824;
+                        const pct   = Math.round(ss.ram_used / ss.ram_total * 100);
+                        ramLabel = `${used.toFixed(1)} / ${total.toFixed(1)} GB  (${pct}%)`;
+                    }
+                    txt(g, `🧠  RAM: ${ramLabel}`, {
+                        x: 12, y: 168, fill: '#60a5fa', 'font-size': 10.5, 'font-family': 'sans-serif',
+                    });
+
+                    // CPU load
+                    const load1 = ss.cpu_load_1m != null ? Number(ss.cpu_load_1m).toFixed(2) : '–';
+                    const load5 = ss.cpu_load_5m != null ? Number(ss.cpu_load_5m).toFixed(2) : '–';
+                    txt(g, `📊  CPU-Last: ${load1}  (5 min: ${load5})`, {
+                        x: 12, y: 186, fill: '#34d399', 'font-size': 10.5, 'font-family': 'sans-serif',
+                    });
+
+                    // CPU temperature
+                    const tempLabel = ss.cpu_temp != null ? `${Number(ss.cpu_temp).toFixed(1)} °C` : '–';
+                    const tempColor = ss.cpu_temp != null && ss.cpu_temp >= 80 ? '#ef4444'
+                                    : ss.cpu_temp != null && ss.cpu_temp >= 65 ? '#f59e0b'
+                                    : '#fb923c';
+                    txt(g, `🌡  Temp: ${tempLabel}`, {
+                        x: 12, y: 204, fill: tempColor, 'font-size': 10.5, 'font-family': 'sans-serif',
+                    });
+                }
             }
 
             svg.appendChild(g);
@@ -3524,6 +3702,34 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     // Refresh every 15 seconds
     setInterval(refreshTree, 15000);
+
+    // ── SSH system-stats refresh (every 60 seconds) ───────────────────────────
+    //
+    // Polls refresh_sys_stats.php which SSH-connects to each configured endpoint
+    // and caches the results. The next load_stats.php poll then picks them up.
+
+    async function refreshSysStats() {
+        try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 55000);
+            const res  = await fetch('refresh_sys_stats.php', { cache: 'no-store', signal: controller.signal });
+            clearTimeout(timer);
+            const data = await res.json();
+            if (data.ok) {
+                // Trigger a tree refresh so updated sys_stats are shown promptly
+                refreshTree();
+            }
+        } catch (_e) {
+            // Non-critical – silently ignore (SSH may simply not be configured)
+        }
+    }
+
+    // Only poll if at least one endpoint has SSH configured
+    if (INITIAL_DATA.some(ep => ep.ssh_configured)) {
+        // First fetch shortly after page load so the tile shows data quickly
+        setTimeout(refreshSysStats, 3000);
+        setInterval(refreshSysStats, 60000);
+    }
 
 })();
 </script>
