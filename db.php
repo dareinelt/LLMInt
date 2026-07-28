@@ -310,6 +310,15 @@ function ensureRuntimeSchema(PDO $pdo): void
         try { $pdo->exec($alter); } catch (Throwable $_e) { /* already exists */ }
     }
 
+    // Rule-based model routing: one row per category → model assignment.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS routing_rules (
+            category VARCHAR(100) NOT NULL,
+            model    VARCHAR(255) NOT NULL DEFAULT '',
+            PRIMARY KEY (category)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
         $pdo->prepare(
@@ -386,6 +395,70 @@ function setSetting(string $key, string $value): void
          VALUES (?, ?)
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()'
     )->execute([$key, $value]);
+}
+
+/**
+ * Parse categories from the routing prompt file (lib/prompt.txt).
+ * Looks for the "Valid outputs only:" marker and returns the non-empty
+ * lines that follow it.
+ *
+ * @return string[] Ordered list of category names.
+ */
+function loadRoutingCategories(): array
+{
+    $promptFile = __DIR__ . '/lib/prompt.txt';
+    if (!is_file($promptFile)) {
+        return [];
+    }
+    $lines    = file($promptFile, FILE_IGNORE_NEW_LINES);
+    $found    = false;
+    $categories = [];
+    foreach ($lines as $line) {
+        $trimmed = trim($line);
+        if (!$found) {
+            if (stripos($trimmed, 'Valid outputs only:') !== false) {
+                $found = true;
+            }
+            continue;
+        }
+        if ($trimmed !== '') {
+            $categories[] = $trimmed;
+        }
+    }
+    return $categories;
+}
+
+/**
+ * Load all routing rules (category → model) from the database.
+ *
+ * @return array<string,string> Map of category name to model string.
+ */
+function loadRoutingRules(): array
+{
+    try {
+        $rows = getDb()->query(
+            'SELECT category, model FROM routing_rules'
+        )->fetchAll();
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(string) $row['category']] = (string) $row['model'];
+        }
+        return $map;
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * Upsert a routing rule (category → model).
+ */
+function saveRoutingRule(string $category, string $model): void
+{
+    getDb()->prepare(
+        'INSERT INTO routing_rules (category, model)
+         VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE model = VALUES(model)'
+    )->execute([$category, $model]);
 }
 
 /**
