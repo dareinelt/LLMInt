@@ -479,6 +479,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashOk = 'Kategorie gelöscht.';
             }
 
+        // ── Import routing categories from prompt.txt ─────────────────────────
+        } elseif ($action === 'import_prompt_txt') {
+            $categoriesJson = $_POST['prompt_categories'] ?? '';
+            $categories     = json_decode($categoriesJson, true);
+
+            if (!is_array($categories) || empty($categories)) {
+                $flashError = 'Keine gültigen Kategorien in der hochgeladenen Datei gefunden.';
+            } else {
+                $valid = true;
+                foreach ($categories as $cat) {
+                    if (!isset($cat['name'], $cat['definition'], $cat['decision_rule'], $cat['sort_order'], $cat['decision_priority'])) {
+                        $valid = false;
+                        break;
+                    }
+                    if (!preg_match('/^[A-Za-z0-9_]+$/', (string) $cat['name'])) {
+                        $valid = false;
+                        break;
+                    }
+                }
+                if (!$valid) {
+                    $flashError = 'Die hochgeladene Datei entspricht nicht dem erwarteten Schema.';
+                } else {
+                    $pdo = getDb();
+                    $pdo->exec('DELETE FROM routing_rules');
+                    $pdo->exec('DELETE FROM routing_categories');
+                    foreach ($categories as $cat) {
+                        saveRoutingCategory(
+                            0,
+                            (string) $cat['name'],
+                            (string) $cat['definition'],
+                            (string) $cat['decision_rule'],
+                            (int)    $cat['sort_order'],
+                            (int)    $cat['decision_priority']
+                        );
+                    }
+                    $flashOk = count($categories) . ' Kategorien aus prompt.txt importiert. Alle vorherigen Einstellungen wurden überschrieben.';
+                }
+            }
+
         // ── Change password ───────────────────────────────────────────────────
         } elseif ($action === 'change_password') {
             $oldPass  = $_POST['old_password']         ?? '';
@@ -2479,6 +2518,65 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         <!-- Add new category button -->
         <div>
             <button type="button" class="btn btn-primary" onclick="rcAdd()">＋ Neue Kategorie hinzufügen</button>
+        </div>
+
+        <!-- Import from prompt.txt -->
+        <hr style="margin:28px 0;border:none;border-top:1px solid var(--border)">
+        <h3 style="margin:0 0 10px;font-size:1rem">📥 Import aus prompt.txt</h3>
+        <p class="hint" style="margin-bottom:14px">
+            Lade eine Textdatei hoch, die dem Schema der <code>lib/prompt.txt</code> entspricht.
+            Die Datei wird analysiert und du erhältst eine Vorschau der erkannten Kategorien,
+            bevor die Einstellungen gespeichert werden.
+        </p>
+
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+            <label class="btn" style="cursor:pointer;margin:0" for="rc-import-file">
+                📂 Datei auswählen …
+            </label>
+            <input type="file" id="rc-import-file" accept=".txt,text/plain"
+                   style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden"
+                   onchange="rcImportPreview(this)">
+            <span id="rc-import-filename" style="font-size:.85rem;color:var(--muted)">Keine Datei ausgewählt</span>
+        </div>
+
+        <!-- Preview panel (hidden until file is selected and parsed) -->
+        <div id="rc-import-preview" style="display:none;margin-top:16px">
+            <div style="background:rgba(239,68,68,.12);border:1px solid var(--danger,#ef4444);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;display:flex;gap:10px;align-items:flex-start">
+                <span style="font-size:1.2rem;line-height:1.2">⚠️</span>
+                <div>
+                    <strong style="color:var(--danger,#ef4444)">Achtung:</strong>
+                    Durch den Import werden <strong>alle vorhandenen Kategorien und Entscheidungsregeln unwiderruflich überschrieben</strong>.
+                    Modellzuordnungen (Routing-Regeln) werden ebenfalls gelöscht.
+                    Bitte prüfe die Vorschau sorgfältig.
+                </div>
+            </div>
+
+            <p style="font-size:.9rem;font-weight:600;margin-bottom:8px">Erkannte Kategorien (<span id="rc-import-count">0</span>):</p>
+            <div id="rc-import-error" style="display:none;color:var(--danger,#ef4444);margin-bottom:10px;font-size:.9rem"></div>
+
+            <table class="data-table" id="rc-import-table" style="margin-bottom:20px;font-size:.85rem">
+                <thead>
+                    <tr>
+                        <th style="width:40px">#</th>
+                        <th style="width:130px">Kategorie</th>
+                        <th>Definition</th>
+                        <th style="width:60px">Anz.</th>
+                        <th>Entscheidungsregel</th>
+                    </tr>
+                </thead>
+                <tbody id="rc-import-tbody"></tbody>
+            </table>
+
+            <!-- Hidden form for confirmed import -->
+            <form method="POST" id="rc-import-form">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action" value="import_prompt_txt">
+                <input type="hidden" name="prompt_categories" id="rc-import-json" value="">
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                    <button type="submit" class="btn btn-primary" id="rc-import-confirm">✅ Import bestätigen</button>
+                    <button type="button" class="btn" onclick="rcImportCancel()">✕ Abbrechen</button>
+                </div>
+            </form>
         </div>
 
         </details>
@@ -4854,5 +4952,142 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 }());
 </script>
 
-</body>
-</html>
+<script>
+/* ── Entscheidungsfindung: prompt.txt import ─────────────────────────────── */
+(function () {
+
+    /**
+     * Parse the text content of a prompt.txt file into structured category objects.
+     * Returns { ok: true, categories: [...] } or { ok: false, error: '...' }.
+     */
+    function parsePromptTxt(text) {
+        const lines = text.split(/\r?\n/);
+        let section = 'header';
+
+        const categoryNames = [];   // ordered from "Classify…" section
+        const definitions   = {};   // name → definition string
+        const rules         = [];   // { priority, text }
+        const validOutputs  = [];   // names from "Valid outputs only:" section
+
+        for (const rawLine of lines) {
+            const trimmed = rawLine.trim();
+
+            // Section markers
+            if (trimmed === 'Classify the user\'s input into exactly one of these categories:') {
+                section = 'categories'; continue;
+            }
+            if (trimmed === 'Definitions:') { section = 'definitions'; continue; }
+            if (/^Decision rules/i.test(trimmed))  { section = 'rules';        continue; }
+            if (trimmed === 'Output rules:')        { section = 'output_rules'; continue; }
+            if (trimmed === 'Valid outputs only:')  { section = 'valid_outputs'; continue; }
+            if (trimmed === '') continue; // skip blank lines in any section
+
+            if (section === 'categories') {
+                if (/^[A-Za-z0-9_]+$/.test(trimmed)) categoryNames.push(trimmed);
+            } else if (section === 'definitions') {
+                const m = trimmed.match(/^\*\s+([A-Za-z0-9_]+):\s*(.*)$/);
+                if (m) definitions[m[1]] = m[2];
+            } else if (section === 'rules') {
+                const m = trimmed.match(/^(\d+)\.\s+(.+)$/);
+                if (m) rules.push({ priority: parseInt(m[1], 10), text: m[2] });
+            } else if (section === 'valid_outputs') {
+                if (/^[A-Za-z0-9_]+$/.test(trimmed)) validOutputs.push(trimmed);
+            }
+        }
+
+        // Validation
+        if (categoryNames.length === 0) {
+            return { ok: false, error: 'Keine Kategorien in der Datei gefunden. Prüfe, ob der Abschnitt „Classify the user\'s input into exactly one of these categories:" vorhanden ist.' };
+        }
+        if (validOutputs.length === 0) {
+            return { ok: false, error: 'Kein Abschnitt „Valid outputs only:" gefunden.' };
+        }
+        const catSet   = new Set(categoryNames);
+        const validSet = new Set(validOutputs);
+        const missing  = [...catSet].filter(n => !validSet.has(n));
+        const extra    = [...validSet].filter(n => !catSet.has(n));
+        if (missing.length || extra.length) {
+            return { ok: false, error: 'Kategorien-Liste und „Valid outputs only:" stimmen nicht überein.' };
+        }
+        const noDef = categoryNames.filter(n => !definitions[n]);
+        if (noDef.length) {
+            return { ok: false, error: 'Fehlende Definitionen für: ' + noDef.join(', ') };
+        }
+
+        // Map each rule to a category via "return CategoryName" at the end
+        const ruleByCategory = {};
+        for (const rule of rules) {
+            const m = rule.text.match(/return\s+([A-Za-z0-9_]+)\.?\s*$/);
+            if (m && catSet.has(m[1])) {
+                ruleByCategory[m[1]] = rule;
+            }
+        }
+
+        const categories = categoryNames.map((name, idx) => ({
+            name,
+            definition:        definitions[name] || '',
+            decision_rule:     ruleByCategory[name] ? ruleByCategory[name].text : '',
+            sort_order:        idx + 1,
+            decision_priority: ruleByCategory[name] ? ruleByCategory[name].priority : 0,
+        }));
+
+        return { ok: true, categories };
+    }
+
+    window.rcImportPreview = function (input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        document.getElementById('rc-import-filename').textContent = file.name;
+
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            const result = parsePromptTxt(e.target.result || '');
+            const previewEl  = document.getElementById('rc-import-preview');
+            const errorEl    = document.getElementById('rc-import-error');
+            const countEl    = document.getElementById('rc-import-count');
+            const tbody      = document.getElementById('rc-import-tbody');
+            const jsonInput  = document.getElementById('rc-import-json');
+            const confirmBtn = document.getElementById('rc-import-confirm');
+
+            previewEl.style.display = 'block';
+
+            if (!result.ok) {
+                errorEl.textContent    = '⚠️ ' + result.error;
+                errorEl.style.display  = 'block';
+                tbody.innerHTML        = '';
+                countEl.textContent    = '0';
+                jsonInput.value        = '';
+                confirmBtn.disabled    = true;
+                return;
+            }
+
+            errorEl.style.display = 'none';
+            confirmBtn.disabled   = false;
+            countEl.textContent   = result.categories.length;
+            jsonInput.value       = JSON.stringify(result.categories);
+
+            tbody.innerHTML = result.categories.map(cat => {
+                const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                return '<tr>' +
+                    '<td style="text-align:center;color:var(--muted)">' + cat.sort_order + '</td>' +
+                    '<td><strong>' + esc(cat.name) + '</strong></td>' +
+                    '<td style="color:var(--muted);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(cat.definition) + '">' + esc(cat.definition) + '</td>' +
+                    '<td style="text-align:center;color:var(--muted)">' + cat.decision_priority + '</td>' +
+                    '<td style="font-size:.8rem;color:var(--muted);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(cat.decision_rule) + '">' + esc(cat.decision_rule || '–') + '</td>' +
+                    '</tr>';
+            }).join('');
+
+            previewEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+        reader.readAsText(file);
+    };
+
+    window.rcImportCancel = function () {
+        document.getElementById('rc-import-preview').style.display = 'none';
+        document.getElementById('rc-import-filename').textContent  = 'Keine Datei ausgewählt';
+        document.getElementById('rc-import-file').value            = '';
+        document.getElementById('rc-import-json').value            = '';
+    };
+}());
+</script>
