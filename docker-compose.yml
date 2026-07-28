@@ -1,0 +1,55 @@
+services:
+
+  # ── MySQL database ───────────────────────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-llmint}
+      MYSQL_USER:     ${DB_USER:-llmint}
+      MYSQL_PASSWORD: ${DB_PASS:-llmint}
+      # Use a strong root password in production!
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:-changeme}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "${DB_USER:-llmint}", "-p${DB_PASS:-llmint}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── PHP / Apache web server ──────────────────────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Database connection (must match the db service above)
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-llmint}
+      DB_USER: ${DB_USER:-llmint}
+      DB_PASS: ${DB_PASS:-llmint}
+      # PHP timezone (overrides docker/php.ini if set)
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      # Persist uploaded documents and generated images across restarts
+      - doc_uploads:/var/www/html/doc_uploads
+      - sd_output:/var/www/html/sd_output
+      # ── Optional: Windows SSO (Kerberos) ────────────────────────────────────
+      # Mount a valid keytab and krb5.conf and uncomment the GSSAPI block in
+      # docker/apache.conf to enable transparent Windows SSO.
+      # - ./krb5.keytab:/etc/krb5.keytab:ro
+      # - ./krb5.conf:/etc/krb5.conf:ro
+
+volumes:
+  db_data:
+  doc_uploads:
+  sd_output:
