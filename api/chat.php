@@ -1012,8 +1012,7 @@ if ($routingDecisionModel !== '') {
     }
 
     if ($lastUserText !== '') {
-        $promptFile = __DIR__ . '/../lib/prompt.txt';
-        $systemPrompt = is_file($promptFile) ? (string) file_get_contents($promptFile) : '';
+        $systemPrompt = buildRoutingPrompt();
 
         if ($systemPrompt !== '') {
             // Pick a slot for the decision model (non-blocking: skip if unavailable).

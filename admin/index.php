@@ -24,6 +24,7 @@ $newUserDefaultModel = trim(getSetting('new_user_default_model', ''));
 $visionModel = trim(getSetting('vision_model', ''));
 $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
 $routingCategories = loadRoutingCategories();
+$routingCategoriesData = loadRoutingCategoriesFromDb();
 $routingRules = loadRoutingRules();
 
 // ── SMTP settings ─────────────────────────────────────────────────────────────
@@ -424,6 +425,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 saveRoutingRule($cat, $catModel);
             }
             $flashOk = 'Modellrouting gespeichert.';
+
+        // ── Add routing category ──────────────────────────────────────────────
+        } elseif ($action === 'add_routing_category') {
+            $catName      = trim($_POST['rc_name']              ?? '');
+            $catDef       = trim($_POST['rc_definition']        ?? '');
+            $catRule      = trim($_POST['rc_decision_rule']     ?? '');
+            $catSort      = (int) ($_POST['rc_sort_order']      ?? 0);
+            $catPriority  = (int) ($_POST['rc_decision_priority'] ?? 0);
+
+            if ($catName === '') {
+                $flashError = 'Kategoriename darf nicht leer sein.';
+            } elseif (!preg_match('/^[A-Za-z0-9_]+$/', $catName)) {
+                $flashError = 'Kategoriename darf nur Buchstaben, Ziffern und Unterstriche enthalten.';
+            } else {
+                try {
+                    saveRoutingCategory(0, $catName, $catDef, $catRule, $catSort, $catPriority);
+                    $flashOk = 'Kategorie "' . htmlspecialchars($catName) . '" hinzugefügt.';
+                } catch (Throwable $e) {
+                    $flashError = 'Kategorie konnte nicht gespeichert werden (Name bereits vorhanden?).';
+                }
+            }
+
+        // ── Update routing category ───────────────────────────────────────────
+        } elseif ($action === 'update_routing_category') {
+            $catId        = (int) ($_POST['rc_id']              ?? 0);
+            $catName      = trim($_POST['rc_name']              ?? '');
+            $catDef       = trim($_POST['rc_definition']        ?? '');
+            $catRule      = trim($_POST['rc_decision_rule']     ?? '');
+            $catSort      = (int) ($_POST['rc_sort_order']      ?? 0);
+            $catPriority  = (int) ($_POST['rc_decision_priority'] ?? 0);
+
+            if ($catId <= 0) {
+                $flashError = 'Ungültige Kategorie-ID.';
+            } elseif ($catName === '') {
+                $flashError = 'Kategoriename darf nicht leer sein.';
+            } elseif (!preg_match('/^[A-Za-z0-9_]+$/', $catName)) {
+                $flashError = 'Kategoriename darf nur Buchstaben, Ziffern und Unterstriche enthalten.';
+            } else {
+                try {
+                    saveRoutingCategory($catId, $catName, $catDef, $catRule, $catSort, $catPriority);
+                    $flashOk = 'Kategorie "' . htmlspecialchars($catName) . '" gespeichert.';
+                } catch (Throwable $e) {
+                    $flashError = 'Kategorie konnte nicht gespeichert werden (Name bereits vorhanden?).';
+                }
+            }
+
+        // ── Delete routing category ───────────────────────────────────────────
+        } elseif ($action === 'delete_routing_category') {
+            $catId = (int) ($_POST['rc_id'] ?? 0);
+            if ($catId > 0) {
+                deleteRoutingCategory($catId);
+                $flashOk = 'Kategorie gelöscht.';
+            }
 
         // ── Change password ───────────────────────────────────────────────────
         } elseif ($action === 'change_password') {
@@ -1369,6 +1423,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <a href="#config-sd-card">🎨 AUTOMATIC1111</a>
     <a href="#config-comfy-card">🖼️ ComfyUI</a>
     <a href="#config-routing-card">🧭 Modellrouting</a>
+    <a href="#config-decision-card">🗂️ Entscheidungsfindung</a>
 
     <span class="sidebar-label">Verwaltung</span>
     <a href="#users-card">👤 Benutzerkonten</a>
@@ -2206,9 +2261,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         <p class="hint" style="margin-bottom:18px">
             Das <strong>Entscheidungsmodell</strong> analysiert jeden Nutzer-Prompt und ordnet ihn einer Kategorie zu.
-            Der Prompt wird dabei mit dem Inhalt der Datei <code>lib/prompt.txt</code> als Systemnachricht an das
-            Entscheidungsmodell gesendet. Anschließend wird der ursprüngliche Nutzer-Prompt an das Modell weitergeleitet,
-            das der ermittelten Kategorie zugeordnet ist.
+            Der Prompt wird mit den unter <strong>Entscheidungsfindung</strong> konfigurierten Kategorien als
+            Systemnachricht an das Entscheidungsmodell gesendet. Anschließend wird der ursprüngliche Nutzer-Prompt
+            an das Modell weitergeleitet, das der ermittelten Kategorie zugeordnet ist.
             Ist kein Entscheidungsmodell konfiguriert, wird das reguläre Modellrouting verwendet.
         </p>
 
@@ -2243,8 +2298,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             <?php if (empty($routingCategories)): ?>
                 <p class="hint" style="color:var(--warning)">
-                    Keine Kategorien gefunden. Stelle sicher, dass <code>lib/prompt.txt</code> existiert und
-                    einen Abschnitt „Valid outputs only:" enthält.
+                    Keine Kategorien gefunden. Füge unter <strong>Entscheidungsfindung</strong> Kategorien hinzu.
                 </p>
             <?php else: ?>
                 <h3>Kategorie-Zuordnung</h3>
@@ -2302,6 +2356,131 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <button type="submit" class="btn btn-primary">💾 Speichern</button>
             </div>
         </form>
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Entscheidungsfindung – Kategorien & Definitionen
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-decision-card">
+        <details class="config-panel" id="config-decision" open>
+        <summary>🗂️ Entscheidungsfindung</summary>
+
+        <p class="hint" style="margin-bottom:18px">
+            Verwalte die Kategorien, nach denen das <strong>Entscheidungsmodell</strong> Nutzer-Prompts klassifiziert.
+            Jede Kategorie besitzt eine <em>Definition</em> (erklärt dem Modell, wann diese Kategorie zutrifft)
+            und eine <em>Entscheidungsregel</em> (nummerierter Eintrag in der Prioritätsliste).
+            Änderungen wirken sich sofort auf den erzeugten Klassifikations-Prompt aus.
+        </p>
+
+        <!-- Category list -->
+        <?php if (empty($routingCategoriesData)): ?>
+            <p class="hint" style="color:var(--warning)">Noch keine Kategorien vorhanden. Füge unten eine neue Kategorie hinzu.</p>
+        <?php else: ?>
+        <table class="data-table" id="rc-table" style="margin-bottom:24px">
+            <thead>
+                <tr>
+                    <th style="width:40px">#</th>
+                    <th>Kategorie</th>
+                    <th>Definition</th>
+                    <th style="width:60px">Anz.</th>
+                    <th style="width:110px">Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($routingCategoriesData as $rc): ?>
+                <tr id="rc-row-<?= (int)$rc['id'] ?>">
+                    <td style="text-align:center;color:var(--muted);font-size:.8rem"><?= (int)$rc['sort_order'] ?></td>
+                    <td><strong><?= htmlspecialchars($rc['name']) ?></strong></td>
+                    <td style="font-size:.85rem;color:var(--muted);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($rc['definition']) ?>">
+                        <?= htmlspecialchars($rc['definition']) ?>
+                    </td>
+                    <td style="text-align:center;font-size:.8rem;color:var(--muted)"><?= (int)$rc['decision_priority'] ?></td>
+                    <td>
+                        <button type="button" class="btn" style="padding:4px 10px;font-size:.8rem"
+                                onclick="rcEdit(<?= (int)$rc['id'] ?>,
+                                    <?= htmlspecialchars(json_encode($rc['name']), ENT_QUOTES) ?>,
+                                    <?= htmlspecialchars(json_encode($rc['definition']), ENT_QUOTES) ?>,
+                                    <?= htmlspecialchars(json_encode($rc['decision_rule']), ENT_QUOTES) ?>,
+                                    <?= (int)$rc['sort_order'] ?>,
+                                    <?= (int)$rc['decision_priority'] ?>)">
+                            ✏️ Bearbeiten
+                        </button>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+
+        <!-- Edit / Add form (hidden by default) -->
+        <div id="rc-form-wrapper" style="display:none;background:var(--card-bg,#1e1e1e);border:1px solid var(--border);border-radius:var(--radius);padding:20px 24px;margin-bottom:24px">
+            <h3 id="rc-form-title" style="margin:0 0 16px">Kategorie bearbeiten</h3>
+            <form method="POST" id="rc-form">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action" id="rc-action" value="update_routing_category">
+                <input type="hidden" name="rc_id" id="rc-id" value="0">
+
+                <div class="form-group">
+                    <label for="rc-name">Kategoriename <small style="color:var(--muted)">(nur Buchstaben, Ziffern, Unterstriche)</small></label>
+                    <input type="text" id="rc-name" name="rc_name" required
+                           pattern="[A-Za-z0-9_]+"
+                           placeholder="z.&thinsp;B. Programming"
+                           style="max-width:320px">
+                </div>
+
+                <div class="form-group">
+                    <label for="rc-definition">Definition</label>
+                    <textarea id="rc-definition" name="rc_definition" rows="3"
+                              placeholder="Beschreibe, wann diese Kategorie zutrifft …"
+                              style="width:100%;max-width:700px;resize:vertical"></textarea>
+                    <p class="hint">Erscheint als <code>* Kategorie: …</code> im Klassifikations-Prompt.</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="rc-decision-rule">Entscheidungsregel</label>
+                    <textarea id="rc-decision-rule" name="rc_decision_rule" rows="2"
+                              placeholder="z.&thinsp;B. Else if the primary task is programming, return Programming."
+                              style="width:100%;max-width:700px;resize:vertical"></textarea>
+                    <p class="hint">Vollständiger Regeltext inkl. „If / Else if / Otherwise" und „, return Kategorie."</p>
+                </div>
+
+                <div style="display:flex;gap:24px;flex-wrap:wrap">
+                    <div class="form-group" style="flex:0 0 160px">
+                        <label for="rc-sort-order">Anzeigereihenfolge</label>
+                        <input type="number" id="rc-sort-order" name="rc_sort_order" min="0" max="999" value="0"
+                               style="max-width:100px">
+                        <p class="hint">Kleinere Zahl = weiter oben in der Kategorieliste.</p>
+                    </div>
+                    <div class="form-group" style="flex:0 0 160px">
+                        <label for="rc-decision-priority">Entscheidungspriorität</label>
+                        <input type="number" id="rc-decision-priority" name="rc_decision_priority" min="0" max="999" value="0"
+                               style="max-width:100px">
+                        <p class="hint">1 = höchste Priorität in den Entscheidungsregeln.</p>
+                    </div>
+                </div>
+
+                <div class="action-row" style="margin-top:8px;gap:10px">
+                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                    <button type="button" class="btn" onclick="rcCancel()">✕ Abbrechen</button>
+                    <button type="button" id="rc-delete-btn" class="btn" style="display:none;margin-left:auto;color:var(--danger,#ef4444);border-color:var(--danger,#ef4444)"
+                            onclick="rcDelete()">🗑 Kategorie löschen</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Prompt preview -->
+        <details style="margin-bottom:16px">
+            <summary style="cursor:pointer;font-size:.9rem;color:var(--muted);user-select:none">🔍 Erzeugten Klassifikations-Prompt anzeigen</summary>
+            <pre id="rc-prompt-preview" style="margin-top:12px;padding:16px;background:var(--code-bg,#111);border:1px solid var(--border);border-radius:var(--radius);font-size:.78rem;white-space:pre-wrap;word-break:break-word;color:var(--text)"><?= htmlspecialchars(buildRoutingPrompt()) ?></pre>
+        </details>
+
+        <!-- Add new category button -->
+        <div>
+            <button type="button" class="btn btn-primary" onclick="rcAdd()">＋ Neue Kategorie hinzufügen</button>
+        </div>
+
         </details>
     </div>
 
@@ -4616,6 +4795,63 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     window.addEventListener('scroll', updateActive, { passive: true });
     updateActive();
 })();
+</script>
+
+<script>
+/* ── Entscheidungsfindung: category CRUD ─────────────────────────────────── */
+(function () {
+    const wrapper   = document.getElementById('rc-form-wrapper');
+    const title     = document.getElementById('rc-form-title');
+    const actionIn  = document.getElementById('rc-action');
+    const idIn      = document.getElementById('rc-id');
+    const nameIn    = document.getElementById('rc-name');
+    const defIn     = document.getElementById('rc-definition');
+    const ruleIn    = document.getElementById('rc-decision-rule');
+    const sortIn    = document.getElementById('rc-sort-order');
+    const prioIn    = document.getElementById('rc-decision-priority');
+    const delBtn    = document.getElementById('rc-delete-btn');
+
+    window.rcEdit = function (id, name, definition, rule, sortOrder, priority) {
+        title.textContent    = 'Kategorie bearbeiten';
+        actionIn.value       = 'update_routing_category';
+        idIn.value           = id;
+        nameIn.value         = name;
+        defIn.value          = definition;
+        ruleIn.value         = rule;
+        sortIn.value         = sortOrder;
+        prioIn.value         = priority;
+        delBtn.style.display = 'inline-flex';
+        wrapper.style.display = 'block';
+        wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+
+    window.rcAdd = function () {
+        title.textContent    = 'Neue Kategorie hinzufügen';
+        actionIn.value       = 'add_routing_category';
+        idIn.value           = '0';
+        nameIn.value         = '';
+        defIn.value          = '';
+        ruleIn.value         = '';
+        sortIn.value         = '<?= !empty($routingCategoriesData) ? (max(array_column($routingCategoriesData, 'sort_order')) + 1) : 1 ?>';
+        prioIn.value         = '<?= !empty($routingCategoriesData) ? (max(array_column($routingCategoriesData, 'decision_priority')) + 1) : 1 ?>';
+        delBtn.style.display = 'none';
+        wrapper.style.display = 'block';
+        wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        nameIn.focus();
+    };
+
+    window.rcCancel = function () {
+        wrapper.style.display = 'none';
+    };
+
+    window.rcDelete = function () {
+        if (!confirm('Kategorie „' + nameIn.value + '" wirklich löschen?\nDie zugehörige Modellzuordnung wird ebenfalls entfernt.')) {
+            return;
+        }
+        actionIn.value = 'delete_routing_category';
+        document.getElementById('rc-form').submit();
+    };
+}());
 </script>
 
 </body>

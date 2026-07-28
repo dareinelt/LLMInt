@@ -319,6 +319,69 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    // Routing categories stored in the DB (replaces lib/prompt.txt).
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS routing_categories (
+            id                INT          NOT NULL AUTO_INCREMENT,
+            name              VARCHAR(100) NOT NULL,
+            definition        TEXT         NOT NULL DEFAULT '',
+            decision_rule     TEXT         NOT NULL DEFAULT '',
+            sort_order        INT          NOT NULL DEFAULT 0,
+            decision_priority INT          NOT NULL DEFAULT 0,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_rc_name (name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // Seed routing_categories from lib/prompt.txt if the table is still empty.
+    $rcCount = (int) $pdo->query('SELECT COUNT(*) FROM routing_categories')->fetchColumn();
+    if ($rcCount === 0) {
+        $seedCategories = [
+            [
+                'name'              => 'Programming',
+                'definition'        => 'Code, software development, debugging, APIs, algorithms, scripting, databases, DevOps, implementation, or technical programming questions.',
+                'decision_rule'     => 'Else if the primary task is programming, return Programming.',
+                'sort_order'        => 1,
+                'decision_priority' => 2,
+            ],
+            [
+                'name'              => 'Math',
+                'definition'        => 'Mathematical calculations, equations, proofs, logic, statistics, or numerical problem solving.',
+                'decision_rule'     => 'Else if the primary task is solving a mathematical problem, return Math.',
+                'sort_order'        => 2,
+                'decision_priority' => 3,
+            ],
+            [
+                'name'              => 'Research',
+                'definition'        => 'Requests to find, verify, compare, summarize, or analyze factual information that would normally require external knowledge or multiple sources.',
+                'decision_rule'     => 'Else if the primary task is gathering or verifying factual information, return Research.',
+                'sort_order'        => 3,
+                'decision_priority' => 4,
+            ],
+            [
+                'name'              => 'ImageAnalysis',
+                'definition'        => 'Requests that require analyzing or answering questions about an image, photo, screenshot, diagram, chart, or other visual content.',
+                'decision_rule'     => 'If the request depends on an image or other visual input, return ImageAnalysis.',
+                'sort_order'        => 4,
+                'decision_priority' => 1,
+            ],
+            [
+                'name'              => 'GeneralConversation',
+                'definition'        => 'Any other request, including casual conversation, writing, translation, brainstorming, opinions, or general assistance.',
+                'decision_rule'     => 'Otherwise, return GeneralConversation.',
+                'sort_order'        => 5,
+                'decision_priority' => 5,
+            ],
+        ];
+        $rcStmt = $pdo->prepare(
+            'INSERT IGNORE INTO routing_categories (name, definition, decision_rule, sort_order, decision_priority)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        foreach ($seedCategories as $sc) {
+            $rcStmt->execute([$sc['name'], $sc['definition'], $sc['decision_rule'], $sc['sort_order'], $sc['decision_priority']]);
+        }
+    }
+
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
         $pdo->prepare(
@@ -398,20 +461,42 @@ function setSetting(string $key, string $value): void
 }
 
 /**
- * Parse categories from the routing prompt file (lib/prompt.txt).
- * Looks for the "Valid outputs only:" marker and returns the non-empty
- * lines that follow it.
+ * Load all routing categories from the database, ordered by sort_order.
+ *
+ * @return array<int,array{id:int,name:string,definition:string,decision_rule:string,sort_order:int,decision_priority:int}>
+ */
+function loadRoutingCategoriesFromDb(): array
+{
+    try {
+        return getDb()->query(
+            'SELECT id, name, definition, decision_rule, sort_order, decision_priority
+               FROM routing_categories
+              ORDER BY sort_order ASC, id ASC'
+        )->fetchAll();
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * Return ordered list of category names from the database.
+ * Falls back to parsing lib/prompt.txt for backward compatibility.
  *
  * @return string[] Ordered list of category names.
  */
 function loadRoutingCategories(): array
 {
+    $rows = loadRoutingCategoriesFromDb();
+    if (!empty($rows)) {
+        return array_column($rows, 'name');
+    }
+    // Legacy fallback: read from file.
     $promptFile = __DIR__ . '/lib/prompt.txt';
     if (!is_file($promptFile)) {
         return [];
     }
-    $lines    = file($promptFile, FILE_IGNORE_NEW_LINES);
-    $found    = false;
+    $lines      = file($promptFile, FILE_IGNORE_NEW_LINES);
+    $found      = false;
     $categories = [];
     foreach ($lines as $line) {
         $trimmed = trim($line);
@@ -426,6 +511,114 @@ function loadRoutingCategories(): array
         }
     }
     return $categories;
+}
+
+/**
+ * Build the full routing system-prompt text from the categories stored in the
+ * database.  The output is layout-identical to lib/prompt.txt.
+ * Falls back to reading that file if the database table is empty.
+ */
+function buildRoutingPrompt(): string
+{
+    $rows = loadRoutingCategoriesFromDb();
+    if (empty($rows)) {
+        $promptFile = __DIR__ . '/lib/prompt.txt';
+        return is_file($promptFile) ? (string) file_get_contents($promptFile) : '';
+    }
+
+    // Categories listed in display order.
+    $catNames = array_column($rows, 'name');
+
+    // Definitions in display order.
+    $defLines = [];
+    foreach ($rows as $row) {
+        $defLines[] = '* ' . $row['name'] . ': ' . $row['definition'];
+    }
+
+    // Decision rules sorted by priority (lowest number = highest priority).
+    $ruleRows = $rows;
+    usort($ruleRows, static fn($a, $b) => (int) $a['decision_priority'] <=> (int) $b['decision_priority']);
+    $ruleLines = [];
+    $num = 1;
+    foreach ($ruleRows as $row) {
+        if (trim($row['decision_rule']) !== '') {
+            $ruleLines[] = $num . '. ' . trim($row['decision_rule']);
+            $num++;
+        }
+    }
+
+    $nl = "\n";
+    $prompt  = 'You are a deterministic intent classifier.' . $nl;
+    $prompt .= $nl;
+    $prompt .= 'Classify the user\'s input into exactly one of these categories:' . $nl;
+    $prompt .= $nl;
+    $prompt .= implode($nl, $catNames) . $nl;
+    $prompt .= $nl;
+    $prompt .= 'Definitions:' . $nl;
+    $prompt .= $nl;
+    $prompt .= implode($nl, $defLines) . $nl;
+    $prompt .= $nl;
+    $prompt .= 'Decision rules (highest priority first):' . $nl;
+    $prompt .= $nl;
+    $prompt .= implode($nl, $ruleLines) . $nl;
+    $prompt .= $nl;
+    $prompt .= 'Output rules:' . $nl;
+    $prompt .= $nl;
+    $prompt .= '* Return exactly one category.' . $nl;
+    $prompt .= '* Do not explain your decision.' . $nl;
+    $prompt .= '* Do not output any additional text.' . $nl;
+    $prompt .= '* Do not output punctuation, Markdown, quotes, or code fences.' . $nl;
+    $prompt .= $nl;
+    $prompt .= 'Valid outputs only:' . $nl;
+    $prompt .= $nl;
+    $prompt .= implode($nl, $catNames) . $nl;
+
+    return $prompt;
+}
+
+/**
+ * Save (upsert) a routing category.
+ * If $id is 0 a new row is inserted; otherwise the existing row is updated.
+ */
+function saveRoutingCategory(
+    int    $id,
+    string $name,
+    string $definition,
+    string $decisionRule,
+    int    $sortOrder,
+    int    $decisionPriority
+): void {
+    $db = getDb();
+    if ($id > 0) {
+        $db->prepare(
+            'UPDATE routing_categories
+                SET name = ?, definition = ?, decision_rule = ?,
+                    sort_order = ?, decision_priority = ?
+              WHERE id = ?'
+        )->execute([$name, $definition, $decisionRule, $sortOrder, $decisionPriority, $id]);
+    } else {
+        $db->prepare(
+            'INSERT INTO routing_categories (name, definition, decision_rule, sort_order, decision_priority)
+             VALUES (?, ?, ?, ?, ?)'
+        )->execute([$name, $definition, $decisionRule, $sortOrder, $decisionPriority]);
+    }
+}
+
+/**
+ * Delete a routing category by ID.
+ * Also removes any associated routing rule.
+ */
+function deleteRoutingCategory(int $id): void
+{
+    $db = getDb();
+    // Get the name first so we can clean up the routing_rules table.
+    $row = $db->prepare('SELECT name FROM routing_categories WHERE id = ?');
+    $row->execute([$id]);
+    $cat = $row->fetchColumn();
+    $db->prepare('DELETE FROM routing_categories WHERE id = ?')->execute([$id]);
+    if ($cat !== false && $cat !== '') {
+        $db->prepare('DELETE FROM routing_rules WHERE category = ?')->execute([$cat]);
+    }
 }
 
 /**
