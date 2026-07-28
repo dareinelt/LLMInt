@@ -12,6 +12,7 @@ Sie bündelt Chat, Tool-Aufrufe, Endpunkt-Verwaltung und Monitoring in einer Obe
 - [Systemüberblick](#systemüberblick)
 - [Voraussetzungen](#voraussetzungen)
 - [Installation](#installation)
+- [Docker-Installation](#docker-installation)
 - [Schnellstart](#schnellstart)
 - [Admin-Ersteinrichtung](#admin-ersteinrichtung)
 - [Funktionsweise im Betrieb](#funktionsweise-im-betrieb)
@@ -171,6 +172,252 @@ Standardzugang nach Erstinstallation:
 - Passwort: `admin`
 
 > Nach dem ersten Login sofort Passwort ändern und `setup.php` absichern oder entfernen.
+
+---
+
+## Docker-Installation
+
+Docker ist der empfohlene Weg für eine reproduzierbare, isolierte Bereitstellung von LLMInt.  
+Das mitgelieferte `docker-compose.yml` startet MySQL und die PHP/Apache-Anwendung mit einem einzigen Befehl.
+
+### Voraussetzungen
+
+| Komponente | Mindestversion |
+|---|---|
+| Docker | 24.x |
+| Docker Compose | 2.x (Plugin oder `docker-compose` CLI) |
+
+### 1. Repository klonen
+
+```bash
+git clone https://github.com/dareinelt/LLMInt.git
+cd LLMInt
+```
+
+### 2. Umgebungsvariablen konfigurieren
+
+Kopiere die Beispieldatei und passe die Werte an:
+
+```bash
+cp .env.example .env
+```
+
+Die `.env`-Datei enthält folgende Einstellungen:
+
+```dotenv
+# ── Datenbank ──────────────────────────────────────────────────────────────────
+DB_NAME=llmint
+DB_USER=llmint
+DB_PASS=llmint          # ← sicheres Passwort setzen!
+DB_ROOT_PASS=changeme   # ← sicheres Root-Passwort setzen!
+
+# ── Web-Server ────────────────────────────────────────────────────────────────
+HTTP_PORT=8080          # Host-Port, unter dem die App erreichbar ist
+
+# ── Zeitzone ──────────────────────────────────────────────────────────────────
+TZ=Europe/Berlin
+```
+
+> **Wichtig:** Ändere `DB_PASS` und `DB_ROOT_PASS` vor dem ersten Start auf starke Passwörter.  
+> Die `.env`-Datei ist im `.dockerignore` aufgeführt und wird **nicht** in das Image gebacken.
+
+### 3. Container bauen und starten
+
+```bash
+docker compose up -d --build
+```
+
+Beim ersten Start führt der Entrypoint automatisch `setup.php` aus, sobald MySQL bereit ist.  
+Das vollständige Datenbankschema und der Standard-Admin-Account werden dabei angelegt.
+
+Den Startvorgang verfolgen:
+
+```bash
+docker compose logs -f web
+```
+
+Die Ausgabe sieht in etwa so aus:
+
+```
+web-1  | [entrypoint] Waiting for database at db:3306…
+web-1  | [entrypoint] Database is ready.
+web-1  | [entrypoint] Running setup.php…
+web-1  | [entrypoint] Setup complete.
+web-1  | [entrypoint] Starting Apache…
+```
+
+### 4. Anwendung aufrufen
+
+| Adresse | Zweck |
+|---|---|
+| `http://localhost:8080` | Chat-Oberfläche |
+| `http://localhost:8080/admin/login.php` | Admin-Bereich |
+
+Standardzugang:
+
+- Benutzername: `admin`
+- Passwort: `admin`
+
+> Nach dem ersten Login sofort das Passwort ändern.
+
+### Docker-Verzeichnisstruktur
+
+```text
+.
+├── Dockerfile              # PHP 8.2 + Apache + Extensions
+├── docker-compose.yml      # MySQL + Web-Service
+├── .env.example            # Vorlage für Umgebungsvariablen
+├── .dockerignore           # Aus dem Build-Kontext ausgeschlossene Dateien
+└── docker/
+    ├── apache.conf         # Apache-VirtualHost-Konfiguration
+    ├── php.ini             # PHP-Einstellungen (Limits, Session, Zeitzone)
+    └── entrypoint.sh       # Wartet auf DB, führt setup.php aus, startet Apache
+```
+
+### PHP-Einstellungen (docker/php.ini)
+
+| Einstellung | Wert | Erläuterung |
+|---|---|---|
+| `upload_max_filesize` | 100 MB | Maximale Dateigröße für Dokument-Uploads |
+| `post_max_size` | 100 MB | Maximale POST-Body-Größe |
+| `memory_limit` | 1024 MB | Arbeitsspeicherlimit für PHP |
+| `max_execution_time` | 3000 s | Timeout für LLM-Streaming-Requests |
+| `max_input_time` | 3000 s | Timeout beim Einlesen großer Requests |
+| `session.cookie_httponly` | 1 | Schützt Sitzungscookies vor JavaScript-Zugriff |
+| `session.use_strict_mode` | 1 | Verhindert Session-Fixation-Angriffe |
+
+Diese Werte können über die `.env`-Variable `TZ` (Zeitzone) oder durch Mounten einer eigenen `php.ini` überschrieben werden.
+
+### Persistenz (Named Volumes)
+
+Docker Compose verwendet drei benannte Volumes, damit Daten Container-Neustarts überleben:
+
+| Volume | Pfad im Container | Inhalt |
+|---|---|---|
+| `db_data` | `/var/lib/mysql` | MySQL-Datenbankdateien |
+| `doc_uploads` | `/var/www/html/doc_uploads` | Hochgeladene Dokumente (RAG) |
+| `sd_output` | `/var/www/html/sd_output` | Generierte Bilder (SD / ComfyUI) |
+
+Volumes auflisten:
+
+```bash
+docker volume ls | grep llmint
+```
+
+### Container-Lebenszyklus
+
+| Befehl | Wirkung |
+|---|---|
+| `docker compose up -d` | Container im Hintergrund starten |
+| `docker compose up -d --build` | Image neu bauen und starten |
+| `docker compose stop` | Container anhalten (Volumes bleiben erhalten) |
+| `docker compose down` | Container entfernen (Volumes bleiben erhalten) |
+| `docker compose down -v` | Container **und** Volumes entfernen (Datenverlust!) |
+| `docker compose restart web` | Nur den Web-Container neu starten |
+| `docker compose logs -f web` | Logs des Web-Containers live verfolgen |
+| `docker compose exec web bash` | Shell im laufenden Web-Container öffnen |
+
+### Aktualisieren auf eine neue Version
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+Das Entrypoint-Skript führt `setup.php` bei jedem Start aus.  
+Da das Setup idempotent ist, werden fehlende Tabellen ergänzt, ohne bestehende Daten zu verändern.
+
+### Optionale Konfiguration
+
+#### Anderen Host-Port verwenden
+
+In der `.env` anpassen:
+
+```dotenv
+HTTP_PORT=8090
+```
+
+Dann Container neu starten:
+
+```bash
+docker compose up -d
+```
+
+#### Windows-SSO / Kerberos (GSSAPI)
+
+Das Image enthält bereits `mod_auth_gssapi` und `krb5-user`.  
+Um transparentes Windows-Single-Sign-On zu aktivieren:
+
+1. Keytab und `krb5.conf` erstellen und im Projektverzeichnis ablegen.
+2. In `docker-compose.yml` die auskommentierten Volume-Mounts aktivieren:
+
+   ```yaml
+   - ./krb5.keytab:/etc/krb5.keytab:ro
+   - ./krb5.conf:/etc/krb5.conf:ro
+   ```
+
+3. Den GSSAPI-Block in `docker/apache.conf` einkommentieren:
+
+   ```apache
+   AuthType GSSAPI
+   AuthName "LLMInt – Windows SSO"
+   GssapiCredStore keytab:/etc/krb5.keytab
+   GssapiLocalName On
+   Require valid-user
+   ```
+
+4. Image neu bauen und starten:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+> Keytab-Dateien sind Zugangsdaten. Niemals in das Image einbauen oder in Git committen.  
+> Sie sind im `.dockerignore` explizit ausgeschlossen.
+
+#### Reverse Proxy (nginx / Traefik)
+
+Für HTTPS-Betrieb hinter einem Reverse Proxy den internen Port nicht mehr öffentlich freigeben:
+
+```yaml
+# docker-compose.yml – web service
+ports: []          # keinen Host-Port mehr binden
+```
+
+Dann den Reverse Proxy auf den internen Container-Port 80 leiten.
+
+### Troubleshooting (Docker)
+
+#### Container startet nicht – Datenbankfehler
+
+```bash
+docker compose logs db
+docker compose logs web
+```
+
+Häufige Ursachen:
+
+- `DB_PASS` in `.env` stimmt nicht mit dem bereits initialisierten Volume überein → Volume löschen und neu starten.
+- MySQL braucht beim allerersten Start länger. Der Entrypoint wartet automatisch, bis die DB antwortet.
+
+#### Volume mit falschen Zugangsdaten initialisiert
+
+```bash
+docker compose down -v   # Achtung: löscht alle Volumes!
+docker compose up -d --build
+```
+
+#### PHP-Logs einsehen
+
+```bash
+docker compose exec web tail -f /var/log/apache2/error.log
+```
+
+#### setup.php manuell erneut ausführen
+
+```bash
+docker compose exec web php /var/www/html/setup.php
+```
 
 ---
 
