@@ -22,6 +22,9 @@ $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
 $guestDefaultModel  = trim(getSetting('default_model', ''));
 $newUserDefaultModel = trim(getSetting('new_user_default_model', ''));
 $visionModel = trim(getSetting('vision_model', ''));
+$routingDecisionModel = trim(getSetting('routing_decision_model', ''));
+$routingCategories = loadRoutingCategories();
+$routingRules = loadRoutingRules();
 
 // ── SMTP settings ─────────────────────────────────────────────────────────────
 $smtpHost       = getSetting('smtp_host', '');
@@ -407,6 +410,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db->prepare('DELETE FROM comfy_endpoints WHERE id = ?')->execute([$epId]);
                 $flashOk = 'ComfyUI-Endpunkt gelöscht.';
             }
+
+        // ── Save routing settings ─────────────────────────────────────────────
+        } elseif ($action === 'save_routing_settings') {
+            $newDecisionModel = trim($_POST['routing_decision_model'] ?? '');
+            setSetting('routing_decision_model', $newDecisionModel);
+
+            // Save per-category model assignments.
+            $categories = loadRoutingCategories();
+            foreach ($categories as $cat) {
+                $fieldName = 'routing_model_' . preg_replace('/[^a-zA-Z0-9]/', '_', $cat);
+                $catModel  = trim($_POST[$fieldName] ?? '');
+                saveRoutingRule($cat, $catModel);
+            }
+            $flashOk = 'Modellrouting gespeichert.';
 
         // ── Change password ───────────────────────────────────────────────────
         } elseif ($action === 'change_password') {
@@ -946,6 +963,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         #config-request-handling-card { order: 6; }
         #config-sd-card { order: 7; }
         #config-comfy-card { order: 8; }
+        #config-routing-card { order: 9; }
 
         /* ── User row hover ──────────────────────────────────────── */
         .user-row:hover td { background: rgba(108,99,255,.06); }
@@ -1350,6 +1368,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <a href="#config-request-handling-card">📨 Anfragenhandling</a>
     <a href="#config-sd-card">🎨 AUTOMATIC1111</a>
     <a href="#config-comfy-card">🖼️ ComfyUI</a>
+    <a href="#config-routing-card">🧭 Modellrouting</a>
 
     <span class="sidebar-label">Verwaltung</span>
     <a href="#users-card">👤 Benutzerkonten</a>
@@ -2175,6 +2194,114 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 </div>
             </form>
         </div>
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Modellrouting
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-routing-card">
+        <details class="config-panel" id="config-routing" open>
+        <summary>🧭 Modellrouting</summary>
+
+        <p class="hint" style="margin-bottom:18px">
+            Das <strong>Entscheidungsmodell</strong> analysiert jeden Nutzer-Prompt und ordnet ihn einer Kategorie zu.
+            Der Prompt wird dabei mit dem Inhalt der Datei <code>lib/prompt.txt</code> als Systemnachricht an das
+            Entscheidungsmodell gesendet. Anschließend wird der ursprüngliche Nutzer-Prompt an das Modell weitergeleitet,
+            das der ermittelten Kategorie zugeordnet ist.
+            Ist kein Entscheidungsmodell konfiguriert, wird das reguläre Modellrouting verwendet.
+        </p>
+
+        <form method="POST">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+            <input type="hidden" name="action" value="save_routing_settings">
+
+            <div class="form-group">
+                <label for="routing-decision-model">Entscheidungsmodell</label>
+                <select id="routing-decision-model" name="routing_decision_model">
+                    <option value="" <?= $routingDecisionModel === '' ? 'selected' : '' ?>>
+                        Kein Entscheidungsmodell (regelbasiertes Routing deaktiviert)
+                    </option>
+                    <?php foreach ($availableGuestModels as $model): ?>
+                        <?php $intelligence = modelIntelligenceLabel($model); ?>
+                        <option value="<?= htmlspecialchars($model) ?>"
+                            <?= $routingDecisionModel === $model ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($model) ?><?= $intelligence !== '–' ? ' · ' . htmlspecialchars($intelligence) : '' ?>
+                        </option>
+                    <?php endforeach; ?>
+                    <?php if ($routingDecisionModel !== '' && !isset($availableGuestModels[$routingDecisionModel])): ?>
+                        <option value="<?= htmlspecialchars($routingDecisionModel) ?>" selected>
+                            <?= htmlspecialchars($routingDecisionModel) ?> · derzeit nicht verfügbar
+                        </option>
+                    <?php endif; ?>
+                </select>
+                <p class="hint">
+                    Dieses Modell klassifiziert den Nutzer-Prompt in eine der folgenden Kategorien.
+                    Es sollte ein schnelles, kompaktes Modell sein.
+                </p>
+            </div>
+
+            <?php if (empty($routingCategories)): ?>
+                <p class="hint" style="color:var(--warning)">
+                    Keine Kategorien gefunden. Stelle sicher, dass <code>lib/prompt.txt</code> existiert und
+                    einen Abschnitt „Valid outputs only:" enthält.
+                </p>
+            <?php else: ?>
+                <h3>Kategorie-Zuordnung</h3>
+                <p class="hint" style="margin-bottom:14px">
+                    Jeder Kategorie kann ein Zielmodell zugeordnet werden.
+                    Leer lassen, um auf das reguläre Standard-Modell zurückzufallen.
+                </p>
+                <table class="data-table" style="margin-bottom:18px">
+                    <thead>
+                        <tr>
+                            <th>Kategorie</th>
+                            <th>Zielmodell (Knowhow)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($routingCategories as $cat): ?>
+                            <?php
+                            $fieldName     = 'routing_model_' . preg_replace('/[^a-zA-Z0-9]/', '_', $cat);
+                            $assignedModel = $routingRules[$cat] ?? '';
+                            ?>
+                            <tr>
+                                <td>
+                                    <strong><?= htmlspecialchars($cat) ?></strong>
+                                </td>
+                                <td>
+                                    <select name="<?= htmlspecialchars($fieldName) ?>"
+                                            style="width:100%;max-width:480px;padding:6px 10px;
+                                                   background:var(--bg);border:1px solid var(--border);
+                                                   border-radius:var(--radius);color:var(--text);
+                                                   font-size:.85rem;font-family:var(--font)">
+                                        <option value="" <?= $assignedModel === '' ? 'selected' : '' ?>>
+                                            – Standard-Modell verwenden –
+                                        </option>
+                                        <?php foreach ($availableGuestModels as $model): ?>
+                                            <?php $intelligence = modelIntelligenceLabel($model); ?>
+                                            <option value="<?= htmlspecialchars($model) ?>"
+                                                <?= $assignedModel === $model ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($model) ?><?= $intelligence !== '–' ? ' · ' . htmlspecialchars($intelligence) : '' ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                        <?php if ($assignedModel !== '' && !isset($availableGuestModels[$assignedModel])): ?>
+                                            <option value="<?= htmlspecialchars($assignedModel) ?>" selected>
+                                                <?= htmlspecialchars($assignedModel) ?> · derzeit nicht verfügbar
+                                            </option>
+                                        <?php endif; ?>
+                                    </select>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+
+            <div class="action-row">
+                <button type="submit" class="btn btn-primary">💾 Speichern</button>
+            </div>
+        </form>
         </details>
     </div>
 

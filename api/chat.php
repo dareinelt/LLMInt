@@ -995,6 +995,86 @@ foreach ($payload['messages'] as $msg) {
 // ── Select endpoint via load balancer ─────────────────────────────────────────
 
 $model = $payload['model'];
+
+// ── Rule-based model routing ──────────────────────────────────────────────────
+// If a routing decision model is configured, classify the user's prompt and
+// replace $model with the category-specific target model before dispatching.
+
+$routingDecisionModel = trim(getSetting('routing_decision_model', ''));
+if ($routingDecisionModel !== '') {
+    // Extract the last user message text for classification.
+    $lastUserText = '';
+    foreach (array_reverse($payload['messages']) as $msg) {
+        if (($msg['role'] ?? '') === 'user') {
+            $lastUserText = is_string($msg['content']) ? $msg['content'] : '';
+            break;
+        }
+    }
+
+    if ($lastUserText !== '') {
+        $promptFile = __DIR__ . '/../lib/prompt.txt';
+        $systemPrompt = is_file($promptFile) ? (string) file_get_contents($promptFile) : '';
+
+        if ($systemPrompt !== '') {
+            // Pick a slot for the decision model (non-blocking: skip if unavailable).
+            try {
+                $routingSlot = pickEndpointForModel($routingDecisionModel);
+            } catch (Throwable $e) {
+                $routingSlot = null;
+            }
+
+            if ($routingSlot !== null) {
+                $routingEndpoint = $routingSlot['endpoint'];
+                $routingTaskId   = $routingSlot['task_id'];
+                $routingBaseUrl  = rtrim($routingEndpoint['base_url'], '/');
+                $routingTimeout  = max(10, min(60, (int) $routingEndpoint['timeout']));
+
+                $routingPayload = [
+                    'model'       => $routingDecisionModel,
+                    'messages'    => [
+                        ['role' => 'system', 'content' => $systemPrompt],
+                        ['role' => 'user',   'content' => $lastUserText],
+                    ],
+                    'stream'      => false,
+                    'temperature' => 0.0,
+                    'max_tokens'  => 20,
+                ];
+
+                $rch = curl_init($routingBaseUrl . '/chat/completions');
+                curl_setopt_array($rch, [
+                    CURLOPT_POST           => true,
+                    CURLOPT_POSTFIELDS     => json_encode($routingPayload),
+                    CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Accept: application/json'],
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_TIMEOUT        => $routingTimeout,
+                ]);
+                $routingBody = curl_exec($rch);
+                $routingHttpCode = (int) curl_getinfo($rch, CURLINFO_HTTP_CODE);
+                $routingCurlErr  = curl_error($rch);
+                curl_close($rch);
+
+                completeTask($routingTaskId, ($routingCurlErr !== '' || $routingHttpCode !== 200) ? 'error' : 'done');
+
+                if ($routingCurlErr === '' && $routingHttpCode === 200) {
+                    $routingData = json_decode($routingBody, true);
+                    $detectedCategory = trim(
+                        (string) ($routingData['choices'][0]['message']['content'] ?? '')
+                    );
+                    // Strip surrounding whitespace, newlines and any markdown artefacts.
+                    $detectedCategory = trim($detectedCategory, " \t\n\r\0\x0B`\"'");
+
+                    // Look up the model assigned to this category.
+                    $routingRules = loadRoutingRules();
+                    if ($detectedCategory !== '' && isset($routingRules[$detectedCategory]) && $routingRules[$detectedCategory] !== '') {
+                        $model = $routingRules[$detectedCategory];
+                        $payload['model'] = $model;
+                    }
+                }
+            }
+        }
+    }
+}
+
 $intelligenceUpgrade = null;
 try {
     $intelligenceUpgrade = getUpgradeModelSuggestionForRequestedModel($model);
