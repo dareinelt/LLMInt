@@ -1499,6 +1499,224 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <?php endif; ?>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
+         Dashboard – Statistik & Lastverteilung (live)
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="dashboard-card">
+
+        <!-- Header row -->
+        <div class="tree-header-row">
+            <h2 style="margin:0;padding:0;border:none">🚀 Dashboard</h2>
+            <div class="tree-header-controls">
+                <button class="tree-reset-btn" id="tree-reset-btn" title="Ansicht zurücksetzen">⊡ Ansicht zurücksetzen</button>
+                <div class="tree-refresh-info">
+                    <span class="tree-refresh-dot" id="tree-live-dot"></span>
+                    <span id="tree-status">Initialisierung …</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary stat boxes -->
+        <div class="stat-grid">
+            <div class="stat-box">
+                <div class="stat-val stat-running" id="db-llm-running"><?= number_format((int) $totals['total_running']) ?></div>
+                <div class="stat-lbl">LLM laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="db-llm-done24"><?= number_format((int) $totals['total_done_24h']) ?></div>
+                <div class="stat-lbl">LLM erledigt (24 h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="db-llm-done"><?= number_format((int) $totals['total_done']) ?></div>
+                <div class="stat-lbl">LLM erledigt (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-error" id="db-llm-error"><?= number_format((int) $totals['total_error']) ?></div>
+                <div class="stat-lbl">LLM Fehler (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-tokens" id="db-prompt-tok"><?= number_format((int) $totals['grand_prompt_tokens']) ?></div>
+                <div class="stat-lbl">Prompt Token (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-tokens" id="db-comp-tok"><?= number_format((int) $totals['grand_completion_tokens']) ?></div>
+                <div class="stat-lbl">Completion Token (gesamt)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-tokens" id="db-total-tok"><?= number_format((int) $totals['grand_tokens']) ?></div>
+                <div class="stat-lbl">Total Token (gesamt)</div>
+            </div>
+            <?php if ($searxngBaseUrl !== ''): ?>
+            <div class="stat-box">
+                <div class="stat-val stat-running" id="db-srxng-running"><?= number_format($searxngStats['running']) ?></div>
+                <div class="stat-lbl">Suchen laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="db-srxng-today"><?= number_format($searxngStats['today_jobs']) ?></div>
+                <div class="stat-lbl">Suchen heute</div>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($sdEndpoints)): ?>
+            <div class="stat-box">
+                <div class="stat-val stat-running" id="db-sd-running"><?= number_format((int) $sdTotals['total_running']) ?></div>
+                <div class="stat-lbl">SD laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="db-sd-done24"><?= number_format((int) $sdTotals['total_done_24h']) ?></div>
+                <div class="stat-lbl">SD Bilder (24 h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="db-sd-done"><?= number_format((int) $sdTotals['total_done']) ?></div>
+                <div class="stat-lbl">SD Bilder (gesamt)</div>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($comfyEndpoints)): ?>
+            <div class="stat-box">
+                <div class="stat-val stat-running" id="db-comfy-running"><?= number_format((int) $comfyTotals['total_running']) ?></div>
+                <div class="stat-lbl">ComfyUI laufend</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="db-comfy-done24"><?= number_format((int) $comfyTotals['total_done_24h']) ?></div>
+                <div class="stat-lbl">ComfyUI (24 h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="db-comfy-done"><?= number_format((int) $comfyTotals['total_done']) ?></div>
+                <div class="stat-lbl">ComfyUI (gesamt)</div>
+            </div>
+            <?php endif; ?>
+        </div>
+
+        <!-- Live load-distribution visualization -->
+        <div id="load-tree-container">
+            <svg id="load-tree-svg"
+                 xmlns="http://www.w3.org/2000/svg"
+                 preserveAspectRatio="xMinYMin meet"
+                 aria-label="Horizontale Lastverteilung der Endpunkte">
+            </svg>
+        </div>
+
+        <!-- Collapsible endpoint detail tables -->
+        <div class="dash-detail-toggle" id="dash-detail-toggle">
+            <span class="toggle-arrow">▶</span>
+            <span>Endpunkt-Details</span>
+        </div>
+        <div class="dash-detail-body" id="dash-detail-body">
+
+        <?php if (empty($epStats)): ?>
+            <p style="color:var(--text-muted)">Noch keine LLM-Aufgaben verarbeitet.</p>
+        <?php else: ?>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Endpunkt</th>
+                    <th>Modell-Gruppe</th>
+                    <th style="text-align:right">Laufend</th>
+                    <th style="text-align:right">Erledigt (24 h)</th>
+                    <th style="text-align:right">Erledigt (gesamt)</th>
+                    <th style="text-align:right">Fehler</th>
+                    <th style="text-align:right">⌀ Token</th>
+                    <th style="text-align:right">Prompt Token</th>
+                    <th style="text-align:right">Completion Token</th>
+                    <th style="text-align:right">Total Token</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($epStats as $s): ?>
+                <tr>
+                    <td style="font-family:monospace;font-size:.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($s['base_url']) ?>">
+                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= htmlspecialchars($s['alias'] !== '' ? $s['alias'] : $s['base_url']) ?>
+                    </td>
+                    <td>
+                        <?php if ($s['default_model'] !== ''): ?>
+                            <span class="model-badge"
+                                  style="background:<?= htmlspecialchars($modelColorMap[$s['default_model']] ?? '#555') ?>">
+                                <?= htmlspecialchars($s['default_model']) ?>
+                            </span>
+                        <?php else: ?>
+                            <span class="model-badge badge-empty">–</span>
+                        <?php endif; ?>
+                    </td>
+                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
+                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
+                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
+                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
+                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['avg_tokens']) ?></td>
+                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['sum_prompt_tokens']) ?></td>
+                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['sum_completion_tokens']) ?></td>
+                    <td style="text-align:right;color:var(--accent)"><?= number_format((int) $s['sum_tokens']) ?></td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <?php endif; ?>
+
+        <?php if (!empty($sdStats)): ?>
+        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🎨 Bildgenerierung (AUTOMATIC1111)</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>SD-Endpunkt</th>
+                    <th style="text-align:right">Laufend</th>
+                    <th style="text-align:right">Erledigt (24 h)</th>
+                    <th style="text-align:right">Erledigt (gesamt)</th>
+                    <th style="text-align:right">Fehler</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($sdStats as $s): ?>
+                <tr>
+                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($s['base_url']) ?>">
+                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= htmlspecialchars($s['base_url']) ?>
+                    </td>
+                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
+                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
+                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
+                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+
+        <?php if (!empty($comfyStats)): ?>
+        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🖼️ Bildgenerierung (ComfyUI)</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ComfyUI-Endpunkt</th>
+                    <th style="text-align:right">Laufend</th>
+                    <th style="text-align:right">Erledigt (24 h)</th>
+                    <th style="text-align:right">Erledigt (gesamt)</th>
+                    <th style="text-align:right">Fehler</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($comfyStats as $s): ?>
+                <tr>
+                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title="<?= htmlspecialchars($s['base_url']) ?>">
+                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= htmlspecialchars($s['base_url']) ?>
+                    </td>
+                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
+                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
+                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
+                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+
+        </div><!-- /.dash-detail-body -->
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
          SMTP / Outgoing Mail Server
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-smtp-card">
@@ -2625,224 +2843,6 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 </div>
             </form>
         </details>
-    </div>
-
-    <!-- ═══════════════════════════════════════════════════════════════════════
-         Dashboard – Statistik & Lastverteilung (live)
-    ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card" id="dashboard-card">
-
-        <!-- Header row -->
-        <div class="tree-header-row">
-            <h2 style="margin:0;padding:0;border:none">🚀 Dashboard</h2>
-            <div class="tree-header-controls">
-                <button class="tree-reset-btn" id="tree-reset-btn" title="Ansicht zurücksetzen">⊡ Ansicht zurücksetzen</button>
-                <div class="tree-refresh-info">
-                    <span class="tree-refresh-dot" id="tree-live-dot"></span>
-                    <span id="tree-status">Initialisierung …</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Summary stat boxes -->
-        <div class="stat-grid">
-            <div class="stat-box">
-                <div class="stat-val stat-running" id="db-llm-running"><?= number_format((int) $totals['total_running']) ?></div>
-                <div class="stat-lbl">LLM laufend</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done" id="db-llm-done24"><?= number_format((int) $totals['total_done_24h']) ?></div>
-                <div class="stat-lbl">LLM erledigt (24 h)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done" id="db-llm-done"><?= number_format((int) $totals['total_done']) ?></div>
-                <div class="stat-lbl">LLM erledigt (gesamt)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-error" id="db-llm-error"><?= number_format((int) $totals['total_error']) ?></div>
-                <div class="stat-lbl">LLM Fehler (gesamt)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-tokens" id="db-prompt-tok"><?= number_format((int) $totals['grand_prompt_tokens']) ?></div>
-                <div class="stat-lbl">Prompt Token (gesamt)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-tokens" id="db-comp-tok"><?= number_format((int) $totals['grand_completion_tokens']) ?></div>
-                <div class="stat-lbl">Completion Token (gesamt)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-tokens" id="db-total-tok"><?= number_format((int) $totals['grand_tokens']) ?></div>
-                <div class="stat-lbl">Total Token (gesamt)</div>
-            </div>
-            <?php if ($searxngBaseUrl !== ''): ?>
-            <div class="stat-box">
-                <div class="stat-val stat-running" id="db-srxng-running"><?= number_format($searxngStats['running']) ?></div>
-                <div class="stat-lbl">Suchen laufend</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done" id="db-srxng-today"><?= number_format($searxngStats['today_jobs']) ?></div>
-                <div class="stat-lbl">Suchen heute</div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($sdEndpoints)): ?>
-            <div class="stat-box">
-                <div class="stat-val stat-running" id="db-sd-running"><?= number_format((int) $sdTotals['total_running']) ?></div>
-                <div class="stat-lbl">SD laufend</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done" id="db-sd-done24"><?= number_format((int) $sdTotals['total_done_24h']) ?></div>
-                <div class="stat-lbl">SD Bilder (24 h)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done" id="db-sd-done"><?= number_format((int) $sdTotals['total_done']) ?></div>
-                <div class="stat-lbl">SD Bilder (gesamt)</div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($comfyEndpoints)): ?>
-            <div class="stat-box">
-                <div class="stat-val stat-running" id="db-comfy-running"><?= number_format((int) $comfyTotals['total_running']) ?></div>
-                <div class="stat-lbl">ComfyUI laufend</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done" id="db-comfy-done24"><?= number_format((int) $comfyTotals['total_done_24h']) ?></div>
-                <div class="stat-lbl">ComfyUI (24 h)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done" id="db-comfy-done"><?= number_format((int) $comfyTotals['total_done']) ?></div>
-                <div class="stat-lbl">ComfyUI (gesamt)</div>
-            </div>
-            <?php endif; ?>
-        </div>
-
-        <!-- Live load-distribution visualization -->
-        <div id="load-tree-container">
-            <svg id="load-tree-svg"
-                 xmlns="http://www.w3.org/2000/svg"
-                 preserveAspectRatio="xMinYMin meet"
-                 aria-label="Horizontale Lastverteilung der Endpunkte">
-            </svg>
-        </div>
-
-        <!-- Collapsible endpoint detail tables -->
-        <div class="dash-detail-toggle" id="dash-detail-toggle">
-            <span class="toggle-arrow">▶</span>
-            <span>Endpunkt-Details</span>
-        </div>
-        <div class="dash-detail-body" id="dash-detail-body">
-
-        <?php if (empty($epStats)): ?>
-            <p style="color:var(--text-muted)">Noch keine LLM-Aufgaben verarbeitet.</p>
-        <?php else: ?>
-
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Endpunkt</th>
-                    <th>Modell-Gruppe</th>
-                    <th style="text-align:right">Laufend</th>
-                    <th style="text-align:right">Erledigt (24 h)</th>
-                    <th style="text-align:right">Erledigt (gesamt)</th>
-                    <th style="text-align:right">Fehler</th>
-                    <th style="text-align:right">⌀ Token</th>
-                    <th style="text-align:right">Prompt Token</th>
-                    <th style="text-align:right">Completion Token</th>
-                    <th style="text-align:right">Total Token</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($epStats as $s): ?>
-                <tr>
-                    <td style="font-family:monospace;font-size:.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($s['base_url']) ?>">
-                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= htmlspecialchars($s['alias'] !== '' ? $s['alias'] : $s['base_url']) ?>
-                    </td>
-                    <td>
-                        <?php if ($s['default_model'] !== ''): ?>
-                            <span class="model-badge"
-                                  style="background:<?= htmlspecialchars($modelColorMap[$s['default_model']] ?? '#555') ?>">
-                                <?= htmlspecialchars($s['default_model']) ?>
-                            </span>
-                        <?php else: ?>
-                            <span class="model-badge badge-empty">–</span>
-                        <?php endif; ?>
-                    </td>
-                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
-                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
-                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
-                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
-                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['avg_tokens']) ?></td>
-                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['sum_prompt_tokens']) ?></td>
-                    <td style="text-align:right;color:var(--text-muted)"><?= number_format((int) $s['sum_completion_tokens']) ?></td>
-                    <td style="text-align:right;color:var(--accent)"><?= number_format((int) $s['sum_tokens']) ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-
-        <?php endif; ?>
-
-        <?php if (!empty($sdStats)): ?>
-        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🎨 Bildgenerierung (AUTOMATIC1111)</h3>
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>SD-Endpunkt</th>
-                    <th style="text-align:right">Laufend</th>
-                    <th style="text-align:right">Erledigt (24 h)</th>
-                    <th style="text-align:right">Erledigt (gesamt)</th>
-                    <th style="text-align:right">Fehler</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($sdStats as $s): ?>
-                <tr>
-                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($s['base_url']) ?>">
-                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= htmlspecialchars($s['base_url']) ?>
-                    </td>
-                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
-                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
-                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
-                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-        <?php endif; ?>
-
-        <?php if (!empty($comfyStats)): ?>
-        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🖼️ Bildgenerierung (ComfyUI)</h3>
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>ComfyUI-Endpunkt</th>
-                    <th style="text-align:right">Laufend</th>
-                    <th style="text-align:right">Erledigt (24 h)</th>
-                    <th style="text-align:right">Erledigt (gesamt)</th>
-                    <th style="text-align:right">Fehler</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($comfyStats as $s): ?>
-                <tr>
-                    <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($s['base_url']) ?>">
-                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= htmlspecialchars($s['base_url']) ?>
-                    </td>
-                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
-                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
-                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
-                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-        <?php endif; ?>
-
-        </div><!-- /.dash-detail-body -->
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
