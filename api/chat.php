@@ -1102,8 +1102,12 @@ if (mt_rand(1, 20) === 1) {
     purgeExpiredConversationSessions();
 }
 
+// When the user-selected model is also the routing decision model, reserve one
+// slot per endpoint exclusively for routing decisions so they are never delayed.
+$userSlotMax = ($routingDecisionModel !== '' && $model === $routingDecisionModel) ? 3 : 4;
+
 try {
-    $slot = pickEndpointForModel($model);
+    $slot = pickEndpointForModel($model, $userSlotMax);
 } catch (Throwable $e) {
     http_response_code(500);
     header('Content-Type: application/json; charset=utf-8');
@@ -1157,7 +1161,7 @@ if ($slot === null) {
                 exit;
             }
 
-            $slot = pickEndpointForModel($model);
+            $slot = pickEndpointForModel($model, $userSlotMax);
         } catch (Throwable $e) {
             if (isset($payload['stream']) && $payload['stream'] === true) {
                 emitSseData(['error' => 'Interner Fehler beim Endpunkt-Routing.']);
@@ -1201,7 +1205,7 @@ $endpointRetries = 2;
  * is available or the retry budget is exhausted.
  */
 $switchEndpoint = function () use (
-    $model,
+    $model, $userSlotMax,
     &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries, &$responseDetails
 ): bool {
     if ($endpointRetries <= 0) {
@@ -1212,7 +1216,7 @@ $switchEndpoint = function () use (
         completeTask($taskId, 'error');
     } catch (Throwable $e) {}
     try {
-        $newSlot = pickEndpointForModel($model);
+        $newSlot = pickEndpointForModel($model, $userSlotMax);
     } catch (Throwable $e) {
         return false;
     }
