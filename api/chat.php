@@ -871,13 +871,15 @@ function formatIntelligenceLabel(float $value): string
 
 function buildIntelligenceUpgradePayload(array $suggestion): array
 {
+    $defaultMessage = 'Es stehen Ressourcen bereit um die Aufgabe erneut mit größerer Intelligenz zu bearbeiten. Dies kann länger dauern als zuvor, kann jedoch genauere Antworten liefern. Fortfahren?';
+    $configuredMessage = trim(getSetting('intelligence_upgrade_message', ''));
     return [
         'available' => true,
         'current_model' => (string) ($suggestion['requested_model'] ?? ''),
         'current_intelligence' => formatIntelligenceLabel((float) ($suggestion['requested_intelligence'] ?? 0)),
         'suggested_model' => (string) ($suggestion['model'] ?? ''),
         'suggested_intelligence' => formatIntelligenceLabel((float) ($suggestion['suggested_intelligence'] ?? 0)),
-        'message' => 'Es stehen Ressourcen bereit um die Aufgabe erneut mit größerer Intelligenz zu bearbeiten. Dies kann länger dauern als zuvor, kann jedoch genauere Antworten liefern. Fortfahren?',
+        'message' => $configuredMessage !== '' ? $configuredMessage : $defaultMessage,
     ];
 }
 
