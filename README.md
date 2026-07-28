@@ -1,7 +1,7 @@
 # LLMInt / KHWF KI
 
 LLMInt ist eine leichtgewichtige PHP-Webanwendung für lokale oder interne KI-Infrastrukturen.  
-Sie bündelt Chat, Tool-Aufrufe, Endpunkt-Verwaltung und Monitoring in einer Oberfläche – ohne Framework-Ballast und ohne Build-Pipeline.
+Sie bündelt Chat, Tool-Aufrufe, intelligentes Modell-Routing, Endpunkt-Verwaltung und Monitoring in einer Oberfläche – ohne Framework-Ballast und ohne Build-Pipeline.
 
 ---
 
@@ -16,6 +16,11 @@ Sie bündelt Chat, Tool-Aufrufe, Endpunkt-Verwaltung und Monitoring in einer Obe
 - [Schnellstart](#schnellstart)
 - [Admin-Ersteinrichtung](#admin-ersteinrichtung)
 - [Funktionsweise im Betrieb](#funktionsweise-im-betrieb)
+  - [Modell-Routing im Detail](#modell-routing-im-detail)
+  - [Lastverteilung (LLM)](#lastverteilung-llm)
+  - [Task-Tracking](#task-tracking)
+  - [Konversationsspeicher](#konversationsspeicher)
+  - [Antwort-Metadaten](#antwort-metadaten)
 - [Optionale Integrationen](#optionale-integrationen)
 - [Projektstruktur](#projektstruktur)
 - [Wichtige API-Endpunkte](#wichtige-api-endpunkte)
@@ -54,18 +59,20 @@ Typische Szenarien:
 - Optionaler System-Prompt pro Sitzung
 - Nachvollziehbarkeit über `response_details.processed_by` (Alias oder Base URL)
 
-### 2) Multi-Endpunkt-Routing mit Lastverteilung
+### 2) Zweistufiges Modell-Routing
 
-- Endpunkte in `endpoints`, Task-Tracking in `tasks`
-- Gruppierung über `default_model`
-- Least-Loaded-Auswahl mit Fairness-Verhalten bei gleicher Last
-- Maximal 4 parallele Tasks je Endpunkt
-- Wartelogik bei voller Auslastung
+LLMInt kombiniert zwei Routing-Mechanismen, die nacheinander greifen:
+
+**Stufe 1 – Semantisches Kategorie-Routing (optional)**  
+Ein dediziertes „Decision-Modell" klassifiziert die Nutzeranfrage in eine Kategorie (z. B. `Programming`, `Math`, `ImageAnalysis`). Jeder Kategorie ist ein Zielmodell zugewiesen. Die Kategorien, ihre Definitionen und Entscheidungsregeln werden vollständig in der Datenbank verwaltet und sind im Admin-Bereich editierbar.
+
+**Stufe 2 – Lastverteilung im Endpunkt-Pool**  
+Innerhalb der durch Stufe 1 (oder direkt vom Nutzer) gewählten Modellgruppe wählt der Balancer den Endpunkt mit der geringsten aktuellen Last, bevorzugt dabei länger ungenutzte Endpunkte und hält maximal 4 parallele Tasks je Endpunkt ein.
 
 ### 3) Intelligente Modell-Empfehlung
 
 - Optionales `intelligence_upgrade`-Signal nach Antworten
-- Hinweis auf stärkeres freies Modell (z. B. 8b → 70b)
+- Hinweis auf stärkeres freies Modell (z. B. 8b → 70b), erkannt anhand des `<Zahl>b`-Musters im Modellnamen
 - Kein automatischer Modellwechsel ohne Nutzereinwilligung
 
 ### 4) Erweiterbare Tool-Nutzung im Chat
@@ -79,8 +86,8 @@ Typische Szenarien:
 
 - Login-geschützter Admin-Bereich
 - Endpunktverwaltung inkl. Alias, Aktivstatus, Timeout, Sortierung
-- Modellabruf je Endpunkt
-- Verbindungstests und Laststatistiken
+- Routing-Kategorien und Zielmodelle vollständig im Admin konfigurierbar
+- Modellabruf je Endpunkt, Verbindungstests und Laststatistiken
 - Passwortverwaltung für Admin-Konto
 
 ---
@@ -445,9 +452,10 @@ Empfohlene Reihenfolge:
 1. Admin-Passwort ändern
 2. LLM-Endpunkte eintragen und aktivieren
 3. Standardmodell(e) setzen
-4. Optional SearXNG hinterlegen
-5. Optional SD-/Comfy-Endpunkte hinterlegen
-6. Modell- und Verbindungstests durchführen
+4. Modell-Routing konfigurieren (optional, aber empfohlen)
+5. Optional SearXNG hinterlegen
+6. Optional SD-/Comfy-Endpunkte hinterlegen
+7. Modell- und Verbindungstests durchführen
 
 ### LLM-Endpunkte
 
@@ -456,8 +464,37 @@ Pflicht-/Option-Felder:
 - Base URL (z. B. `http://127.0.0.1:1234/v1`)
 - Alias (optional, für lesbare Ausgabe in `processed_by`)
 - Timeout (Sekunden)
-- `default_model` (relevant für Routing-Gruppe)
+- `default_model` (relevant für Routing-Gruppe; muss mit dem Modellnamen übereinstimmen, den die API zurückliefert)
 - Aktivstatus und Sortierung
+
+> Tipp: Mehrere Endpunkte mit identischem `default_model`-Wert bilden eine Lastverteilungsgruppe. LLMInt wählt automatisch den am wenigsten belasteten Endpunkt.
+
+### Modell-Routing einrichten
+
+Die Routing-Konfiguration befindet sich in der Admin-Karte **„Routing-Entscheidung"**.
+
+**Schritt 1 – Decision-Modell wählen**  
+Trage unter „Routing-Entscheidungsmodell" den `default_model`-Wert eines vorhandenen aktiven Endpunkts ein. Dieses Modell wird ausschließlich zur Klassifikation von Nutzeranfragen verwendet.  
+Empfehlung: ein schnelles, kleines Modell (z. B. 3b–8b), das im selben Endpunkt-Pool wie normale Anfragen läuft.
+
+**Schritt 2 – Kategorien prüfen und anpassen**  
+Die Tabelle zeigt die vorhandenen Routing-Kategorien. Standardmäßig werden `Programming`, `Math`, `Research`, `ImageAnalysis` und `GeneralConversation` angelegt.  
+Jede Kategorie kann bearbeitet werden:
+- **Name:** eindeutiger Schlüssel, der vom Decision-Modell zurückgegeben wird
+- **Definition:** beschreibt, welche Anfragen in diese Kategorie fallen (fließt in den System-Prompt ein)
+- **Entscheidungsregel:** konkrete Wenn-Dann-Formulierung für den Routing-Prompt
+- **Anzeigereihenfolge (`sort_order`):** Reihenfolge der Kategorie im Prompt
+- **Priorität (`decision_priority`):** Reihenfolge der Entscheidungsregeln (1 = höchste Priorität)
+
+**Schritt 3 – Zielmodelle zuweisen**  
+In der Spalte „Zielmodell" jeder Kategorie kann der `default_model`-Wert des gewünschten Endpunkts hinterlegt werden.  
+Bleibt das Feld leer, wird kein Modellwechsel für diese Kategorie vorgenommen.
+
+**Schritt 4 – Routing-Prompt prüfen**  
+Am Ende der Routing-Karte zeigt eine Vorschau den vollständigen System-Prompt, der an das Decision-Modell gesendet wird. So ist der tatsächliche Prompt jederzeit transparent.
+
+**Routing deaktivieren**  
+Das Routing-Decision-Modell-Feld leeren und speichern – damit ist Stufe 1 vollständig deaktiviert.
 
 ### Bild-Endpunkte
 
@@ -468,7 +505,100 @@ Pflicht-/Option-Felder:
 
 ## Funktionsweise im Betrieb
 
-### Routing und Lastverteilung (LLM)
+### Modell-Routing im Detail
+
+LLMInt implementiert ein zweistufiges Routing-System, das semantische Klassifikation und Lastverteilung kombiniert.
+
+#### Stufe 1 – Semantisches Kategorie-Routing
+
+Wenn in den Admin-Einstellungen ein **Routing-Decision-Modell** (`routing_decision_model`) konfiguriert ist, klassifiziert LLMInt jede eingehende Nutzeranfrage automatisch, bevor sie an das eigentliche Antwortmodell weitergeleitet wird.
+
+**Ablauf:**
+
+1. Die letzte Nutzernachricht wird extrahiert.
+2. `buildRoutingPrompt()` (in `db.php`) assembliert einen deterministischen System-Prompt aus den in der Datenbank hinterlegten Routing-Kategorien.
+3. Das Decision-Modell wird über den Balancer gebucht (mit reserviertem Slot, damit normale Nutzerlast nicht verdrängt wird) und erhält die Anfrage mit:
+   - `temperature: 0.0` (deterministisches Ergebnis)
+   - `max_tokens: 20` (nur Kategoriename als Ausgabe)
+   - `stream: false`
+4. Die zurückgegebene Kategorie wird gegen die Tabelle `routing_rules` geprüft. Ist dort ein Zielmodell hinterlegt, ersetzt es das ursprünglich angefragte Modell (`$payload['model']`).
+5. Schlägt die Klassifikation fehl (Netzwerkfehler, Timeout, kein freier Slot), fährt LLMInt ohne Routing fort – das ursprünglich angeforderte Modell bleibt erhalten.
+
+**Routing-Kategorien (`routing_categories`-Tabelle):**
+
+Jede Kategorie besteht aus:
+
+| Feld | Bedeutung |
+|---|---|
+| `name` | Eindeutiger Bezeichner (z. B. `Programming`) |
+| `definition` | Beschreibung, was zu dieser Kategorie gehört |
+| `decision_rule` | Entscheidungsregel im System-Prompt (z. B. „Else if …, return Programming.") |
+| `sort_order` | Reihenfolge der Kategorie in der Anzeige und im Prompt |
+| `decision_priority` | Priorität der Entscheidungsregel (niedrigste Zahl = höchste Priorität) |
+
+Standard-Kategorien nach der Erstinstallation:
+
+| Kategorie | Priorität | Beschreibung |
+|---|---|---|
+| `ImageAnalysis` | 1 | Anfragen mit Bildeingabe |
+| `Programming` | 2 | Code, Debugging, APIs, Algorithmen |
+| `Math` | 3 | Berechnungen, Gleichungen, Statistik |
+| `Research` | 4 | Faktensuche, Vergleiche, Zusammenfassungen |
+| `GeneralConversation` | 5 | Alles Übrige |
+
+Kategorien, Definitionen und Regeln können im Admin-Bereich (Karte „Routing-Entscheidung") vollständig angepasst, ergänzt oder gelöscht werden. Der resultierende Routing-Prompt ist dort live vorschaubar.
+
+**Kategorie–Modell-Zuordnung (`routing_rules`-Tabelle):**
+
+Die Tabelle `routing_rules` speichert die Zuordnung `Kategorie → Modell`.  
+Ist für eine erkannte Kategorie kein Eintrag vorhanden, bleibt das vom Nutzer gewählte Modell unverändert.  
+Ist der Wert leer, wird ebenfalls kein Routing-Wechsel vorgenommen.
+
+**Beispielkonfiguration:**
+
+```
+Decision-Modell:   llama-3.1-8b-instruct
+Routing-Regeln:
+  Programming      → deepseek-coder-33b-instruct
+  Math             → qwen2.5-math-72b
+  ImageAnalysis    → llava-13b
+  Research         → llama-3.1-70b-instruct
+  GeneralConversation → (leer – kein Wechsel)
+```
+
+In diesem Setup beantwortet das 8b-Modell ausschließlich die schnelle Routing-Klassifikation; Programmierfragen landen auf dem Coder-Modell, Mathematikfragen auf dem Math-Modell usw.
+
+---
+
+#### Stufe 2 – Lastverteilung im Endpunkt-Pool
+
+Nach der Modellwahl (durch Routing oder direkt vom Nutzer) wählt `api/balancer.php` den besten verfügbaren Endpunkt aus allen aktiven Einträgen in `endpoints`, die denselben `default_model`-Wert tragen.
+
+**Auswahlreihenfolge (innerhalb einer DB-Transaktion):**
+
+1. Nur aktive Endpunkte (`is_active = 1`) mit passendem `default_model`.
+2. Nur Endpunkte mit weniger als 4 laufenden Tasks.
+3. Bevorzugt den Endpunkt mit der geringsten aktuellen Last.
+4. Bei Gleichstand: derjenige, der zuletzt eine Aufgabe erhalten hat, wird benachteiligt (Round-Robin-Effekt). Endpunkte, die noch nie genutzt wurden, haben Vorrang.
+
+Die Task-Buchung erfolgt atomar in einer Datenbanktransaktion, um Doppelbuchungen unter gleichzeitigen Requests zu verhindern.  
+Wenn kein Endpunkt mit freier Kapazität gefunden wird, gibt `pickEndpointForModel()` `null` zurück und der Request erhält eine entsprechende Fehlerantwort.
+
+---
+
+#### Intelligence-Upgrade-Hinweis
+
+Nach jeder Antwort prüft LLMInt, ob ein leistungsfähigeres Modell mit freiem Kapazitätsslot verfügbar ist.
+
+- Die Erkennung basiert auf dem `<Zahl>b`-Muster im `default_model`-Feld (z. B. `8b`, `70b`).
+- Als Upgrade gilt ein Modell mit einer höheren Parameterzahl, das mindestens einen freien Slot hat.
+- Falls mehrere Kandidaten existieren, wird das kleinste verfügbare Upgrade bevorzugt.
+- Der Hinweis wird als `intelligence_upgrade`-SSE-Ereignis gesendet; der Nutzer entscheidet selbst, ob er wechselt.
+- Enthält der Modellname kein `<Zahl>b`-Muster, wird kein Upgrade-Signal erzeugt.
+
+---
+
+### Lastverteilung (LLM)
 
 - Alle aktiven Endpunkte einer Modellgruppe (`default_model`) konkurrieren um neue Requests.
 - Die Auswahl erfolgt über die geringste aktuelle Last.
@@ -542,15 +672,17 @@ Bei aktivem Comfy-Endpunkt:
 ├── Demo.md
 ├── index.php                 # Chat-UI
 ├── setup.php                 # Initiales Setup
-├── db.php                    # DB-Helper, Runtime-Schema, Sessions
+├── db.php                    # DB-Helper, Runtime-Schema, Sessions, Routing-Logik
 ├── config.php                # Legacy-Basis-Konfiguration
+├── lib/
+│   └── prompt.txt            # Legacy-Fallback für Routing-Prompt (wird durch DB ersetzt)
 ├── admin/
 │   ├── login.php             # Admin-Login
 │   ├── logout.php            # Admin-Logout
-│   ├── index.php             # Admin-Dashboard
+│   ├── index.php             # Admin-Dashboard inkl. Routing-Konfiguration
 │   └── load_stats.php        # Live-Statistiken (JSON)
 ├── api/
-│   ├── chat.php              # Chat-Proxy + Tool-Logik
+│   ├── chat.php              # Chat-Proxy + Tool-Logik + Routing-Dispatch
 │   ├── balancer.php          # LLM-Balancing + Task-Handling
 │   ├── models.php            # Modellabruf
 │   ├── test_searxng.php      # SearXNG-Verbindungstest
@@ -610,10 +742,12 @@ Zusätzliche SSE-Ereignisse:
 
 | Tabelle | Zweck |
 |---|---|
-| `settings` | globale Konfiguration (u. a. `default_model`, `searxng_base_url`) |
+| `settings` | globale Konfiguration (u. a. `default_model`, `searxng_base_url`, `routing_decision_model`) |
 | `users` | Admin-Accounts |
 | `endpoints` | LLM-Endpunkte inkl. Alias, Modell, Timeout, Aktivstatus |
 | `tasks` | LLM-Task-Lebenszyklus und Nutzungswerte |
+| `routing_categories` | Routing-Kategorien (Name, Definition, Entscheidungsregel, Reihenfolge, Priorität) |
+| `routing_rules` | Zuordnung Kategorie → Zielmodell |
 | `conversation_sessions` | serverseitige Chat-Sitzungen |
 | `search_logs` | Protokoll der Websuche |
 | `sd_endpoints` | AUTOMATIC1111-Endpunkte |
@@ -640,8 +774,9 @@ Zusätzliche SSE-Ereignisse:
 - Speicherverbrauch in `sd_output/` regelmäßig prüfen
 - Timeout-Werte entsprechend Netzwerklatenz anpassen
 - Endpunktstatus im Admin überwachen
-- Bei Modelländerungen `default_model`-Gruppen konsistent halten
-- Bei Lastspitzen zusätzliche Endpunkte pro Modellgruppe ergänzen
+- Bei Modelländerungen `default_model`-Gruppen konsistent halten – auch in `routing_rules`-Zuordnungen prüfen
+- Bei Lastspitzen zusätzliche Endpunkte pro Modellgruppe ergänzen; für das Decision-Modell gelten dieselben Kapazitätsregeln
+- Routing-Kategorien und -Regeln bei Änderungen am Modellportfolio anpassen
 - Alte Chat-Sitzungen werden automatisch bereinigt (kein manueller Cron nötig)
 
 ---
@@ -666,6 +801,22 @@ Zusätzliche SSE-Ereignisse:
 - Für mindestens einen aktiven Endpunkt `default_model` setzen
 - Aktivstatus der Endpunkte prüfen
 
+### Routing funktioniert nicht oder Kategorien werden ignoriert
+
+- Prüfen, ob das `routing_decision_model` exakt mit einem `default_model`-Wert eines aktiven Endpunkts übereinstimmt (Groß-/Kleinschreibung beachten).
+- Sicherstellen, dass für die erkannte Kategorie ein Eintrag in `routing_rules` mit einem nicht-leeren Modellnamen vorliegt.
+- Den Routing-Prompt in der Admin-Karte auf korrekte Kategorie-Bezeichnungen prüfen.
+- Im Admin-Bereich testen: Live-Laststatistik zeigt, ob das Decision-Modell Tasks registriert.
+- Wenn das Decision-Modell ausgelastet ist (4 laufende Tasks), wird das Routing übersprungen und das ursprünglich gewählte Modell verwendet – mehr Kapazität durch zusätzliche Endpunkte für das Decision-Modell schaffen.
+- Routing-Modell-Feld leeren und speichern deaktiviert das Feature vollständig.
+
+### Routing-Prompt gibt falsche Kategorie zurück
+
+- Kategorie-Definitionen in der Admin-Karte präzisieren.
+- `decision_priority` anpassen: niedrigere Werte haben höhere Priorität und werden zuerst geprüft.
+- Ein größeres/besseres Modell als Decision-Modell wählen, wenn Klassifikationen unzuverlässig sind.
+- Darauf achten, dass `decision_rule`-Formulierungen eindeutig und nicht überlappend sind.
+
 ### SearXNG liefert keine Ergebnisse
 
 - Nur Basis-URL speichern
@@ -682,7 +833,8 @@ Zusätzliche SSE-Ereignisse:
 ### Kein Intelligence-Upgrade-Hinweis
 
 - Nur verfügbar bei stärkerem freien Modell
-- Modellnamen müssen ein erkennbares `<Zahl>b`-Muster enthalten
+- Modellnamen müssen ein erkennbares `<Zahl>b`-Muster enthalten (z. B. `8b`, `70b`)
+- Das Upgrade-Modell muss mindestens einen freien Kapazitätsslot haben
 
 ---
 
