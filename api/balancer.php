@@ -27,9 +27,16 @@ require_once __DIR__ . '/../db.php';
  *
  * Returns null when no endpoint with available capacity exists for the model.
  *
+ * @param string $model         The model name to route to.
+ * @param int    $maxConcurrent Maximum number of running tasks allowed per endpoint
+ *                              before it is considered full. Defaults to 4.
+ *                              Pass 3 to reserve one slot per endpoint (e.g. for
+ *                              routing-decision calls when the decision model is
+ *                              also used for regular user requests).
+ *
  * @throws PDOException on database errors
  */
-function pickEndpointForModel(string $model): ?array
+function pickEndpointForModel(string $model, int $maxConcurrent = 4): ?array
 {
     $db = getDb();
     $db->beginTransaction();
@@ -49,14 +56,14 @@ function pickEndpointForModel(string $model): ?array
             ) r ON r.endpoint_id = e.id
             WHERE e.is_active = 1
               AND e.default_model = ?
-              AND COALESCE(r.running_count, 0) < 4
+              AND COALESCE(r.running_count, 0) < ?
             ORDER BY
                 COALESCE(r.running_count, 0) ASC,
                 CASE WHEN r.last_task_at IS NULL THEN 0 ELSE 1 END ASC,
                 r.last_task_at ASC
             LIMIT 1
         ');
-        $stmt->execute([$model]);
+        $stmt->execute([$model, $maxConcurrent]);
         $endpoint = $stmt->fetch();
 
         if (!$endpoint) {
