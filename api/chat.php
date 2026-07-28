@@ -1199,6 +1199,8 @@ register_shutdown_function(static function () use (&$taskId, &$taskFinished): vo
 
 // Maximum number of additional endpoints to try when the primary one fails.
 $endpointRetries = 2;
+$upgradeFailoverTried = false;
+$forwardPayload = [];
 
 /**
  * Marks the current task as failed, picks a new endpoint for $model,
@@ -1206,9 +1208,10 @@ $endpointRetries = 2;
  * variables in the outer scope. Returns false when no further endpoint
  * is available or the retry budget is exhausted.
  */
-$switchEndpoint = function () use (
-    $model, $userSlotMax,
-    &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries, &$responseDetails
+$switchEndpoint = function (bool $allowUpgradeFallback = false) use (
+    &$model, $userSlotMax,
+    &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries, &$responseDetails,
+    &$upgradeFailoverTried, &$intelligenceUpgrade, &$forwardPayload, &$payload
 ): bool {
     if ($endpointRetries <= 0) {
         return false;
@@ -1222,6 +1225,26 @@ $switchEndpoint = function () use (
     } catch (Throwable $e) {
         return false;
     }
+
+    if ($newSlot === null && $allowUpgradeFallback && !$upgradeFailoverTried) {
+        $upgradeFailoverTried = true;
+        try {
+            $upgrade = getUpgradeModelSuggestionForRequestedModel($model);
+            if (is_array($upgrade) && !empty($upgrade['model'])) {
+                $upgradeModel = (string) $upgrade['model'];
+                $newSlot = pickEndpointForModel($upgradeModel, 4);
+                if ($newSlot !== null) {
+                    $model = $upgradeModel;
+                    $payload['model'] = $upgradeModel;
+                    $forwardPayload['model'] = $upgradeModel;
+                    $intelligenceUpgrade = null;
+                }
+            }
+        } catch (Throwable $e) {
+            $newSlot = null;
+        }
+    }
+
     if ($newSlot === null) {
         return false;
     }
@@ -1244,7 +1267,7 @@ $stream = $clientRequestedStream && !$useTools;
 
 // Forward only the fields LM Studio expects.
 $forwardPayload = [
-    'model'       => $payload['model'],
+    'model'       => $model,
     'messages'    => $payload['messages'],
     'stream'      => $stream,
     'temperature' => $payload['temperature'] ?? 0.7,
@@ -1340,7 +1363,7 @@ if ($useTools) {
         }
 
         if ($curlErr !== '') {
-            if ($switchEndpoint()) {
+            if ($switchEndpoint(true)) {
                 $url = $baseUrl . '/chat/completions';
                 $iteration--;  // redo this iteration with the new endpoint
                 continue;
@@ -1579,7 +1602,7 @@ if ($stream) {
         // Retry with a different endpoint only if the failure occurred before
         // we sent anything to the client (headers not yet committed).
         if (($streamCurlErr !== '' || ($streamHttpCode !== 0 && $streamHttpCode !== 200)) && !$dataWritten) {
-            if ($switchEndpoint()) {
+            if ($switchEndpoint(true)) {
                 $forwardPayload['stream'] = true;
                 continue;
             }
@@ -1646,7 +1669,7 @@ do {
     header('Content-Type: application/json; charset=utf-8');
 
     if ($curlErr !== '') {
-        if ($switchEndpoint()) {
+        if ($switchEndpoint(true)) {
             $ch = curl_init($url);
             curl_setopt_array($ch, [
                 CURLOPT_POST           => true,
