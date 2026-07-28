@@ -23,6 +23,7 @@ $guestDefaultModel  = trim(getSetting('default_model', ''));
 $newUserDefaultModel = trim(getSetting('new_user_default_model', ''));
 $visionModel = trim(getSetting('vision_model', ''));
 $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
+$intelligenceUpgradeMessage = getSetting('intelligence_upgrade_message', '');
 $routingCategories = loadRoutingCategories();
 $routingCategoriesData = loadRoutingCategoriesFromDb();
 $routingRules = loadRoutingRules();
@@ -202,6 +203,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newUserDefaultModel = $newModel;
             setSetting('new_user_default_model', $newModel);
             $flashOk = 'Standard-Modell für neue Benutzer gespeichert.';
+
+        // ── Save system messages ──────────────────────────────────────────────
+        } elseif ($action === 'save_system_messages') {
+            $newIntelligenceUpgradeMessage = trim($_POST['intelligence_upgrade_message'] ?? '');
+            $intelligenceUpgradeMessage = $newIntelligenceUpgradeMessage;
+            setSetting('intelligence_upgrade_message', $newIntelligenceUpgradeMessage);
+            $flashOk = 'Systemmeldungen gespeichert.';
 
         // ── Save vision model ─────────────────────────────────────────────────
         } elseif ($action === 'save_vision_settings') {
@@ -1057,6 +1065,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         #config-sd-card { order: 7; }
         #config-comfy-card { order: 8; }
         #config-routing-card { order: 9; }
+        #config-system-messages-card { order: 10; }
 
         /* ── User row hover ──────────────────────────────────────── */
         .user-row:hover td { background: rgba(108,99,255,.06); }
@@ -1463,6 +1472,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <a href="#config-comfy-card">🖼️ ComfyUI</a>
     <a href="#config-routing-card">🧭 Modellrouting</a>
     <a href="#config-decision-card">🗂️ Entscheidungsfindung</a>
+
+    <span class="sidebar-label">Systemmeldungen</span>
+    <a href="#config-system-messages-card">💬 Systemmeldungen</a>
 
     <span class="sidebar-label">Verwaltung</span>
     <a href="#users-card">👤 Benutzerkonten</a>
@@ -2579,6 +2591,39 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             </form>
         </div>
 
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Systemmeldungen
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-system-messages-card">
+        <details class="config-panel" id="config-system-messages" open>
+            <summary>💬 Systemmeldungen</summary>
+
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action" value="save_system_messages">
+
+                <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">🧠 intelligence_upgrade</h3>
+                <div class="form-group">
+                    <label for="intelligence-upgrade-message">Meldungstext für Intelligenz-Upgrade-Angebot</label>
+                    <textarea id="intelligence-upgrade-message" name="intelligence_upgrade_message"
+                              rows="4" style="width:100%;resize:vertical;font-family:inherit"
+                    ><?= htmlspecialchars($intelligenceUpgradeMessage) ?></textarea>
+                    <p class="hint">
+                        Dieser Text wird dem Benutzer angezeigt, wenn nach einer Anfrage Ressourcen für ein
+                        intelligenteres Modell verfügbar sind und ein Upgrade angeboten wird.
+                        Leer lassen, um den Standardtext zu verwenden:
+                        <em>„Es stehen Ressourcen bereit um die Aufgabe erneut mit größerer Intelligenz zu bearbeiten.
+                        Dies kann länger dauern als zuvor, kann jedoch genauere Antworten liefern. Fortfahren?"</em>
+                    </p>
+                </div>
+
+                <div class="action-row">
+                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                </div>
+            </form>
         </details>
     </div>
 
@@ -4869,7 +4914,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const sectionIds = [
         'dashboard-card', 'config-smtp-card', 'config-ldap-card', 'config-searxng-card',
         'config-endpoints-card', 'config-request-handling-card',
-        'config-sd-card', 'config-comfy-card', 'users-card', 'password-card'
+        'config-sd-card', 'config-comfy-card', 'config-system-messages-card', 'users-card', 'password-card'
     ];
 
     const links = {};
