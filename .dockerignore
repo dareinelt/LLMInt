@@ -1,0 +1,24 @@
+# Git
+.git
+.gitignore
+
+# Docker build context – don't re-bundle these
+docker-compose*.yml
+Dockerfile
+.dockerignore
+.env
+.env.*
+
+# Runtime / generated files (handled via named volumes)
+doc_uploads/
+sd_output/
+
+# Development / IDE artefacts
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Kerberos credentials – never bake secrets into the image!
+*.keytab
+krb5.conf
