@@ -88,6 +88,12 @@ function ensureRuntimeSchema(PDO $pdo): void
         // Column already exists or ALTER not possible on this DB state.
     }
 
+    // Specialisation flag: category name the endpoint's model is optimised for,
+    // or empty string for general-purpose models.
+    try {
+        $pdo->exec("ALTER TABLE endpoints ADD COLUMN specialized_for_category VARCHAR(100) NOT NULL DEFAULT '' AFTER default_model");
+    } catch (Throwable $_e) { /* column already exists */ }
+
     // SSH credentials for system-metric polling (RAM, CPU load, CPU temp via lm-sensors).
     foreach ([
         "ALTER TABLE endpoints ADD COLUMN ssh_host     VARCHAR(255) NOT NULL DEFAULT '' AFTER is_active",

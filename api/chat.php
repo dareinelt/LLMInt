@@ -1003,6 +1003,7 @@ $model = $payload['model'];
 // replace $model with the category-specific target model before dispatching.
 
 $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
+$detectedCategory = '';
 if ($routingDecisionModel !== '') {
     // Extract the last user message text for classification.
     $lastUserText = '';
@@ -1078,7 +1079,7 @@ if ($routingDecisionModel !== '') {
 
 $intelligenceUpgrade = null;
 try {
-    $intelligenceUpgrade = getUpgradeModelSuggestionForRequestedModel($model);
+    $intelligenceUpgrade = getUpgradeModelSuggestionForRequestedModel($model, $detectedCategory);
 } catch (Throwable $e) {
     $intelligenceUpgrade = null;
 }
@@ -1231,7 +1232,7 @@ $forwardPayload = [];
 $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     &$model, $userSlotMax,
     &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries, &$responseDetails,
-    &$upgradeFailoverTried, &$intelligenceUpgrade, &$forwardPayload, &$payload
+    &$upgradeFailoverTried, &$intelligenceUpgrade, &$forwardPayload, &$payload, $detectedCategory
 ): bool {
     if ($endpointRetries <= 0) {
         return false;
@@ -1249,7 +1250,7 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     if ($newSlot === null && $allowUpgradeFallback && !$upgradeFailoverTried) {
         $upgradeFailoverTried = true;
         try {
-            $upgrade = getUpgradeModelSuggestionForRequestedModel($model);
+            $upgrade = getUpgradeModelSuggestionForRequestedModel($model, $detectedCategory);
             if (is_array($upgrade) && !empty($upgrade['model'])) {
                 $upgradeModel = (string) $upgrade['model'];
                 $newSlot = pickEndpointForModel($upgradeModel, 4);
