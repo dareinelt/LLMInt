@@ -1584,6 +1584,7 @@ $csrfToken = $_SESSION['csrf_token'];
                     session_id: sessionId,
                     stream: true,
                     temperature: 0.7,
+                    intelligence_upgrade_accepted: true,
                 };
                 const upgradeSearchQuery = (responseDetails && typeof responseDetails.search_query === 'string')
                     ? responseDetails.search_query.trim()

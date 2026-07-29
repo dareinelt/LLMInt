@@ -1092,6 +1092,26 @@ if (isset($payload['session_id']) && is_string($payload['session_id'])) {
     }
 }
 
+// ── Session-level intelligence upgrade persistence ────────────────────────────
+// When the user accepted an intelligence upgrade, remember the upgraded model
+// for 20 minutes so that all subsequent requests in the same session are also
+// routed to the higher-intelligence endpoint.
+$upgradeAccepted = isset($payload['intelligence_upgrade_accepted']) && $payload['intelligence_upgrade_accepted'] === true;
+
+if ($upgradeAccepted && $sessionId !== '' && $model !== '') {
+    // Persist the accepted upgrade model so future requests in this session
+    // (within 20 minutes) are automatically routed to it.
+    setSessionUpgradeModel($sessionId, $model);
+} elseif (!$upgradeAccepted && $sessionId !== '') {
+    // Apply a previously accepted upgrade if it is still within the 20-minute window.
+    $activeUpgradeModel = getActiveSessionUpgradeModel($sessionId);
+    if ($activeUpgradeModel !== null && $activeUpgradeModel !== $model) {
+        $model = $activeUpgradeModel;
+        $payload['model'] = $model;
+        $intelligenceUpgrade = null; // already on the upgraded model, no further suggestion needed
+    }
+}
+
 // Resolve the currently logged-in user for session ownership.
 $sessionUserId = isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null;
 // Release the session write lock immediately. chat.php can run for many seconds
