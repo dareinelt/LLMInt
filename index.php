@@ -1618,6 +1618,12 @@ $csrfToken = $_SESSION['csrf_token'];
         noBtn.addEventListener('click', () => {
             clearUpgradePrompt();
             setStatus('Bereit.', 'ok');
+            fetch('api/chat.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'decline_intelligence_upgrade' }),
+                keepalive: true,
+            }).catch(() => {});
         });
 
         yesBtn.addEventListener('click', async () => {

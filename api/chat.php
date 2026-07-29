@@ -466,6 +466,8 @@ function queryDocuments(string $query, ?int $userId): array
         return ['error' => 'Dokumentsuche ist nur für angemeldete Nutzer verfügbar.'];
     }
 
+    writeLog('info', 'Dokumentensuche im Wissensspeicher gestartet.');
+
     try {
         $db = getDb();
         $terms = array_slice(tokenizeQueryTerms($query), 0, 12);
@@ -483,6 +485,7 @@ function queryDocuments(string $query, ?int $userId): array
         $rows = $stmt->fetchAll();
 
         if (empty($rows)) {
+            writeLog('info', 'Dokumentensuche lieferte 0 relevante Dokumente.');
             return [
                 'found' => false,
                 'message' => 'Es sind noch keine analysierten Dokument-Chunks (eigene oder global freigegebene) verfügbar.',
@@ -514,6 +517,7 @@ function queryDocuments(string $query, ?int $userId): array
 
         $ranked = array_slice($ranked, 0, 5);
         if (empty($ranked)) {
+            writeLog('info', 'Dokumentensuche lieferte 0 relevante Dokumente.');
             return [
                 'found' => false,
                 'message' => 'Keine passenden Informationen in den analysierten Dokumenten gefunden.',
@@ -529,11 +533,18 @@ function queryDocuments(string $query, ?int $userId): array
             ];
         }, $ranked);
 
+        $relevantDocumentCount = count(array_unique(array_map(
+            static fn (array $row): int => (int) $row['document_id'],
+            $ranked
+        )));
+        writeLog('info', 'Dokumentensuche lieferte ' . $relevantDocumentCount . ' relevante Dokumente.');
+
         return [
             'found'   => true,
             'results' => $results,
         ];
     } catch (Throwable $e) {
+        writeLog('info', 'Dokumentensuche lieferte 0 relevante Dokumente.');
         return ['error' => 'Datenbankfehler: ' . $e->getMessage()];
     }
 }
@@ -922,6 +933,7 @@ function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null, ?arr
     $model = (string) ($data['model'] ?? '');
 
     ensureSseHeaders();
+    writeLog('info', 'Streaming der Antwort an User gestartet.');
 
     if ($content !== '') {
         emitSseData([
@@ -951,6 +963,11 @@ function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null, ?arr
     emitIntelligenceUpgradeSse($upgradeSuggestion);
     emitResponseDetailsSse($responseDetails);
     emitSseData('[DONE]');
+    if (!connection_aborted()) {
+        writeLog('info', 'Antwort vollständig an User übertragen.');
+    } else {
+        writeLog('warning', 'Anfrage durch User abgebrochen.');
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -977,6 +994,62 @@ function getClientIp(): string
     return $_SERVER['REMOTE_ADDR'] ?? '–';
 }
 
+function getEndpointLogLabel(array $endpoint): string
+{
+    $alias = trim((string) ($endpoint['alias'] ?? ''));
+    if ($alias !== '') {
+        return $alias;
+    }
+    $baseUrl = trim((string) ($endpoint['base_url'] ?? ''));
+    return $baseUrl !== '' ? $baseUrl : 'Unbekannter Endpunkt';
+}
+
+function elapsedMilliseconds(float $startedAt): int
+{
+    return max(0, (int) round((microtime(true) - $startedAt) * 1000));
+}
+
+function isTimeoutMessage(string $message): bool
+{
+    return preg_match('/timed out|timeout|zeitlimit/i', $message) === 1;
+}
+
+function logToolInvoked(string $toolName): void
+{
+    if ($toolName === '') {
+        $toolName = 'Unbekanntes Tool';
+    }
+    writeLog('info', 'Tool ' . $toolName . ' durch Agent aufgerufen.');
+}
+
+function logToolResult(string $toolName, mixed $toolResult): void
+{
+    if ($toolName === '') {
+        $toolName = 'Unbekanntes Tool';
+    }
+    $errorMessage = '';
+    if (is_array($toolResult) && isset($toolResult['error']) && is_string($toolResult['error'])) {
+        $errorMessage = trim($toolResult['error']);
+    }
+
+    if ($errorMessage === '') {
+        writeLog('info', 'Tool ' . $toolName . ' erfolgreich beendet.');
+        return;
+    }
+
+    if (isTimeoutMessage($errorMessage)) {
+        writeLog('warning', 'Tool ' . $toolName . ' überschritt das konfigurierte Zeitlimit und wurde abgebrochen.');
+    }
+}
+
+function logResponseFinished(float $requestStart, ?int $promptTokens, ?int $completionTokens): void
+{
+    writeLog('info', 'Antwortgenerierung abgeschlossen (Gesamtdauer: ' . elapsedMilliseconds($requestStart) . ' ms).');
+    if ($promptTokens !== null && $completionTokens !== null) {
+        writeLog('info', 'Promptgröße: ' . $promptTokens . ' Token, Antwortgröße: ' . $completionTokens . ' Token.');
+    }
+}
+
 $raw     = file_get_contents('php://input');
 $payload = json_decode($raw, true);
 
@@ -984,6 +1057,13 @@ if (!is_array($payload)) {
     http_response_code(400);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['error' => 'Ungültiger JSON-Body.']);
+    exit;
+}
+
+if (($payload['action'] ?? '') === 'decline_intelligence_upgrade') {
+    writeLog('info', 'Intelligence Upgrade durch User (' . getClientIp() . ') abgelehnt.');
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['ok' => true]);
     exit;
 }
 
@@ -1188,6 +1268,7 @@ if ($slot === null) {
 
     while ($slot === null) {
         if (connection_aborted()) {
+            writeLog('warning', 'Anfrage durch User abgebrochen.');
             exit;
         }
 
@@ -1202,6 +1283,7 @@ if ($slot === null) {
                     header('Content-Type: application/json; charset=utf-8');
                     echo json_encode(['error' => 'Kein passender Endpunkt mehr verfügbar.']);
                 }
+                writeLog('warning', 'Für Modell ' . $model . ' ist kein aktiver Modellendpunkt mehr verfügbar.');
                 exit;
             }
 
@@ -1226,6 +1308,8 @@ $timeout  = max(1, (int) $endpoint['timeout']);
 $responseDetails = buildResponseDetails($endpoint);
 $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
 $requestStart = microtime(true);
+writeLog('info', 'Modell ' . $model . ' für die Bearbeitung des Prompts ausgewählt.');
+writeLog('info', 'Antwortgenerierung gestartet.');
 
 // ── Endpoint overload warning ─────────────────────────────────────────────────
 // Log a warning when every active endpoint for this model has more than two
@@ -1317,6 +1401,7 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
                     $payload['model'] = $upgradeModel;
                     $forwardPayload['model'] = $upgradeModel;
                     $intelligenceUpgrade = null;
+                    writeLog('info', 'Modell ' . $model . ' für die Bearbeitung des Prompts ausgewählt.');
                 }
             }
         } catch (Throwable $e) {
@@ -1371,10 +1456,14 @@ if ($useTools) {
     if ($forceSearchQuery !== '') {
         $fakeToolCallId = 'call_' . bin2hex(random_bytes(8));
         $searchLogId = startSearchLog(substr($forceSearchQuery, 0, 400));
+        $searchStartedAt = microtime(true);
         try {
             $searchResult = runSearxngSearch($searxngBaseUrl, substr($forceSearchQuery, 0, 400), min($timeout, 15));
             completeSearchLog($searchLogId, 'done');
             $searchQueryUsed = $forceSearchQuery;
+            $searchElapsedMs = elapsedMilliseconds($searchStartedAt);
+            writeLog('info', 'Websuche erfolgreich abgeschlossen.');
+            writeLog('info', 'Websuche erhöhte Bearbeitungszeit um ' . $searchElapsedMs . ' ms.');
         } catch (Throwable $e) {
             completeSearchLog($searchLogId, 'error');
             $searchResult = ['error' => $e->getMessage()];
@@ -1419,6 +1508,7 @@ if ($useTools) {
         $toolPayload['stream'] = false;
         $toolPayload['tools'] = $tools;
         $toolPayload['tool_choice'] = 'auto';
+        writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
 
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -1442,6 +1532,7 @@ if ($useTools) {
         }
 
         if ($curlErr !== '') {
+            writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
             if ($switchEndpoint(true)) {
                 $url = $baseUrl . '/chat/completions';
                 $iteration--;  // redo this iteration with the new endpoint
@@ -1463,6 +1554,9 @@ if ($useTools) {
             $msg = isset($data['error']['message'])
                 ? $data['error']['message']
                 : 'LM Studio Fehler (HTTP ' . $httpCode . ')';
+            if ($httpCode >= 500) {
+                writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
+            }
             if ($switchEndpoint()) {
                 $url = $baseUrl . '/chat/completions';
                 $iteration--;  // redo this iteration with the new endpoint
@@ -1500,6 +1594,7 @@ if ($useTools) {
         foreach ($toolCalls as $toolCall) {
             $toolResult = ['error' => 'Unbekannter Tool-Aufruf.'];
             $toolName   = $toolCall['function']['name'] ?? '';
+            logToolInvoked($toolName);
 
             if ($toolName === 'search_web' && $useSearchTool) {
                 $args = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
@@ -1510,10 +1605,14 @@ if ($useTools) {
                 } else {
                     writeLog('info', 'Websuche durch Modell ' . $model . ' auf Prompt von Nutzer (' . getClientIp() . ') gestartet (Anfrage: ' . mb_substr($query, 0, 200, 'UTF-8') . ').');
                     $searchLogId = startSearchLog(substr($query, 0, 400));
+                    $searchStartedAt = microtime(true);
                     try {
                         $toolResult = runSearxngSearch($searxngBaseUrl, substr($query, 0, 400), min($timeout, 15));
                         completeSearchLog($searchLogId, 'done');
                         $searchQueryUsed = $query;
+                        $searchElapsedMs = elapsedMilliseconds($searchStartedAt);
+                        writeLog('info', 'Websuche erfolgreich abgeschlossen.');
+                        writeLog('info', 'Websuche erhöhte Bearbeitungszeit um ' . $searchElapsedMs . ' ms.');
                     } catch (Throwable $e) {
                         completeSearchLog($searchLogId, 'error');
                         $toolResult = ['error' => $e->getMessage()];
@@ -1543,6 +1642,8 @@ if ($useTools) {
                 $query = trim((string) ($args['query'] ?? ''));
                 $toolResult = queryDocuments($query, $sessionUserId);
             }
+
+            logToolResult($toolName, $toolResult);
 
             $messages[] = [
                 'role' => 'tool',
@@ -1581,6 +1682,7 @@ if ($useTools) {
 
     $taskFinished = true;
     completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total']);
+    logResponseFinished($requestStart, $usage['prompt'], $usage['completion']);
 
     // Persist the conversation so it survives future endpoint failures.
     if ($sessionId !== '') {
@@ -1628,11 +1730,17 @@ if ($stream) {
     $accumulatedText  = '';  // for session persistence
     $streamCurlErr    = '';
     $streamHttpCode   = 0;
+    $firstTokenLogged = false;
+    $streamStartedLogged = false;
+    $clientAborted = false;
 
     do {
         $tailBuffer      = '';
         $accumulatedText = '';
         $dataWritten     = false;
+        $firstTokenLogged = false;
+        $streamStartedLogged = false;
+        $clientAborted = false;
 
         $chStream = curl_init($url);
         curl_setopt_array($chStream, [
@@ -1643,20 +1751,32 @@ if ($stream) {
             CURLOPT_CONNECTTIMEOUT => $timeout,
             CURLOPT_TIMEOUT        => 0,
         ]);
+        writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
 
         curl_setopt($chStream, CURLOPT_WRITEFUNCTION,
-            static function ($ch, $data) use (&$tailBuffer, &$accumulatedText, &$dataWritten): int {
+            static function ($ch, $data) use (&$tailBuffer, &$accumulatedText, &$dataWritten, &$firstTokenLogged, &$streamStartedLogged, &$clientAborted, $requestStart): int {
                 if (!$dataWritten) {
                     // Emit SSE headers on first data chunk (deferred so we can
                     // still switch the endpoint if the connection was refused).
                     ensureSseHeaders();
                     $dataWritten = true;
+                    if (!$streamStartedLogged) {
+                        writeLog('info', 'Streaming der Antwort an User gestartet.');
+                        $streamStartedLogged = true;
+                    }
                 }
                 echo $data;
                 if (ob_get_level() > 0) {
                     ob_flush();
                 }
                 flush();
+                if (connection_aborted()) {
+                    if (!$clientAborted) {
+                        writeLog('warning', 'Anfrage durch User abgebrochen.');
+                        $clientAborted = true;
+                    }
+                    return 0;
+                }
                 $tailBuffer .= $data;
                 if (strlen($tailBuffer) > 8192) {
                     $tailBuffer = substr($tailBuffer, -8192);
@@ -1666,7 +1786,12 @@ if ($stream) {
                     foreach ($dm[1] as $djson) {
                         $dobj = json_decode($djson, true);
                         if (is_array($dobj) && isset($dobj['choices'][0]['delta']['content'])) {
-                            $accumulatedText .= (string) $dobj['choices'][0]['delta']['content'];
+                            $deltaContent = (string) $dobj['choices'][0]['delta']['content'];
+                            if ($deltaContent !== '' && !$firstTokenLogged) {
+                                writeLog('info', 'Erste Antworttokens nach ' . elapsedMilliseconds($requestStart) . ' ms erzeugt.');
+                                $firstTokenLogged = true;
+                            }
+                            $accumulatedText .= $deltaContent;
                         }
                     }
                 }
@@ -1682,6 +1807,9 @@ if ($stream) {
         // Retry with a different endpoint only if the failure occurred before
         // we sent anything to the client (headers not yet committed).
         if (($streamCurlErr !== '' || ($streamHttpCode !== 0 && $streamHttpCode !== 200)) && !$dataWritten) {
+            if ($streamCurlErr !== '' || $streamHttpCode >= 500) {
+                writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
+            }
             if ($switchEndpoint(true)) {
                 $forwardPayload['stream'] = true;
                 continue;
@@ -1710,6 +1838,9 @@ if ($stream) {
     $streamStatus = ($streamCurlErr === '' && ($streamHttpCode === 0 || $streamHttpCode === 200))
         ? 'done' : 'error';
     completeTask($taskId, $streamStatus, $promptTokens, $completionTokens, $totalTokens);
+    if ($streamStatus === 'done') {
+        logResponseFinished($requestStart, $promptTokens, $completionTokens);
+    }
 
     // Persist conversation on success.
     if ($streamStatus === 'done' && $sessionId !== '' && $accumulatedText !== '') {
@@ -1723,6 +1854,9 @@ if ($stream) {
         $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
         emitIntelligenceUpgradeSse($intelligenceUpgrade);
         emitResponseDetailsSse($responseDetails);
+        if (!$clientAborted) {
+            writeLog('info', 'Antwort vollständig an User übertragen.');
+        }
     }
 
     if ($streamCurlErr !== '') {
@@ -1741,6 +1875,7 @@ if ($stream) {
 // ── Non-streaming path ────────────────────────────────────────────────────────
 
 do {
+    writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
     $body     = curl_exec($ch);
     $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr  = curl_error($ch);
@@ -1749,6 +1884,7 @@ do {
     header('Content-Type: application/json; charset=utf-8');
 
     if ($curlErr !== '') {
+        writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
         if ($switchEndpoint(true)) {
             $ch = curl_init($url);
             curl_setopt_array($ch, [
@@ -1772,6 +1908,9 @@ do {
         $msg  = isset($data['error']['message'])
             ? $data['error']['message']
             : 'LM Studio Fehler (HTTP ' . $httpCode . ')';
+        if ($httpCode >= 500) {
+            writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
+        }
         if ($switchEndpoint()) {
             $ch = curl_init($url);
             curl_setopt_array($ch, [
@@ -1800,6 +1939,7 @@ $totalTokens      = isset($data['usage']['total_tokens'])      ? (int) $data['us
 
 $taskFinished = true;
 completeTask($taskId, 'done', $promptTokens, $completionTokens, $totalTokens);
+logResponseFinished($requestStart, $promptTokens, $completionTokens);
 
 // Persist conversation on success.
 if ($sessionId !== '' && is_array($data)) {
