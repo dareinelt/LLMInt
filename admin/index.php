@@ -109,6 +109,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
                             $isActive, $maxOrder + 1,
                             $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null]);
+                $endpointLabel = $newAlias !== '' ? $newAlias : rtrim($newUrl, '/');
+                writeLog('info', 'Neuer Modellendpunkt erfolgreich registriert (' . $endpointLabel . ', Modell: ' . $newModel . ').');
                 $flashOk = 'Endpunkt hinzugefügt.';
             }
 
@@ -137,6 +139,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($newTimeout < 1 || $newTimeout > 600) {
                 $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
             } else {
+                $previousEndpoint = $db->prepare('SELECT alias, base_url, is_active FROM endpoints WHERE id = ? LIMIT 1');
+                $previousEndpoint->execute([$epId]);
+                $previousEndpoint = $previousEndpoint->fetch();
+
                 // If the password field was left blank, keep the existing value.
                 if ($sshPassword === '' || $sshPassword === null) {
                     $db->prepare(
@@ -157,6 +163,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
                                 $isActive, $sshHost, $sshPort, $sshUser, $sshPassword, $epId]);
                 }
+                if (is_array($previousEndpoint) && (int) ($previousEndpoint['is_active'] ?? 0) === 1 && $isActive !== 1) {
+                    $endpointLabel = trim((string) ($previousEndpoint['alias'] ?? ''));
+                    if ($endpointLabel === '') {
+                        $endpointLabel = trim((string) ($previousEndpoint['base_url'] ?? ''));
+                    }
+                    writeLog('warning', 'Modellendpunkt ' . $endpointLabel . ' nicht mehr verfügbar.');
+                }
                 $flashOk = 'Endpunkt gespeichert.';
             }
 
@@ -164,7 +177,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($action === 'delete_endpoint') {
             $epId = (int) ($_POST['ep_id'] ?? 0);
             if ($epId > 0) {
+                $previousEndpoint = $db->prepare('SELECT alias, base_url FROM endpoints WHERE id = ? LIMIT 1');
+                $previousEndpoint->execute([$epId]);
+                $previousEndpoint = $previousEndpoint->fetch();
                 $db->prepare('DELETE FROM endpoints WHERE id = ?')->execute([$epId]);
+                if (is_array($previousEndpoint)) {
+                    $endpointLabel = trim((string) ($previousEndpoint['alias'] ?? ''));
+                    if ($endpointLabel === '') {
+                        $endpointLabel = trim((string) ($previousEndpoint['base_url'] ?? ''));
+                    }
+                    writeLog('warning', 'Modellendpunkt ' . $endpointLabel . ' nicht mehr verfügbar.');
+                }
                 $flashOk = 'Endpunkt gelöscht.';
             }
 
