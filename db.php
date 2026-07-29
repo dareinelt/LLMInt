@@ -288,13 +288,15 @@ function ensureRuntimeSchema(PDO $pdo): void
 
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS conversation_sessions (
-            session_id  CHAR(64)     NOT NULL,
-            user_id     INT          NULL,
-            title       VARCHAR(200) NOT NULL DEFAULT '',
-            model       VARCHAR(255) NOT NULL DEFAULT '',
-            messages    MEDIUMTEXT   NOT NULL,
-            updated_at  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-                                     ON UPDATE CURRENT_TIMESTAMP(3),
+            session_id           CHAR(64)     NOT NULL,
+            user_id              INT          NULL,
+            title                VARCHAR(200) NOT NULL DEFAULT '',
+            model                VARCHAR(255) NOT NULL DEFAULT '',
+            messages             MEDIUMTEXT   NOT NULL,
+            upgrade_model        VARCHAR(255) NOT NULL DEFAULT '',
+            upgrade_accepted_at  TIMESTAMP(3) NULL,
+            updated_at           TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                              ON UPDATE CURRENT_TIMESTAMP(3),
             PRIMARY KEY (session_id),
             KEY idx_conv_updated (updated_at),
             KEY idx_conv_user    (user_id)
@@ -306,6 +308,8 @@ function ensureRuntimeSchema(PDO $pdo): void
         "ALTER TABLE conversation_sessions ADD COLUMN user_id INT NULL AFTER session_id",
         "ALTER TABLE conversation_sessions ADD COLUMN title VARCHAR(200) NOT NULL DEFAULT '' AFTER user_id",
         "ALTER TABLE conversation_sessions ADD KEY idx_conv_user (user_id)",
+        "ALTER TABLE conversation_sessions ADD COLUMN upgrade_model VARCHAR(255) NOT NULL DEFAULT '' AFTER model",
+        "ALTER TABLE conversation_sessions ADD COLUMN upgrade_accepted_at TIMESTAMP(3) NULL AFTER upgrade_model",
     ] as $alter) {
         try { $pdo->exec($alter); } catch (Throwable $_e) { /* already exists */ }
     }
@@ -736,6 +740,62 @@ function loadConversationSession(string $sessionId): ?array
             return null;
         }
         return ['model' => (string) $row['model'], 'messages' => $messages];
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+/**
+ * Persist an accepted intelligence-upgrade model for a session.
+ * The timestamp is set to NOW so that requests within the next 20 minutes
+ * are automatically routed to the upgraded model.
+ *
+ * @param string $sessionId   Hex session token.
+ * @param string $upgradeModel Model name that was accepted as the upgrade.
+ */
+function setSessionUpgradeModel(string $sessionId, string $upgradeModel): void
+{
+    if ($sessionId === '' || $upgradeModel === '') {
+        return;
+    }
+    try {
+        getDb()->prepare(
+            'UPDATE conversation_sessions
+                SET upgrade_model = ?, upgrade_accepted_at = NOW(3)
+              WHERE session_id = ?'
+        )->execute([$upgradeModel, $sessionId]);
+    } catch (Throwable $e) {
+        // Best-effort – do not break the chat flow on a save failure.
+    }
+}
+
+/**
+ * Return the upgrade model for a session if an upgrade was accepted within
+ * the last 20 minutes, or null otherwise.
+ *
+ * @param string $sessionId Hex session token.
+ * @return string|null The upgrade model name, or null when not active.
+ */
+function getActiveSessionUpgradeModel(string $sessionId): ?string
+{
+    if ($sessionId === '') {
+        return null;
+    }
+    try {
+        $stmt = getDb()->prepare(
+            "SELECT upgrade_model
+               FROM conversation_sessions
+              WHERE session_id = ?
+                AND upgrade_model <> ''
+                AND upgrade_accepted_at >= DATE_SUB(NOW(3), INTERVAL 20 MINUTE)"
+        );
+        $stmt->execute([$sessionId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+        $upgradeModel = (string) ($row['upgrade_model'] ?? '');
+        return $upgradeModel !== '' ? $upgradeModel : null;
     } catch (Throwable $e) {
         return null;
     }
