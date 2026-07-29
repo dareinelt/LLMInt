@@ -133,6 +133,13 @@ function extractModelIntelligenceB(string $model): ?float
 
 /**
  * Returns a larger model with free capacity (if available) for a given requested model.
+ *
+ * When $detectedCategory is non-empty, endpoints specialised for a *different*
+ * category are excluded so that, e.g., a dedicated coding model is never
+ * suggested as an intelligence upgrade for a general-conversation request.
+ * When $detectedCategory is empty, all specialised endpoints are excluded and
+ * only general-purpose endpoints (specialized_for_category = '') are considered.
+ *
  * Shape:
  *   [
  *     'requested_model' => string,
@@ -142,7 +149,7 @@ function extractModelIntelligenceB(string $model): ?float
  *     'free_endpoints' => int
  *   ]
  */
-function getUpgradeModelSuggestionForRequestedModel(string $requestedModel): ?array
+function getUpgradeModelSuggestionForRequestedModel(string $requestedModel, string $detectedCategory = ''): ?array
 {
     $requestedIntelligence = extractModelIntelligenceB($requestedModel);
     if ($requestedIntelligence === null) {
@@ -152,6 +159,7 @@ function getUpgradeModelSuggestionForRequestedModel(string $requestedModel): ?ar
     $stmt = getDb()->query('
         SELECT
             e.default_model,
+            MAX(CASE WHEN e.specialized_for_category <> \'\' THEN e.specialized_for_category ELSE NULL END) AS specialized_for_category,
             SUM(CASE WHEN COALESCE(r.running_count, 0) < 4 THEN 1 ELSE 0 END) AS free_endpoints
         FROM endpoints e
         LEFT JOIN (
@@ -170,10 +178,20 @@ function getUpgradeModelSuggestionForRequestedModel(string $requestedModel): ?ar
     $bestFreeEndpoints = 0;
 
     foreach ($stmt->fetchAll() as $row) {
-        $candidateModel = (string) ($row['default_model'] ?? '');
-        $freeEndpoints  = (int) ($row['free_endpoints'] ?? 0);
+        $candidateModel    = (string) ($row['default_model'] ?? '');
+        $freeEndpoints     = (int) ($row['free_endpoints'] ?? 0);
+        $specializedFor    = (string) ($row['specialized_for_category'] ?? '');
         if ($candidateModel === '' || $freeEndpoints <= 0) {
             continue;
+        }
+
+        // Skip models that are specialised for a different category than the
+        // one detected for the current request.  When no category was detected,
+        // skip every specialised model (only general-purpose models are eligible).
+        if ($specializedFor !== '') {
+            if ($detectedCategory === '' || $specializedFor !== $detectedCategory) {
+                continue;
+            }
         }
 
         $candidateIntelligence = extractModelIntelligenceB($candidateModel);

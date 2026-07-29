@@ -73,15 +73,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // ── Add endpoint ──────────────────────────────────────────────────────
         if ($action === 'add_endpoint') {
-            $newAlias    = trim($_POST['ep_alias'] ?? '');
-            $newUrl      = trim($_POST['ep_base_url'] ?? '');
-            $newTimeout  = (int) ($_POST['ep_timeout'] ?? 120);
-            $newModel    = trim($_POST['ep_default_model'] ?? '');
-            $isActive    = isset($_POST['ep_is_active']) ? 1 : 0;
-            $sshHost     = trim($_POST['ep_ssh_host'] ?? '');
-            $sshPort     = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
-            $sshUser     = trim($_POST['ep_ssh_user'] ?? '');
-            $sshPassword = $_POST['ep_ssh_password'] ?? '';
+            $newAlias        = trim($_POST['ep_alias'] ?? '');
+            $newUrl          = trim($_POST['ep_base_url'] ?? '');
+            $newTimeout      = (int) ($_POST['ep_timeout'] ?? 120);
+            $newModel        = trim($_POST['ep_default_model'] ?? '');
+            $isActive        = isset($_POST['ep_is_active']) ? 1 : 0;
+            $sshHost         = trim($_POST['ep_ssh_host'] ?? '');
+            $sshPort         = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
+            $sshUser         = trim($_POST['ep_ssh_user'] ?? '');
+            $sshPassword     = $_POST['ep_ssh_password'] ?? '';
+            $specializedFor  = trim($_POST['ep_specialized_for_category'] ?? '');
 
             if (strlen($newAlias) > 120) {
                 $flashError = 'Alias darf maximal 120 Zeichen lang sein.';
@@ -96,26 +97,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'SELECT COALESCE(MAX(sort_order), -1) FROM endpoints'
                 )->fetchColumn();
                 $db->prepare(
-                    'INSERT INTO endpoints (alias, base_url, timeout, default_model, is_active, sort_order,
-                                            ssh_host, ssh_port, ssh_user, ssh_password)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive, $maxOrder + 1,
+                    'INSERT INTO endpoints (alias, base_url, timeout, default_model, specialized_for_category,
+                                            is_active, sort_order, ssh_host, ssh_port, ssh_user, ssh_password)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
+                            $isActive, $maxOrder + 1,
                             $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null]);
                 $flashOk = 'Endpunkt hinzugefügt.';
             }
 
         // ── Update endpoint ───────────────────────────────────────────────────
         } elseif ($action === 'update_endpoint') {
-            $epId        = (int) ($_POST['ep_id'] ?? 0);
-            $newAlias    = trim($_POST['ep_alias'] ?? '');
-            $newUrl      = trim($_POST['ep_base_url'] ?? '');
-            $newTimeout  = (int) ($_POST['ep_timeout'] ?? 120);
-            $newModel    = trim($_POST['ep_default_model'] ?? '');
-            $isActive    = isset($_POST['ep_is_active']) ? 1 : 0;
-            $sshHost     = trim($_POST['ep_ssh_host'] ?? '');
-            $sshPort     = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
-            $sshUser     = trim($_POST['ep_ssh_user'] ?? '');
-            $sshPassword = $_POST['ep_ssh_password'] ?? null;
+            $epId           = (int) ($_POST['ep_id'] ?? 0);
+            $newAlias       = trim($_POST['ep_alias'] ?? '');
+            $newUrl         = trim($_POST['ep_base_url'] ?? '');
+            $newTimeout     = (int) ($_POST['ep_timeout'] ?? 120);
+            $newModel       = trim($_POST['ep_default_model'] ?? '');
+            $isActive       = isset($_POST['ep_is_active']) ? 1 : 0;
+            $sshHost        = trim($_POST['ep_ssh_host'] ?? '');
+            $sshPort        = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
+            $sshUser        = trim($_POST['ep_ssh_user'] ?? '');
+            $sshPassword    = $_POST['ep_ssh_password'] ?? null;
+            $specializedFor = trim($_POST['ep_specialized_for_category'] ?? '');
 
             if ($epId <= 0) {
                 $flashError = 'Ungültige Endpunkt-ID.';
@@ -132,19 +135,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($sshPassword === '' || $sshPassword === null) {
                     $db->prepare(
                         'UPDATE endpoints
-                            SET alias = ?, base_url = ?, timeout = ?, default_model = ?, is_active = ?,
+                            SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
+                                specialized_for_category = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?
                           WHERE id = ?'
-                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive,
-                                $sshHost, $sshPort, $sshUser, $epId]);
+                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
+                                $isActive, $sshHost, $sshPort, $sshUser, $epId]);
                 } else {
                     $db->prepare(
                         'UPDATE endpoints
-                            SET alias = ?, base_url = ?, timeout = ?, default_model = ?, is_active = ?,
+                            SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
+                                specialized_for_category = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?
                           WHERE id = ?'
-                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $isActive,
-                                $sshHost, $sshPort, $sshUser, $sshPassword, $epId]);
+                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
+                                $isActive, $sshHost, $sshPort, $sshUser, $sshPassword, $epId]);
                 }
                 $flashOk = 'Endpunkt gespeichert.';
             }
@@ -1996,6 +2001,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <th>Timeout</th>
                     <th>Standard-Modell</th>
                     <th>Intelligenz</th>
+                    <th>Spezialisierung</th>
                     <th>Status</th>
                     <th>Aktionen</th>
                 </tr>
@@ -2023,6 +2029,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     </td>
                     <td><?= htmlspecialchars(modelIntelligenceLabel((string) $ep['default_model'])) ?></td>
                     <td>
+                        <?php $sf = (string) ($ep['specialized_for_category'] ?? ''); ?>
+                        <?php if ($sf !== ''): ?>
+                            <span class="model-badge" style="background:#6d4c8a" title="Nur für Intelligence-Upgrade bei Kategorie &#39;<?= htmlspecialchars($sf) ?>&#39; vorgeschlagen">
+                                🏷 <?= htmlspecialchars($sf) ?>
+                            </span>
+                        <?php else: ?>
+                            <span style="color:var(--text-muted);font-size:.85rem">Allgemein</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
                         <span class="dot <?= $ep['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
                         <?= $ep['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
                     </td>
@@ -2030,15 +2046,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         <?php
                         // Build safe edit data — never expose ssh_password in inline JS
                         $epEdit = [
-                            'id'            => $ep['id'],
-                            'alias'         => $ep['alias'],
-                            'base_url'      => $ep['base_url'],
-                            'timeout'       => $ep['timeout'],
-                            'default_model' => $ep['default_model'],
-                            'is_active'     => $ep['is_active'],
-                            'ssh_host'      => $ep['ssh_host'] ?? '',
-                            'ssh_port'      => $ep['ssh_port'] ?? 22,
-                            'ssh_user'      => $ep['ssh_user'] ?? '',
+                            'id'                       => $ep['id'],
+                            'alias'                    => $ep['alias'],
+                            'base_url'                 => $ep['base_url'],
+                            'timeout'                  => $ep['timeout'],
+                            'default_model'            => $ep['default_model'],
+                            'specialized_for_category' => $ep['specialized_for_category'] ?? '',
+                            'is_active'                => $ep['is_active'],
+                            'ssh_host'                 => $ep['ssh_host'] ?? '',
+                            'ssh_port'                 => $ep['ssh_port'] ?? 22,
+                            'ssh_user'                 => $ep['ssh_user'] ?? '',
                         ];
                         ?>
                         <button type="button" class="btn btn-sm"
@@ -2110,6 +2127,26 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     </div>
                     <p class="hint">
                         Endpunkte mit identischem Standard-Modell bilden automatisch eine Load-Balancing-Gruppe.
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label for="ep-specialized-for">Spezialisierung (Routing-Kategorie)</label>
+                    <select id="ep-specialized-for" name="ep_specialized_for_category">
+                        <option value=""<?= (!$editEp || ($editEp['specialized_for_category'] ?? '') === '') ? ' selected' : '' ?>>
+                            Allgemein (keine Einschränkung)
+                        </option>
+                        <?php foreach ($routingCategoriesData as $rc): ?>
+                            <option value="<?= htmlspecialchars($rc['name']) ?>"
+                                <?= ($editEp && ($editEp['specialized_for_category'] ?? '') === $rc['name']) ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($rc['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="hint">
+                        Ist hier eine Kategorie gewählt, wird dieses Modell beim <strong>Intelligence-Upgrade</strong>
+                        nur dann als Vorschlag angezeigt, wenn die aktuelle Anfrage genau dieser Kategorie zugeordnet wurde.
+                        So werden spezialisierte Modelle (z.&thinsp;B. Coding) nicht für allgemeine Anfragen empfohlen.
                     </p>
                 </div>
 
@@ -3118,6 +3155,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const activeCheck  = document.getElementById('ep-active');
     const loadBtn      = document.getElementById('ep-load-btn');
     const endpointConfigPanel = document.getElementById('config-endpoints');
+    const specializedSelect = document.getElementById('ep-specialized-for');
 
     const sshDetails  = document.getElementById('ep-ssh-details');
     const sshHost     = document.getElementById('ep-ssh-host');
@@ -3149,6 +3187,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         activeCheck.checked    = ep.is_active == 1;
         // Clear datalist options from a previous load-models call.
         modelList.innerHTML    = '';
+        // Specialization
+        if (specializedSelect) specializedSelect.value = ep.specialized_for_category || '';
         // SSH fields
         if (sshHost)     sshHost.value     = ep.ssh_host || '';
         if (sshPort)     sshPort.value     = ep.ssh_port || 22;
@@ -3170,6 +3210,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         modelInput.value      = '';
         activeCheck.checked   = true;
         modelList.innerHTML   = '';
+        if (specializedSelect) specializedSelect.value = '';
         if (sshHost)     sshHost.value     = '';
         if (sshPort)     sshPort.value     = '22';
         if (sshUser)     sshUser.value     = '';
