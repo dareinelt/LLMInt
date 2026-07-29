@@ -24,6 +24,8 @@ $newUserDefaultModel = trim(getSetting('new_user_default_model', ''));
 $visionModel = trim(getSetting('vision_model', ''));
 $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
 $intelligenceUpgradeMessage = getSetting('intelligence_upgrade_message', '');
+$loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
+$loginBannerText    = getSetting('login_banner_text', '');
 $routingCategories = loadRoutingCategories();
 $routingCategoriesData = loadRoutingCategoriesFromDb();
 $routingRules = loadRoutingRules();
@@ -214,6 +216,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newIntelligenceUpgradeMessage = trim($_POST['intelligence_upgrade_message'] ?? '');
             $intelligenceUpgradeMessage = $newIntelligenceUpgradeMessage;
             setSetting('intelligence_upgrade_message', $newIntelligenceUpgradeMessage);
+            $loginBannerEnabled = isset($_POST['login_banner_enabled']);
+            $loginBannerText    = trim($_POST['login_banner_text'] ?? '');
+            setSetting('login_banner_enabled', $loginBannerEnabled ? '1' : '0');
+            setSetting('login_banner_text', $loginBannerText);
             $flashOk = 'Systemmeldungen gespeichert.';
 
         // ── Save vision model ─────────────────────────────────────────────────
@@ -2877,6 +2883,25 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
                 <div class="action-row">
                     <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                </div>
+
+                <hr style="margin:24px 0;border-color:var(--border)">
+
+                <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">📢 Anmeldebanner</h3>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                        <input type="checkbox" name="login_banner_enabled"
+                               <?= $loginBannerEnabled ? 'checked' : '' ?>>
+                        Anmeldebanner aktivieren
+                    </label>
+                    <p class="hint">Wenn aktiviert, erscheint beim ersten Seitenaufruf einer Browser-Session ein Overlay-Banner, das der Benutzer mit „OK" bestätigen muss.</p>
+                </div>
+                <div class="form-group">
+                    <label for="login-banner-text">Bannertext</label>
+                    <textarea id="login-banner-text" name="login_banner_text"
+                              rows="5" style="width:100%;resize:vertical;font-family:inherit"
+                    ><?= htmlspecialchars($loginBannerText) ?></textarea>
+                    <p class="hint">HTML ist erlaubt (z.&nbsp;B. <code>&lt;b&gt;</code>, <code>&lt;br&gt;</code>). Leer lassen, um keinen Text anzuzeigen.</p>
                 </div>
             </form>
         </details>

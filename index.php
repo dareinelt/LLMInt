@@ -46,6 +46,10 @@ if ($loggedIn && isset($_SESSION['admin_id'])) {
 // Check if vision model is configured (upload only meaningful when it is).
 $visionModelConfigured = trim(getSetting('vision_model', '')) !== '';
 
+// Login banner settings.
+$loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
+$loginBannerText    = getSetting('login_banner_text', '');
+
 // CSRF token for upload requests.
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -833,6 +837,54 @@ $csrfToken = $_SESSION['csrf_token'];
 
         #upload-submit-btn:hover:not(:disabled) { background: var(--accent-dark); }
         #upload-submit-btn:disabled { opacity: .4; cursor: default; }
+
+        /* ── Login banner overlay ──────────────────────────── */
+        #login-banner-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 700;
+            background: rgba(0,0,0,.6);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+        }
+
+        #login-banner-overlay.open { display: flex; }
+
+        #login-banner-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 32px 36px 28px;
+            max-width: 520px;
+            width: calc(100% - 32px);
+            box-shadow: 0 24px 60px rgba(0,0,0,.6);
+            text-align: left;
+            line-height: 1.6;
+        }
+
+        #login-banner-box .banner-content {
+            margin-bottom: 20px;
+            font-size: .93rem;
+            color: var(--text);
+        }
+
+        #login-banner-ok {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius);
+            font-size: .95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .15s;
+        }
+
+        #login-banner-ok:hover { background: var(--accent-dark); }
     </style>
 </head>
 <body>
@@ -2078,6 +2130,31 @@ $csrfToken = $_SESSION['csrf_token'];
                 submitBtn.disabled = false;
             }
         });
+    }
+})();
+</script>
+<?php endif; ?>
+
+<?php if ($loginBannerEnabled && $loginBannerText !== ''): ?>
+<!-- ── Login banner overlay (shown once per browser session) ── -->
+<div id="login-banner-overlay">
+    <div id="login-banner-box">
+        <div class="banner-content"><?= $loginBannerText /* HTML is intentional – admin-only setting */ ?></div>
+        <button id="login-banner-ok">OK</button>
+    </div>
+</div>
+<script>
+(function () {
+    const STORAGE_KEY = 'login_banner_shown';
+    if (!sessionStorage.getItem(STORAGE_KEY)) {
+        const overlay = document.getElementById('login-banner-overlay');
+        if (overlay) {
+            overlay.classList.add('open');
+            document.getElementById('login-banner-ok').addEventListener('click', function () {
+                overlay.classList.remove('open');
+                sessionStorage.setItem(STORAGE_KEY, '1');
+            });
+        }
     }
 })();
 </script>
