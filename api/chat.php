@@ -960,6 +960,23 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
+/**
+ * Return the best-guess client IP address.
+ * Checks X-Forwarded-For when a trusted proxy injects it, falls back to REMOTE_ADDR.
+ */
+function getClientIp(): string
+{
+    $xff = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
+    if ($xff !== '') {
+        $parts = explode(',', $xff);
+        $ip = trim($parts[0]);
+        if (filter_var($ip, FILTER_VALIDATE_IP)) {
+            return $ip;
+        }
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? '–';
+}
+
 $raw     = file_get_contents('php://input');
 $payload = json_decode($raw, true);
 
@@ -1071,6 +1088,9 @@ if ($routingDecisionModel !== '') {
                         $model = $routingRules[$detectedCategory];
                         $payload['model'] = $model;
                     }
+                    if ($detectedCategory !== '') {
+                        writeLog('info', 'Entscheidungsmodell hat Prompt von Nutzer (' . getClientIp() . ') der Kategorie ' . $detectedCategory . ' zugeordnet.');
+                    }
                 }
             }
         }
@@ -1103,6 +1123,7 @@ if ($upgradeAccepted && $sessionId !== '' && $model !== '') {
     // Persist the accepted upgrade model so future requests in this session
     // (within 20 minutes) are automatically routed to it.
     setSessionUpgradeModel($sessionId, $model);
+    writeLog('info', 'Intelligence-Upgrade durch Nutzer (' . getClientIp() . ') akzeptiert (Modell: ' . $model . ').');
 } elseif (!$upgradeAccepted && $sessionId !== '') {
     // Apply a previously accepted upgrade if it is still within the 20-minute window.
     $activeUpgradeModel = getActiveSessionUpgradeModel($sessionId);
@@ -1205,6 +1226,43 @@ $timeout  = max(1, (int) $endpoint['timeout']);
 $responseDetails = buildResponseDetails($endpoint);
 $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
 $requestStart = microtime(true);
+
+// ── Endpoint overload warning ─────────────────────────────────────────────────
+// Log a warning when every active endpoint for this model has more than two
+// running sessions, hinting that additional endpoints should be provided.
+try {
+    $overloadRows = getDb()->prepare("
+        SELECT e.id, e.alias, e.default_model,
+               COALESCE(r.running_count, 0) AS running_count
+          FROM endpoints e
+          LEFT JOIN (
+              SELECT endpoint_id, COUNT(*) AS running_count
+                FROM tasks
+               WHERE status = 'running'
+               GROUP BY endpoint_id
+          ) r ON r.endpoint_id = e.id
+         WHERE e.is_active = 1
+           AND e.default_model = ?
+    ");
+    $overloadRows->execute([$model]);
+    $epRows = $overloadRows->fetchAll();
+    if (!empty($epRows)) {
+        $allBusy = true;
+        foreach ($epRows as $epRow) {
+            if ((int) $epRow['running_count'] <= 2) {
+                $allBusy = false;
+                break;
+            }
+        }
+        if ($allBusy) {
+            $intelligenceLabel = $model;
+            if (preg_match('/(\d+(?:[.,]\d+)?)\s*b\b/i', $model, $ilm)) {
+                $intelligenceLabel = $ilm[0];
+            }
+            writeLog('warning', 'Die Endpunkte mit der Intelligenz ' . $intelligenceLabel . ' sind stark ausgelastet (mehr als zwei laufende Sessions je Endpunkt). Bitte erwägen Sie, mehr Endpunkte zur Verfügung zu stellen, um Verzögerungen zu vermeiden.');
+        }
+    }
+} catch (Throwable $_owEx) { /* best-effort */ }
 
 // Ensure the task is always marked finished, even on unexpected PHP termination.
 $taskFinished = false;
@@ -1450,6 +1508,7 @@ if ($useTools) {
                 if ($query === '') {
                     $toolResult = ['error' => 'Leere Suchanfrage.'];
                 } else {
+                    writeLog('info', 'Websuche durch Modell ' . $model . ' auf Prompt von Nutzer (' . getClientIp() . ') gestartet (Anfrage: ' . mb_substr($query, 0, 200, 'UTF-8') . ').');
                     $searchLogId = startSearchLog(substr($query, 0, 400));
                     try {
                         $toolResult = runSearxngSearch($searxngBaseUrl, substr($query, 0, 400), min($timeout, 15));

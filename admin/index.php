@@ -30,6 +30,10 @@ $routingCategories = loadRoutingCategories();
 $routingCategoriesData = loadRoutingCategoriesFromDb();
 $routingRules = loadRoutingRules();
 
+// ── Logging settings ──────────────────────────────────────────────────────────
+$logLevel         = getSetting('log_level', 'info');
+$logRetentionDays = (int) getSetting('log_retention_days', '30');
+
 // ── SMTP settings ─────────────────────────────────────────────────────────────
 $smtpHost       = getSetting('smtp_host', '');
 $smtpPort       = getSetting('smtp_port', '587');
@@ -537,6 +541,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
 
+        // ── Save logging configuration ────────────────────────────────────────
+        } elseif ($action === 'save_log_config') {
+            $newLogLevel = $_POST['log_level'] ?? 'info';
+            if (!in_array($newLogLevel, ['info', 'warning', 'error'], true)) {
+                $newLogLevel = 'info';
+            }
+            $newRetention = max(1, min(3650, (int) ($_POST['log_retention_days'] ?? 30)));
+            setSetting('log_level', $newLogLevel);
+            setSetting('log_retention_days', (string) $newRetention);
+            $logLevel         = $newLogLevel;
+            $logRetentionDays = $newRetention;
+            $flashOk = 'Protokollierungseinstellungen gespeichert.';
+
         // ── Change password ───────────────────────────────────────────────────
         } elseif ($action === 'change_password') {
             $oldPass  = $_POST['old_password']         ?? '';
@@ -565,6 +582,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 }
+
+// ── Log viewer query ──────────────────────────────────────────────────────────
+
+$logFilterDateFrom = trim($_GET['log_from']     ?? '');
+$logFilterDateTo   = trim($_GET['log_to']       ?? '');
+$logFilterKeyword  = trim($_GET['log_keyword']  ?? '');
+$logFilterLevel    = trim($_GET['log_lv']       ?? '');
+$logSortDir        = ($_GET['log_sort'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
+$logPage           = max(1, (int) ($_GET['log_page'] ?? 1));
+$logPerPage        = 50;
+
+$logRows   = [];
+$logTotal  = 0;
+try {
+    $logWhere  = ['1=1'];
+    $logParams = [];
+
+    if ($logFilterDateFrom !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $logFilterDateFrom)) {
+        $logWhere[]  = 'created_at >= ?';
+        $logParams[] = $logFilterDateFrom . ' 00:00:00';
+    }
+    if ($logFilterDateTo !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $logFilterDateTo)) {
+        $logWhere[]  = 'created_at <= ?';
+        $logParams[] = $logFilterDateTo . ' 23:59:59';
+    }
+    if ($logFilterKeyword !== '') {
+        $logWhere[]  = 'message LIKE ?';
+        $logParams[] = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $logFilterKeyword) . '%';
+    }
+    if (in_array($logFilterLevel, ['info', 'warning', 'error'], true)) {
+        $logWhere[]  = 'level = ?';
+        $logParams[] = $logFilterLevel;
+    }
+
+    $logWhereClause = implode(' AND ', $logWhere);
+    $logOrderDir    = strtoupper($logSortDir);
+
+    $countStmt = $db->prepare("SELECT COUNT(*) FROM app_logs WHERE {$logWhereClause}");
+    $countStmt->execute($logParams);
+    $logTotal = (int) $countStmt->fetchColumn();
+
+    $logOffset = ($logPage - 1) * $logPerPage;
+    $dataStmt  = $db->prepare(
+        "SELECT id, level, message, created_at
+           FROM app_logs
+          WHERE {$logWhereClause}
+          ORDER BY created_at {$logOrderDir}, id {$logOrderDir}
+          LIMIT {$logPerPage} OFFSET {$logOffset}"
+    );
+    $dataStmt->execute($logParams);
+    $logRows = $dataStmt->fetchAll();
+} catch (Throwable $_logEx) {
+    // Table may not exist on first request before migration runs.
+}
+
+$logTotalPages = $logTotal > 0 ? (int) ceil($logTotal / $logPerPage) : 1;
 
 // ── Load data ─────────────────────────────────────────────────────────────────
 
@@ -1077,6 +1150,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         #config-comfy-card { order: 8; }
         #config-routing-card { order: 9; }
         #config-system-messages-card { order: 10; }
+        #log-config-card { order: 11; }
+        #log-viewer-card { order: 12; }
 
         /* ── User row hover ──────────────────────────────────────── */
         .user-row:hover td { background: rgba(108,99,255,.06); }
@@ -1486,6 +1561,10 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     <span class="sidebar-label">Systemmeldungen</span>
     <a href="#config-system-messages-card">💬 Systemmeldungen</a>
+
+    <span class="sidebar-label">Protokollierung</span>
+    <a href="#log-config-card">⚙️ Konfiguration</a>
+    <a href="#log-viewer-card">📋 Log</a>
 
     <span class="sidebar-label">Verwaltung</span>
     <a href="#users-card">👤 Benutzerkonten</a>
@@ -2904,6 +2983,166 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <p class="hint">HTML ist erlaubt (z.&nbsp;B. <code>&lt;b&gt;</code>, <code>&lt;br&gt;</code>). Leer lassen, um keinen Text anzuzeigen.</p>
                 </div>
             </form>
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Logging – Configuration
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="log-config-card">
+        <details class="config-panel" id="log-config" open>
+            <summary>⚙️ Protokollierung – Konfiguration</summary>
+
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action"     value="save_log_config">
+
+                <div class="form-group">
+                    <label for="log-level">Mindest-Log-Level</label>
+                    <select id="log-level" name="log_level" style="max-width:200px">
+                        <option value="info"    <?= $logLevel === 'info'    ? 'selected' : '' ?>>Info</option>
+                        <option value="warning" <?= $logLevel === 'warning' ? 'selected' : '' ?>>Warning</option>
+                        <option value="error"   <?= $logLevel === 'error'   ? 'selected' : '' ?>>Error</option>
+                    </select>
+                    <p class="hint">Einträge unterhalb des gewählten Levels werden nicht gespeichert.</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="log-retention">Aufbewahrungsdauer (Tage)</label>
+                    <input type="number" id="log-retention" name="log_retention_days"
+                           min="1" max="3650"
+                           value="<?= htmlspecialchars((string) $logRetentionDays) ?>"
+                           style="max-width:120px">
+                    <p class="hint">Log-Einträge, die älter als diese Anzahl von Tagen sind, werden automatisch gelöscht.</p>
+                </div>
+
+                <div class="action-row">
+                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                </div>
+            </form>
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Logging – Log viewer
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="log-viewer-card">
+        <details class="config-panel" id="log-viewer" open>
+            <summary>📋 Protokollierung – Log</summary>
+
+            <!-- Filter form -->
+            <form method="GET" action="#log-viewer-card" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:20px">
+                <div class="form-group" style="margin:0;flex:0 0 150px">
+                    <label for="lf-from" style="font-size:.8rem">Datum von</label>
+                    <input type="date" id="lf-from" name="log_from"
+                           value="<?= htmlspecialchars($logFilterDateFrom) ?>"
+                           style="padding:6px 8px;font-size:.85rem">
+                </div>
+                <div class="form-group" style="margin:0;flex:0 0 150px">
+                    <label for="lf-to" style="font-size:.8rem">Datum bis</label>
+                    <input type="date" id="lf-to" name="log_to"
+                           value="<?= htmlspecialchars($logFilterDateTo) ?>"
+                           style="padding:6px 8px;font-size:.85rem">
+                </div>
+                <div class="form-group" style="margin:0;flex:1 1 200px">
+                    <label for="lf-kw" style="font-size:.8rem">Stichwort</label>
+                    <input type="text" id="lf-kw" name="log_keyword"
+                           value="<?= htmlspecialchars($logFilterKeyword) ?>"
+                           placeholder="z.&thinsp;B. Websuche"
+                           style="padding:6px 8px;font-size:.85rem">
+                </div>
+                <div class="form-group" style="margin:0;flex:0 0 130px">
+                    <label for="lf-lv" style="font-size:.8rem">Level</label>
+                    <select id="lf-lv" name="log_lv" style="padding:6px 8px;font-size:.85rem">
+                        <option value=""        <?= $logFilterLevel === ''        ? 'selected' : '' ?>>Alle</option>
+                        <option value="info"    <?= $logFilterLevel === 'info'    ? 'selected' : '' ?>>Info</option>
+                        <option value="warning" <?= $logFilterLevel === 'warning' ? 'selected' : '' ?>>Warning</option>
+                        <option value="error"   <?= $logFilterLevel === 'error'   ? 'selected' : '' ?>>Error</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin:0;flex:0 0 130px">
+                    <label for="lf-sort" style="font-size:.8rem">Sortierung</label>
+                    <select id="lf-sort" name="log_sort" style="padding:6px 8px;font-size:.85rem">
+                        <option value="desc" <?= $logSortDir === 'desc' ? 'selected' : '' ?>>Neueste zuerst</option>
+                        <option value="asc"  <?= $logSortDir === 'asc'  ? 'selected' : '' ?>>Älteste zuerst</option>
+                    </select>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;padding-bottom:2px">
+                    <button type="submit" class="btn btn-primary" style="padding:7px 16px;font-size:.85rem">🔍 Filtern</button>
+                    <a href="#log-viewer-card" class="btn" style="padding:7px 12px;font-size:.85rem;text-decoration:none">✕ Zurücksetzen</a>
+                </div>
+            </form>
+
+            <!-- Result count -->
+            <p style="font-size:.82rem;color:var(--muted);margin-bottom:12px">
+                <?= number_format($logTotal) ?> Einträge gefunden
+                <?php if ($logTotal > $logPerPage): ?>
+                    &nbsp;·&nbsp; Seite <?= $logPage ?> von <?= $logTotalPages ?>
+                <?php endif; ?>
+            </p>
+
+            <?php if (empty($logRows)): ?>
+                <p style="color:var(--muted);font-size:.9rem">Keine Log-Einträge gefunden.</p>
+            <?php else: ?>
+            <div style="overflow-x:auto">
+                <table class="data-table" style="font-size:.83rem">
+                    <thead>
+                        <tr>
+                            <th style="white-space:nowrap;width:160px">Zeitstempel</th>
+                            <th style="width:80px">Level</th>
+                            <th>Meldung</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($logRows as $lr): ?>
+                        <?php
+                            $lvColor = match ($lr['level']) {
+                                'warning' => 'var(--warning,#f59e0b)',
+                                'error'   => 'var(--danger,#ef4444)',
+                                default   => 'var(--success,#22c55e)',
+                            };
+                        ?>
+                        <tr>
+                            <td style="white-space:nowrap;color:var(--muted)"><?= htmlspecialchars($lr['created_at']) ?></td>
+                            <td style="font-weight:600;color:<?= $lvColor ?>"><?= htmlspecialchars(strtoupper($lr['level'])) ?></td>
+                            <td style="word-break:break-word;max-width:700px"><?= htmlspecialchars($lr['message']) ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <?php if ($logTotalPages > 1): ?>
+                <!-- Pagination -->
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:16px;align-items:center;font-size:.83rem">
+                    <?php
+                        $baseLogUrl = '?' . http_build_query(array_filter([
+                            'log_from'    => $logFilterDateFrom,
+                            'log_to'      => $logFilterDateTo,
+                            'log_keyword' => $logFilterKeyword,
+                            'log_lv'      => $logFilterLevel,
+                            'log_sort'    => $logSortDir,
+                        ]));
+                        $pageFrom = max(1, $logPage - 3);
+                        $pageTo   = min($logTotalPages, $logPage + 3);
+                    ?>
+                    <?php if ($logPage > 1): ?>
+                        <a href="<?= htmlspecialchars($baseLogUrl . '&log_page=1') ?>#log-viewer-card" class="btn" style="padding:4px 10px">«</a>
+                        <a href="<?= htmlspecialchars($baseLogUrl . '&log_page=' . ($logPage - 1)) ?>#log-viewer-card" class="btn" style="padding:4px 10px">‹</a>
+                    <?php endif; ?>
+                    <?php for ($p = $pageFrom; $p <= $pageTo; $p++): ?>
+                        <a href="<?= htmlspecialchars($baseLogUrl . '&log_page=' . $p) ?>#log-viewer-card"
+                           class="btn<?= $p === $logPage ? ' btn-primary' : '' ?>"
+                           style="padding:4px 10px"><?= $p ?></a>
+                    <?php endfor; ?>
+                    <?php if ($logPage < $logTotalPages): ?>
+                        <a href="<?= htmlspecialchars($baseLogUrl . '&log_page=' . ($logPage + 1)) ?>#log-viewer-card" class="btn" style="padding:4px 10px">›</a>
+                        <a href="<?= htmlspecialchars($baseLogUrl . '&log_page=' . $logTotalPages) ?>#log-viewer-card" class="btn" style="padding:4px 10px">»</a>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+            <?php endif; ?>
+
         </details>
     </div>
 
@@ -4980,7 +5219,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const sectionIds = [
         'dashboard-card', 'config-smtp-card', 'config-ldap-card', 'config-searxng-card',
         'config-endpoints-card', 'config-request-handling-card',
-        'config-sd-card', 'config-comfy-card', 'config-system-messages-card', 'users-card', 'password-card'
+        'config-sd-card', 'config-comfy-card', 'config-system-messages-card',
+        'log-config-card', 'log-viewer-card', 'users-card', 'password-card'
     ];
 
     const links = {};

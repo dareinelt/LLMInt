@@ -392,6 +392,19 @@ function ensureRuntimeSchema(PDO $pdo): void
         }
     }
 
+    // Application event log.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS app_logs (
+            id         BIGINT       NOT NULL AUTO_INCREMENT,
+            level      ENUM('info','warning','error') NOT NULL DEFAULT 'info',
+            message    TEXT         NOT NULL,
+            created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            KEY idx_app_logs_created (created_at),
+            KEY idx_app_logs_level   (level)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
         $pdo->prepare(
@@ -468,6 +481,65 @@ function setSetting(string $key, string $value): void
          VALUES (?, ?)
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()'
     )->execute([$key, $value]);
+}
+
+/**
+ * Write a log entry to the app_logs table.
+ *
+ * The effective minimum log level is controlled by the setting 'log_level'
+ * (info | warning | error; default: info).  Entries below the configured
+ * level are silently dropped.  The call is always best-effort: any database
+ * error is swallowed so that logging never interrupts the request flow.
+ *
+ * @param string $level   'info', 'warning', or 'error'
+ * @param string $message Human-readable log message (max ~64 KB stored).
+ */
+function writeLog(string $level, string $message): void
+{
+    static $levelOrder = ['info' => 1, 'warning' => 2, 'error' => 3];
+
+    $level = strtolower(trim($level));
+    if (!isset($levelOrder[$level])) {
+        $level = 'info';
+    }
+
+    try {
+        $configuredLevel = strtolower(trim(getSetting('log_level', 'info')));
+        if (!isset($levelOrder[$configuredLevel])) {
+            $configuredLevel = 'info';
+        }
+
+        if ($levelOrder[$level] < $levelOrder[$configuredLevel]) {
+            return; // Below configured threshold – do not store.
+        }
+
+        getDb()->prepare(
+            'INSERT INTO app_logs (level, message) VALUES (?, ?)'
+        )->execute([$level, $message]);
+
+        // Opportunistically purge old entries (~1 % of requests).
+        if (mt_rand(1, 100) === 1) {
+            purgeOldLogs();
+        }
+    } catch (Throwable $e) {
+        // Best-effort – never let logging break the request flow.
+    }
+}
+
+/**
+ * Delete app_log entries that are older than the configured retention period.
+ * The retention period is read from the setting 'log_retention_days' (default 30).
+ */
+function purgeOldLogs(): void
+{
+    try {
+        $days = max(1, (int) getSetting('log_retention_days', '30'));
+        getDb()->prepare(
+            'DELETE FROM app_logs WHERE created_at < NOW() - INTERVAL ? DAY'
+        )->execute([$days]);
+    } catch (Throwable $e) {
+        // Best-effort
+    }
 }
 
 /**
