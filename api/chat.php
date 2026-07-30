@@ -24,6 +24,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../lib/prompt_security.php';
 require_once __DIR__ . '/balancer.php';
 require_once __DIR__ . '/sd_balancer.php';
 require_once __DIR__ . '/comfy_balancer.php';
@@ -1240,6 +1241,45 @@ foreach ($payload['messages'] as $msg) {
 // ── Select endpoint via load balancer ─────────────────────────────────────────
 
 $model = $payload['model'];
+
+// ── Prompt Security check ─────────────────────────────────────────────────────
+// Every chat request is evaluated before reaching the LLM pipeline.
+{
+    $psLastUserText = '';
+    foreach (array_reverse($payload['messages']) as $psMsg) {
+        if (($psMsg['role'] ?? '') === 'user') {
+            $psLastUserText = is_string($psMsg['content']) ? $psMsg['content'] : '';
+            break;
+        }
+    }
+
+    if ($psLastUserText !== '') {
+        $psUserId    = isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null;
+        $psSessionId = isset($payload['session_id']) && is_string($payload['session_id'])
+            ? substr($payload['session_id'], 0, 128) : '';
+        $psIp        = getClientIp();
+
+        $psResult = psEvaluate($psLastUserText, $psUserId, $psSessionId, $psIp);
+
+        // Opportunistically purge old security logs (~1 % of requests).
+        if (mt_rand(1, 100) === 1) {
+            psPurgeLogs();
+        }
+
+        if ($psResult['decision'] === 'block') {
+            writeLog('warning', 'Prompt-Security blockiert Anfrage von ' . $psIp
+                . ' (Score: ' . $psResult['score'] . ').');
+            if (isset($payload['stream']) && $payload['stream'] === true) {
+                emitSseData(['error' => $psResult['message']]);
+            } else {
+                http_response_code(403);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['error' => $psResult['message']]);
+            }
+            exit;
+        }
+    }
+}
 
 // ── Rule-based model routing ──────────────────────────────────────────────────
 // If a routing decision model is configured, classify the user's prompt and
