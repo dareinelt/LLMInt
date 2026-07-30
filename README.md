@@ -11,6 +11,7 @@ Sie bündelt Chat, Routing, Lastverteilung, Hybrid-RAG mit Reranking, Bildgeneri
 - [Hauptfunktionen](#hauptfunktionen)
 - [Architektur](#architektur)
 - [Hybrid-RAG Pipeline](#hybrid-rag-pipeline)
+- [Prompt Security](#prompt-security)
 - [Voraussetzungen](#voraussetzungen)
 - [Installation (klassisch)](#installation-klassisch)
 - [Installation mit Docker](#installation-mit-docker)
@@ -204,6 +205,142 @@ Upload → Chunking → persistDocumentChunks()
 
 ---
 
+## Prompt Security
+
+LLMInt enthält ein mehrstufiges Prompt-Security-System, das alle Chat-Anfragen analysiert und bei Bedarf blockiert, bevor sie das LLM erreichen.
+
+### Verarbeitungspipeline
+
+```
+Benutzereingabe
+      │
+      ▼
+ Stufe 1: Normalisierung
+   ├── Zero-Width-Zeichen entfernen
+   ├── Unicode NFC
+   ├── HTML-Tags entfernen
+   ├── URL-Decoding
+   ├── Base64-Erkennung & Dekodierung
+   └── Whitespace normalisieren
+      │
+      ▼
+ Stufe 2: Regelbasierte Erkennung
+   └── Regex/Text-Matching gegen prompt_security_rules
+      │
+      ▼
+ Stufe 3: Risiko-Scoring (0–100)
+   ├── 0–50   → unkritisch / verdächtig
+   ├── 51–80  → Warnung
+   └── 81–100 → Blockieren
+      │
+      ▼
+ Stufe 4: KI-Bewertung (optional)
+   └── kleines Klassifikationsmodell (harmless / prompt_injection / jailbreak / …)
+      │
+      ▼
+ Stufe 5: Entscheidung
+   ├── allow  → weiter zur LLM-Pipeline
+   ├── warn   → Hinweis, Anfrage wird durchgelassen
+   └── block  → Anfrage abgebrochen, Fehlermeldung
+```
+
+### Erkannte Angriffsklassen
+
+| Kategorie | Beschreibung |
+|---|---|
+| `prompt_injection` | Versuche, den System-Prompt zu überschreiben |
+| `jailbreak` | DAN, Developer Mode, Umgehungsversuche |
+| `prompt_leakage` | Anfragen zum Offenlegen interner Instruktionen |
+| `tool_abuse` | Zweckentfremdeter Tool-Aufruf, API-Manipulation |
+| `rag_attack` | Auslesen der Wissensdatenbank / aller Dokumente |
+| `role_switch` | Rollenwechsel zu Admin/Root/uneingeschränkter KI |
+| `data_exfiltration` | API-Keys, Passwörter, DB-Inhalte, Konfigurationen |
+
+### Obfuskations-Erkennung
+
+Stufe 1 normalisiert Eingaben vor der Analyse, um folgende Obfuskationstechniken zu erkennen:
+
+- Groß-/Kleinschreibung (via Lowercase-Matching)
+- Unicode-Varianten (NFC-Normalisierung)
+- Zero-Width-Zeichen (U+200B, U+FEFF usw.)
+- Base64-kodierte Payload-Teile
+- URL-Encoding
+- mehrfache Leerzeichen / ungewöhnliche Abstände
+
+### Konfiguration
+
+| Einstellung | Beschreibung | Standard |
+|---|---|---|
+| `prompt_security_enabled` | Modul aktivieren | `0` |
+| `prompt_security_mode` | `active` (Blockierung) oder `passive` (nur Logging) | `active` |
+| `prompt_security_score_limit` | Score-Schwelle für Blockierung (0–100) | `81` |
+| `prompt_security_warn_limit` | Score-Schwelle für Warnung (0–100) | `51` |
+| `prompt_security_log` | Ereignisse protokollieren | `1` |
+| `prompt_security_log_input` | Eingabe speichern: `full` / `anon` / `none` | `full` |
+| `prompt_security_log_retention_days` | Aufbewahrungszeit in Tagen | `30` |
+| `prompt_security_fail_open` | Bei Modul-Fehler erlauben (1) oder blockieren (0) | `1` |
+| `prompt_security_ai_enabled` | KI-Klassifikator aktivieren | `0` |
+| `prompt_security_ai_endpoint` | OpenAI-kompatibler Endpunkt des Klassifikators | – |
+| `prompt_security_ai_model` | Modellname des Klassifikators | – |
+| `prompt_security_block_message` | Nachricht bei Blockierung (leer = Standard) | – |
+
+### Datenbankschema
+
+#### `prompt_security_rules`
+
+| Spalte | Typ | Beschreibung |
+|---|---|---|
+| `id` | INT | Primärschlüssel |
+| `category` | VARCHAR(60) | Angriffskategorie (z. B. `jailbreak`) |
+| `name` | VARCHAR(120) | Regelname |
+| `pattern` | VARCHAR(500) | Such-Muster oder Regex |
+| `is_regex` | TINYINT(1) | 1 = Regex, 0 = Text-Substring |
+| `severity` | TINYINT | Schweregrad (0–100) |
+| `is_active` | TINYINT(1) | Regel aktiv |
+| `description` | TEXT | Beschreibung / Erläuterung |
+
+#### `prompt_security_logs`
+
+| Spalte | Typ | Beschreibung |
+|---|---|---|
+| `id` | BIGINT | Primärschlüssel |
+| `user_id` | INT | verknüpfter Benutzer (NULL = anonym) |
+| `session_id` | VARCHAR(128) | Chat-Sitzungs-ID |
+| `ip_address` | VARCHAR(45) | Client-IP |
+| `input_text` | MEDIUMTEXT | Benutzereingabe (konfigurierbar) |
+| `matched_rule` | INT | ID der ersten Trefferregel |
+| `matched_cat` | VARCHAR(60) | Kategorie der Trefferregel |
+| `score` | TINYINT | berechneter Risikowert |
+| `decision` | ENUM | `allow` / `warn` / `block` |
+| `ai_model` | VARCHAR(255) | Name des verwendeten KI-Klassifikators |
+| `created_at` | TIMESTAMP | Zeitstempel |
+
+### Admin-Bereich (`admin/prompt_security.php`)
+
+| Unterbereich | Inhalt |
+|---|---|
+| Dashboard | Angriffe heute, blockierte Anfragen, häufigste Regeln (7 Tage), auffälligste Benutzer, 14-Tage-Trend |
+| Regeln | Anlegen / Bearbeiten / Aktivieren / Deaktivieren / Löschen; Regex-Tester; JSON-Import/Export |
+| Protokoll | Filterbares Sicherheitsprotokoll (Benutzer, Kategorie, Entscheidung, Zeitraum, Score) |
+| Einstellungen | Schwellwerte, Modus, Protokollierung, KI-Klassifikator |
+
+### Fehlertoleranz
+
+| Situation | Verhalten |
+|---|---|
+| Modul-Fehler | `fail_open = 1` → Anfrage wird durchgelassen; `fail_open = 0` → Blockierung |
+| KI-Klassifikator nicht erreichbar | automatischer Fallback auf regelbasierte Bewertung |
+| DB temporär nicht erreichbar | Fehler in `app_logs`; Anfrage gemäß `fail_open` entschieden |
+
+### Erweiterbarkeit
+
+- neue Regeln jederzeit über Admin-UI oder JSON-Import hinzufügen
+- neue Kategorien ohne Codeänderung definierbar
+- KI-Stufe per Endpunkt und Modell konfigurierbar
+- Scoring-Algorithmus in `lib/prompt_security.php` (`psComputeScore`) isoliert und anpassbar
+
+---
+
 ## Voraussetzungen
 
 ### Pflicht
@@ -346,6 +483,7 @@ Empfohlene Reihenfolge:
 9. **optional: Embedding-Endpunkte hinzufügen** (Admin → 🧬 Embedding-Endpunkte)
 10. **optional: Hybrid-Suche aktivieren** (Admin → 🔀 Hybrid-Suche & Embedding)
 11. **optional: Reranker konfigurieren** (Admin → 🏆 Reranker)
+12. **optional: Prompt Security aktivieren** (Admin → `prompt_security.php` → Einstellungen)
 
 ---
 
@@ -514,6 +652,7 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 │   └── comfy_*.php
 ├── admin/
 │   ├── index.php                 ← erweitert: Embedding-Endpunkte, Hybrid-Search, Reranker, RAG-Stats
+│   ├── prompt_security.php       ← NEU: Prompt-Security-Adminoberfläche
 │   ├── login.php
 │   ├── logout.php
 │   ├── load_stats.php
@@ -521,7 +660,8 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 ├── lib/
 │   ├── ldap_auth.php
 │   ├── mailer.php
-│   └── prompt.txt
+│   ├── prompt.txt
+│   └── prompt_security.php       ← NEU: mehrstufige Sicherheits-Engine
 ├── docker/
 │   ├── apache.conf
 │   ├── php.ini
@@ -603,6 +743,8 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 | `client_count_log` | zeitliche Client-Count-Samples |
 | `endpoint_sys_stats` | gecachte SSH-Systemmetriken |
 | `app_logs` | Anwendungs-Logs |
+| `prompt_security_rules` | Konfigurierbare Sicherheitsregeln (Prompt Security) |
+| `prompt_security_logs` | Sicherheitsereignis-Protokoll (Prompt Security) |
 
 ### Neue Spalten in `document_chunks`
 
@@ -675,6 +817,19 @@ Wichtige Keys im Überblick:
 - Logging:
   - `log_level`
   - `log_retention_days`
+- **Prompt Security:**
+  - `prompt_security_enabled` – Modul aktivieren
+  - `prompt_security_mode` – `active` oder `passive`
+  - `prompt_security_score_limit` – Blockschwelle (0–100)
+  - `prompt_security_warn_limit` – Warnschwelle (0–100)
+  - `prompt_security_log` – Ereignisse protokollieren
+  - `prompt_security_log_input` – Eingabe speichern (`full` / `anon` / `none`)
+  - `prompt_security_log_retention_days` – Aufbewahrung in Tagen
+  - `prompt_security_fail_open` – Verhalten bei Modul-Fehler
+  - `prompt_security_ai_enabled` – KI-Klassifikator aktivieren
+  - `prompt_security_ai_endpoint` – KI-Endpunkt URL
+  - `prompt_security_ai_model` – KI-Klassifikatormodell
+  - `prompt_security_block_message` – Blocknachricht
 
 ---
 
@@ -784,6 +939,8 @@ MIT
 - [Überblick](#überblick)
 - [Hauptfunktionen](#hauptfunktionen)
 - [Architektur](#architektur)
+- [Hybrid-RAG Pipeline](#hybrid-rag-pipeline)
+- [Prompt Security](#prompt-security)
 - [Voraussetzungen](#voraussetzungen)
 - [Installation (klassisch)](#installation-klassisch)
 - [Installation mit Docker](#installation-mit-docker)
@@ -798,6 +955,8 @@ MIT
 - [Konfigurationswerte (`settings`)](#konfigurationswerte-settings)
 - [Sicherheitsempfehlungen](#sicherheitsempfehlungen)
 - [Betrieb und Wartung](#betrieb-und-wartung)
+- [Troubleshooting](#troubleshooting)
+- [Lizenz](#lizenz)
 - [Troubleshooting](#troubleshooting)
 - [Lizenz](#lizenz)
 

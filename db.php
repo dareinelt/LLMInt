@@ -474,6 +474,96 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    // ── Prompt Security ───────────────────────────────────────────────────────
+
+    // Configurable rule signatures for rule-based threat detection.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS prompt_security_rules (
+            id          INT          NOT NULL AUTO_INCREMENT,
+            category    VARCHAR(60)  NOT NULL DEFAULT '',
+            name        VARCHAR(120) NOT NULL DEFAULT '',
+            pattern     VARCHAR(500) NOT NULL DEFAULT '',
+            is_regex    TINYINT(1)   NOT NULL DEFAULT 0,
+            severity    TINYINT UNSIGNED NOT NULL DEFAULT 50,
+            is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+            description TEXT         NULL,
+            created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_psr_category  (category),
+            KEY idx_psr_is_active (is_active)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // Security event log: one row per evaluated (or blocked) chat request.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS prompt_security_logs (
+            id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id      INT             NULL,
+            session_id   VARCHAR(128)    NOT NULL DEFAULT '',
+            ip_address   VARCHAR(45)     NOT NULL DEFAULT '',
+            input_text   MEDIUMTEXT      NULL,
+            matched_rule INT             NULL,
+            matched_cat  VARCHAR(60)     NOT NULL DEFAULT '',
+            score        TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            decision     ENUM('allow','warn','block') NOT NULL DEFAULT 'allow',
+            ai_model     VARCHAR(255)    NOT NULL DEFAULT '',
+            created_at   TIMESTAMP(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            KEY idx_psl_user    (user_id),
+            KEY idx_psl_created (created_at),
+            KEY idx_psl_decision(decision)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // Seed default security rules if the table is still empty.
+    $psrCount = (int) $pdo->query('SELECT COUNT(*) FROM prompt_security_rules')->fetchColumn();
+    if ($psrCount === 0) {
+        $defaultRules = [
+            // ── Prompt Injection ─────────────────────────────────────────────
+            ['prompt_injection', 'Ignore previous instructions', 'ignore.{0,10}(all|previous|prior|above).{0,15}(instruction|prompt|rule|directive)', 1, 85, 'Classic prompt injection – instructing the model to discard its system prompt.'],
+            ['prompt_injection', 'Forget instructions', 'forget.{0,15}(everything|all|above|instruction|prompt)', 1, 80, 'Attempts to make the model discard prior context.'],
+            ['prompt_injection', 'From now on override', 'from now on.{0,30}(you are|act as|ignore|forget|override|pretend)', 1, 75, 'Instruction override pattern.'],
+            ['prompt_injection', 'Override instructions', '(override|replace|disregard).{0,20}(your|all|previous|prior).{0,15}(instruction|prompt|rule)', 1, 75, 'Explicit instruction override attempt.'],
+            ['prompt_injection', 'New system prompt', '(new|updated|revised).{0,10}system.{0,10}prompt', 1, 75, 'Attempts to inject a replacement system prompt.'],
+            // ── Jailbreak ────────────────────────────────────────────────────
+            ['jailbreak', 'DAN mode', '\bDAN\b', 1, 85, 'Do Anything Now jailbreak keyword.'],
+            ['jailbreak', 'Developer Mode', 'developer.?mode', 1, 80, 'Developer Mode jailbreak pattern.'],
+            ['jailbreak', 'Jailbreak keyword', 'jailbreak', 1, 80, 'Explicit jailbreak mention.'],
+            ['jailbreak', 'No restrictions', '(without|no).{0,10}(restriction|limit|filter|rule|constraint)', 1, 70, 'Attempt to operate without safety constraints.'],
+            ['jailbreak', 'You are no longer', 'you are no longer.{0,30}(a|an|the|bound|restricted)', 1, 75, 'Role-stripping jailbreak.'],
+            ['jailbreak', 'Act as unrestricted AI', 'act as.{0,30}(unrestricted|unfiltered|unlimited|jailbroken|uncensored)', 1, 80, 'Requests the model act as an unconstrained AI.'],
+            // ── Prompt Leakage ───────────────────────────────────────────────
+            ['prompt_leakage', 'Show system prompt', '(show|print|display|output|reveal|dump|repeat).{0,20}(system|your|the|internal|hidden).{0,20}(prompt|instruction|rule|directive|context)', 1, 70, 'Attempts to extract the system prompt.'],
+            ['prompt_leakage', 'What are your instructions', 'what.{0,10}(are|were).{0,10}(your|the).{0,10}(instruction|rule|directive|guideline)', 1, 65, 'Prompt leakage via question.'],
+            ['prompt_leakage', 'Repeat context verbatim', '(repeat|recite|copy).{0,20}(everything|all|above|context|prompt).{0,20}(verbatim|word.?for.?word|exactly)', 1, 70, 'Verbatim context extraction.'],
+            // ── Tool Abuse ───────────────────────────────────────────────────
+            ['tool_abuse', 'Use all tools', 'use.{0,10}all.{0,10}(available|your|the).{0,10}tool', 1, 65, 'Attempts to invoke all tools indiscriminately.'],
+            ['tool_abuse', 'Call internal API', 'call.{0,20}(internal|hidden|private|admin).{0,20}api', 1, 75, 'Attempts to call internal or admin APIs.'],
+            ['tool_abuse', 'Ignore tool permissions', 'ignore.{0,15}(tool|permission|access|right)', 1, 70, 'Attempts to bypass tool permission checks.'],
+            // ── RAG Attacks ──────────────────────────────────────────────────
+            ['rag_attack', 'Export knowledge base', '(export|dump|list|show|print).{0,20}(all|entire|complete|whole).{0,20}(document|knowledge|chunk|embedding)', 1, 75, 'Attempts to dump the RAG knowledge base.'],
+            ['rag_attack', 'Show all documents', '(show|list|display|give me).{0,15}all.{0,15}document', 1, 65, 'Requests enumeration of all documents.'],
+            ['rag_attack', 'Export chunk contents', '(export|dump|output).{0,15}(chunk|embed)', 1, 70, 'Attempts to extract raw RAG chunks.'],
+            // ── Role Switching ───────────────────────────────────────────────
+            ['role_switch', 'You are now admin', 'you are now.{0,20}(admin|root|superuser|administrator|developer)', 1, 80, 'Attempts to grant the model elevated privileges.'],
+            ['role_switch', 'Act as root', 'act as.{0,15}(root|admin|administrator|superuser)', 1, 80, 'Role-elevation jailbreak.'],
+            ['role_switch', 'You are ChatGPT without restrictions', 'you are.{0,30}(chatgpt|gpt|openai).{0,30}(without|no).{0,15}(restriction|limit|filter)', 1, 75, 'Persona-swap to unconstrained model.'],
+            ['role_switch', 'Handle as developer', '(handle|respond|answer|reply).{0,15}as.{0,15}(developer|root|admin|superuser)', 1, 70, 'Requests a privileged persona.'],
+            // ── Data Exfiltration ────────────────────────────────────────────
+            ['data_exfiltration', 'Show API keys', '(show|give|print|output|list).{0,15}(api.?key|password|secret|token|credential)', 1, 90, 'Attempts to extract secrets or credentials.'],
+            ['data_exfiltration', 'Export all users', '(export|dump|list|show).{0,15}all.{0,15}user', 1, 80, 'Attempts to enumerate user data.'],
+            ['data_exfiltration', 'Show database entries', '(show|dump|print|output|select).{0,20}(database|db|table|row|record|entry)', 1, 75, 'Attempts to read database contents.'],
+            ['data_exfiltration', 'Read config files', '(read|show|cat|open).{0,15}(config|configuration|env|\.env|settings)', 1, 80, 'Attempts to read configuration files.'],
+        ];
+        $psrStmt = $pdo->prepare(
+            'INSERT IGNORE INTO prompt_security_rules (category, name, pattern, is_regex, severity, is_active, description)
+             VALUES (?, ?, ?, ?, ?, 1, ?)'
+        );
+        foreach ($defaultRules as $r) {
+            $psrStmt->execute($r);
+        }
+    }
+
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
         $pdo->prepare(
