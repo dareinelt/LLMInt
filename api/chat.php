@@ -1019,6 +1019,11 @@ function emitSseData(array|string $payload): void
     flush();
 }
 
+function isOpenAiStrictMode(): bool
+{
+    return !empty($GLOBALS['LLMINT_OPENAI_STRICT_MODE']);
+}
+
 function formatIntelligenceLabel(float $value): string
 {
     if (abs($value - round($value)) < 0.00001) {
@@ -1107,8 +1112,10 @@ function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null, ?arr
             'finish_reason' => $data['choices'][0]['finish_reason'] ?? 'stop',
         ]],
     ]);
-    emitIntelligenceUpgradeSse($upgradeSuggestion);
-    emitResponseDetailsSse($responseDetails);
+    if (!isOpenAiStrictMode()) {
+        emitIntelligenceUpgradeSse($upgradeSuggestion);
+        emitResponseDetailsSse($responseDetails);
+    }
     emitSseData('[DONE]');
     if (!connection_aborted()) {
         writeLog('info', 'Antwort vollständig an User übertragen.');
@@ -1197,7 +1204,9 @@ function logResponseFinished(float $requestStart, ?int $promptTokens, ?int $comp
     }
 }
 
-$raw     = file_get_contents('php://input');
+$raw     = isset($GLOBALS['LLMINT_REQUEST_BODY_OVERRIDE']) && is_string($GLOBALS['LLMINT_REQUEST_BODY_OVERRIDE'])
+    ? $GLOBALS['LLMINT_REQUEST_BODY_OVERRIDE']
+    : file_get_contents('php://input');
 $payload = json_decode($raw, true);
 
 if (!is_array($payload)) {
@@ -1223,17 +1232,23 @@ if (empty($payload['model']) || empty($payload['messages'])) {
 
 // Validate messages array.
 foreach ($payload['messages'] as $msg) {
-    if (!isset($msg['role'], $msg['content'])) {
+    if (!isset($msg['role'])) {
         http_response_code(400);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['error' => 'Jede Nachricht muss "role" und "content" enthalten.']);
+        echo json_encode(['error' => 'Jede Nachricht muss "role" enthalten.']);
         exit;
     }
-    $allowed = ['system', 'user', 'assistant'];
+    $allowed = ['system', 'user', 'assistant', 'tool'];
     if (!in_array($msg['role'], $allowed, true)) {
         http_response_code(400);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['error' => 'Ungültige Rolle: ' . htmlspecialchars($msg['role'])]);
+        echo json_encode(['error' => 'Ungültige Rolle: ' . htmlspecialchars((string) $msg['role'])]);
+        exit;
+    }
+    if (!array_key_exists('content', $msg) && !($msg['role'] === 'assistant' && isset($msg['tool_calls']))) {
+        http_response_code(400);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['error' => 'Jede Nachricht muss "content" enthalten (oder assistant.tool_calls).']);
         exit;
     }
 }
@@ -1445,7 +1460,7 @@ if ($slot === null) {
     ignore_user_abort(true);
     @set_time_limit(0);
 
-    if (isset($payload['stream']) && $payload['stream'] === true) {
+    if (isset($payload['stream']) && $payload['stream'] === true && !isOpenAiStrictMode()) {
         emitSseData([
             'status' => 'queued',
             'message' => 'Alle LLM-Ressourcen sind derzeit belegt. Die Bearbeitung beginnt automatisch, sobald ein Slot frei wird.',
@@ -1608,12 +1623,23 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
 };
 
 $clientRequestedStream = isset($payload['stream']) && $payload['stream'] === true;
+$openAiToolMode = (string) ($GLOBALS['LLMINT_OPENAI_TOOL_MODE'] ?? 'auto');
 $endpointSupportsToolCalling = (bool) ($endpoint['supports_tool_calling'] ?? true);
+if ($openAiToolMode === 'enabled') {
+    $endpointSupportsToolCalling = true;
+}
 $useSearchTool   = $searxngBaseUrl !== '' && $endpointSupportsToolCalling;
 $useSdTool       = hasSdEndpoints() && $endpointSupportsToolCalling;
 $useComfyTool    = hasComfyEndpoints() && $endpointSupportsToolCalling;
 $useDocQueryTool = hasDocumentUploads($sessionUserId) && $endpointSupportsToolCalling;
 $useTools        = $useSearchTool || $useSdTool || $useComfyTool || $useDocQueryTool;
+if ($openAiToolMode === 'disabled') {
+    $useSearchTool = false;
+    $useSdTool = false;
+    $useComfyTool = false;
+    $useDocQueryTool = false;
+    $useTools = false;
+}
 $stream = $clientRequestedStream && !$useTools;
 
 // Forward only the fields LM Studio expects.
@@ -1623,6 +1649,8 @@ $forwardPayload = [
     'stream'      => $stream,
     'temperature' => $payload['temperature'] ?? 0.7,
     'max_tokens'  => $payload['max_tokens']  ?? -1,
+    'top_p'       => $payload['top_p'] ?? 1.0,
+    'stop'        => $payload['stop'] ?? null,
 ];
 
 $url = $baseUrl . '/chat/completions';
@@ -1864,14 +1892,16 @@ if ($useTools) {
         'completion_tokens' => $usage['completion'],
         'total_tokens' => $usage['total'],
     ];
-    if ($intelligenceUpgrade !== null) {
+    if (!isOpenAiStrictMode() && $intelligenceUpgrade !== null) {
         $finalData['intelligence_upgrade'] = buildIntelligenceUpgradePayload($intelligenceUpgrade);
     }
-    $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
-    if ($searchQueryUsed !== '') {
-        $responseDetails['search_query'] = $searchQueryUsed;
+    if (!isOpenAiStrictMode()) {
+        $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
+        if ($searchQueryUsed !== '') {
+            $responseDetails['search_query'] = $searchQueryUsed;
+        }
+        $finalData['response_details'] = $responseDetails;
     }
-    $finalData['response_details'] = $responseDetails;
 
     $taskFinished = true;
     completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total']);
@@ -2044,9 +2074,11 @@ if ($stream) {
         saveConversationSession($sessionId, $model, $sessionMessages, $sessionUserId);
     }
     if ($streamStatus === 'done' && ($dataWritten || headers_sent())) {
-        $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
-        emitIntelligenceUpgradeSse($intelligenceUpgrade);
-        emitResponseDetailsSse($responseDetails);
+        if (!isOpenAiStrictMode()) {
+            $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
+            emitIntelligenceUpgradeSse($intelligenceUpgrade);
+            emitResponseDetailsSse($responseDetails);
+        }
         if (!$clientAborted) {
             writeLog('info', 'Antwort vollständig an User übertragen.');
         }
@@ -2145,14 +2177,16 @@ if ($sessionId !== '' && is_array($data)) {
 }
 
 // Forward the raw LM Studio response.
-if (is_array($data) && $intelligenceUpgrade !== null) {
+if (is_array($data) && !isOpenAiStrictMode() && $intelligenceUpgrade !== null) {
     $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
     $data['intelligence_upgrade'] = buildIntelligenceUpgradePayload($intelligenceUpgrade);
     $data['response_details'] = $responseDetails;
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-} elseif (is_array($data)) {
+} elseif (is_array($data) && !isOpenAiStrictMode()) {
     $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
     $data['response_details'] = $responseDetails;
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+} elseif (is_array($data)) {
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } else {
     echo $body;

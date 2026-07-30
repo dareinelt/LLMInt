@@ -648,10 +648,13 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 │   ├── test_searxng.php
 │   ├── reset_password.php
 │   ├── verify_email.php
+│   ├── openai/                   ← NEU: OpenAI-kompatible API ohne Tools
+│   ├── openai-tools/             ← NEU: OpenAI-kompatible API mit Tools
 │   ├── sd_*.php
 │   └── comfy_*.php
 ├── admin/
 │   ├── index.php                 ← erweitert: Embedding-Endpunkte, Hybrid-Search, Reranker, RAG-Stats
+│   ├── api_keys.php              ← NEU: API-Key-Verwaltung für OpenAI-Endpunkte
 │   ├── prompt_security.php       ← NEU: Prompt-Security-Adminoberfläche
 │   ├── login.php
 │   ├── logout.php
@@ -661,6 +664,7 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 │   ├── ldap_auth.php
 │   ├── mailer.php
 │   ├── prompt.txt
+│   ├── openai_api.php            ← NEU: OpenAI-Auth/Model/Request-Helper
 │   └── prompt_security.php       ← NEU: mehrstufige Sicherheits-Engine
 ├── docker/
 │   ├── apache.conf
@@ -683,6 +687,40 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 | `api/chat_sessions.php?action=list` | GET | Sitzungen des aktuellen Nutzers |
 | `api/chat_sessions.php?action=load` | GET | konkrete Sitzung laden |
 | `api/chat_sessions.php?action=delete` | POST/GET | Sitzung löschen |
+
+### OpenAI-kompatible API
+
+| Pfad | Methode | Zweck |
+|---|---|---|
+| `api/openai/v1/models` | GET | Modellliste aus aktiven LLMInt-Endpunktgruppen |
+| `api/openai/v1/chat/completions` | POST | OpenAI-Chat ohne Tools |
+| `api/openai-tools/v1/models` | GET | Modellliste aus aktiven LLMInt-Endpunktgruppen |
+| `api/openai-tools/v1/chat/completions` | POST | OpenAI-Chat mit denselben Tools wie im Webinterface |
+
+**Authentifizierung:** `Authorization: ******
+API-Keys werden gehasht in `api_keys` gespeichert und pro Benutzer ausgewertet.
+
+**Python-Beispiel:**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://server/api/openai/v1",
+    api_key="sk-...",
+)
+
+resp = client.chat.completions.create(
+    model="llama-3.1-8b-instruct",
+    messages=[{"role": "user", "content": "Hallo"}],
+)
+print(resp.choices[0].message.content)
+```
+
+**Tools-Endpunkt:**
+
+- `base_url=https://server/api/openai-tools/v1`
+- kompatibel für Clients wie Cline, Continue, Open WebUI, LibreChat und LM Studio
 
 ### Dokumente / RAG
 
@@ -726,6 +764,7 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 |---|---|
 | `settings` | zentrale Konfigurationswerte |
 | `users` | lokale/LDAP-Benutzer, Berechtigungen, Reset-/Verifikationsfelder |
+| `api_keys` | API-Keys für OpenAI-kompatible externe Clients (gehashte Speicherung) |
 | `endpoints` | LLM-Endpunkte inkl. Spezialisierung, Tool-Calling-Flag, SSH-Daten |
 | `tasks` | LLM-Task-Lifecycle inkl. Tokenmetriken |
 | `routing_categories` | Klassifikationskategorien und Regeln |
@@ -1337,6 +1376,8 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 │   ├── test_searxng.php
 │   ├── reset_password.php
 │   ├── verify_email.php
+│   ├── openai/                   ← NEU: OpenAI-kompatible API ohne Tools
+│   ├── openai-tools/             ← NEU: OpenAI-kompatible API mit Tools
 │   ├── sd_*.php
 │   └── comfy_*.php
 ├── admin/
@@ -1370,6 +1411,40 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 | `api/chat_sessions.php?action=list` | GET | Sitzungen des aktuellen Nutzers |
 | `api/chat_sessions.php?action=load` | GET | konkrete Sitzung laden |
 | `api/chat_sessions.php?action=delete` | POST/GET | Sitzung löschen |
+
+### OpenAI-kompatible API
+
+| Pfad | Methode | Zweck |
+|---|---|---|
+| `api/openai/v1/models` | GET | Modellliste aus aktiven LLMInt-Endpunktgruppen |
+| `api/openai/v1/chat/completions` | POST | OpenAI-Chat ohne Tools |
+| `api/openai-tools/v1/models` | GET | Modellliste aus aktiven LLMInt-Endpunktgruppen |
+| `api/openai-tools/v1/chat/completions` | POST | OpenAI-Chat mit denselben Tools wie im Webinterface |
+
+**Authentifizierung:** `Authorization: ******
+API-Keys werden gehasht in `api_keys` gespeichert und pro Benutzer ausgewertet.
+
+**Python-Beispiel:**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://server/api/openai/v1",
+    api_key="sk-...",
+)
+
+resp = client.chat.completions.create(
+    model="llama-3.1-8b-instruct",
+    messages=[{"role": "user", "content": "Hallo"}],
+)
+print(resp.choices[0].message.content)
+```
+
+**Tools-Endpunkt:**
+
+- `base_url=https://server/api/openai-tools/v1`
+- kompatibel für Clients wie Cline, Continue, Open WebUI, LibreChat und LM Studio
 
 ### Dokumente / RAG
 
@@ -1412,6 +1487,7 @@ Ergebnisse werden in `endpoint_sys_stats` zwischengespeichert.
 |---|---|
 | `settings` | zentrale Konfigurationswerte |
 | `users` | lokale/LDAP-Benutzer, Berechtigungen, Reset-/Verifikationsfelder |
+| `api_keys` | API-Keys für OpenAI-kompatible externe Clients (gehashte Speicherung) |
 | `endpoints` | LLM-Endpunkte inkl. Spezialisierung, Tool-Calling-Flag, SSH-Daten |
 | `tasks` | LLM-Task-Lifecycle inkl. Tokenmetriken |
 | `routing_categories` | Klassifikationskategorien und Regeln |
