@@ -79,16 +79,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // ── Add endpoint ──────────────────────────────────────────────────────
         if ($action === 'add_endpoint') {
-            $newAlias        = trim($_POST['ep_alias'] ?? '');
-            $newUrl          = trim($_POST['ep_base_url'] ?? '');
-            $newTimeout      = (int) ($_POST['ep_timeout'] ?? 120);
-            $newModel        = trim($_POST['ep_default_model'] ?? '');
-            $isActive        = isset($_POST['ep_is_active']) ? 1 : 0;
-            $sshHost         = trim($_POST['ep_ssh_host'] ?? '');
-            $sshPort         = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
-            $sshUser         = trim($_POST['ep_ssh_user'] ?? '');
-            $sshPassword     = $_POST['ep_ssh_password'] ?? '';
-            $specializedFor  = trim($_POST['ep_specialized_for_category'] ?? '');
+            $newAlias            = trim($_POST['ep_alias'] ?? '');
+            $newUrl              = trim($_POST['ep_base_url'] ?? '');
+            $newTimeout          = (int) ($_POST['ep_timeout'] ?? 120);
+            $newModel            = trim($_POST['ep_default_model'] ?? '');
+            $isActive            = isset($_POST['ep_is_active']) ? 1 : 0;
+            $sshHost             = trim($_POST['ep_ssh_host'] ?? '');
+            $sshPort             = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
+            $sshUser             = trim($_POST['ep_ssh_user'] ?? '');
+            $sshPassword         = $_POST['ep_ssh_password'] ?? '';
+            $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
+            $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
 
             if (strlen($newAlias) > 120) {
                 $flashError = 'Alias darf maximal 120 Zeichen lang sein.';
@@ -104,10 +105,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 )->fetchColumn();
                 $db->prepare(
                     'INSERT INTO endpoints (alias, base_url, timeout, default_model, specialized_for_category,
-                                            is_active, sort_order, ssh_host, ssh_port, ssh_user, ssh_password)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                                            supports_tool_calling, is_active, sort_order,
+                                            ssh_host, ssh_port, ssh_user, ssh_password)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
                 )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
-                            $isActive, $maxOrder + 1,
+                            $supportsToolCalling, $isActive, $maxOrder + 1,
                             $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null]);
                 $endpointLabel = $newAlias !== '' ? $newAlias : rtrim($newUrl, '/');
                 writeLog('info', 'Neuer Modellendpunkt erfolgreich registriert (' . $endpointLabel . ', Modell: ' . $newModel . ').');
@@ -116,17 +118,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // ── Update endpoint ───────────────────────────────────────────────────
         } elseif ($action === 'update_endpoint') {
-            $epId           = (int) ($_POST['ep_id'] ?? 0);
-            $newAlias       = trim($_POST['ep_alias'] ?? '');
-            $newUrl         = trim($_POST['ep_base_url'] ?? '');
-            $newTimeout     = (int) ($_POST['ep_timeout'] ?? 120);
-            $newModel       = trim($_POST['ep_default_model'] ?? '');
-            $isActive       = isset($_POST['ep_is_active']) ? 1 : 0;
-            $sshHost        = trim($_POST['ep_ssh_host'] ?? '');
-            $sshPort        = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
-            $sshUser        = trim($_POST['ep_ssh_user'] ?? '');
-            $sshPassword    = $_POST['ep_ssh_password'] ?? null;
-            $specializedFor = trim($_POST['ep_specialized_for_category'] ?? '');
+            $epId                = (int) ($_POST['ep_id'] ?? 0);
+            $newAlias            = trim($_POST['ep_alias'] ?? '');
+            $newUrl              = trim($_POST['ep_base_url'] ?? '');
+            $newTimeout          = (int) ($_POST['ep_timeout'] ?? 120);
+            $newModel            = trim($_POST['ep_default_model'] ?? '');
+            $isActive            = isset($_POST['ep_is_active']) ? 1 : 0;
+            $sshHost             = trim($_POST['ep_ssh_host'] ?? '');
+            $sshPort             = max(1, min(65535, (int) ($_POST['ep_ssh_port'] ?? 22)));
+            $sshUser             = trim($_POST['ep_ssh_user'] ?? '');
+            $sshPassword         = $_POST['ep_ssh_password'] ?? null;
+            $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
+            $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
 
             if ($epId <= 0) {
                 $flashError = 'Ungültige Endpunkt-ID.';
@@ -148,20 +151,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $db->prepare(
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
-                                specialized_for_category = ?, is_active = ?,
+                                specialized_for_category = ?, supports_tool_calling = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
-                                $isActive, $sshHost, $sshPort, $sshUser, $epId]);
+                                $supportsToolCalling, $isActive, $sshHost, $sshPort, $sshUser, $epId]);
                 } else {
                     $db->prepare(
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
-                                specialized_for_category = ?, is_active = ?,
+                                specialized_for_category = ?, supports_tool_calling = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
-                                $isActive, $sshHost, $sshPort, $sshUser, $sshPassword, $epId]);
+                                $supportsToolCalling, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword, $epId]);
                 }
                 if (is_array($previousEndpoint) && (int) ($previousEndpoint['is_active'] ?? 0) === 1 && $isActive !== 1) {
                     $endpointLabel = trim((string) ($previousEndpoint['alias'] ?? ''));
@@ -2160,6 +2163,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                             'timeout'                  => $ep['timeout'],
                             'default_model'            => $ep['default_model'],
                             'specialized_for_category' => $ep['specialized_for_category'] ?? '',
+                            'supports_tool_calling'    => (int) ($ep['supports_tool_calling'] ?? 1),
                             'is_active'                => $ep['is_active'],
                             'ssh_host'                 => $ep['ssh_host'] ?? '',
                             'ssh_port'                 => $ep['ssh_port'] ?? 22,
@@ -2264,6 +2268,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                                <?= (!$editEp || $editEp['is_active']) ? 'checked' : '' ?>>
                         Endpunkt aktiv (nimmt Anfragen entgegen)
                     </label>
+                </div>
+
+                <div class="form-group">
+                    <label class="inline">
+                        <input type="checkbox" id="ep-supports-tool-calling" name="ep_supports_tool_calling"
+                               <?= (!$editEp || (int) ($editEp['supports_tool_calling'] ?? 1)) ? 'checked' : '' ?>>
+                        Tool-Calling unterstützt (search_web wird immer aufgerufen)
+                    </label>
+                    <p class="hint">
+                        Aktivieren, wenn das Modell die OpenAI-kompatible Tool-Calling-API unterstützt.
+                        Ist diese Option aktiviert und SearXNG konfiguriert, wird <code>search_web</code>
+                        bei jeder Anfrage automatisch aufgerufen, um die Antwort mit aktuellen Webinhalten zu verbessern.
+                    </p>
                 </div>
 
                 <!-- ── SSH-Zugangsdaten (Systemmetriken) ──────────────────────── -->
@@ -3440,6 +3457,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const modelInput   = document.getElementById('ep-model-input');
     const modelList    = document.getElementById('ep-model-list');
     const activeCheck  = document.getElementById('ep-active');
+    const toolCallingCheck = document.getElementById('ep-supports-tool-calling');
     const loadBtn      = document.getElementById('ep-load-btn');
     const endpointConfigPanel = document.getElementById('config-endpoints');
     const specializedSelect = document.getElementById('ep-specialized-for');
@@ -3472,6 +3490,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         timeoutInput.value     = ep.timeout;
         modelInput.value       = ep.default_model || '';
         activeCheck.checked    = ep.is_active == 1;
+        if (toolCallingCheck) toolCallingCheck.checked = ep.supports_tool_calling != 0;
         // Clear datalist options from a previous load-models call.
         modelList.innerHTML    = '';
         // Specialization
@@ -3496,6 +3515,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         timeoutInput.value    = '120';
         modelInput.value      = '';
         activeCheck.checked   = true;
+        if (toolCallingCheck) toolCallingCheck.checked = true;
         modelList.innerHTML   = '';
         if (specializedSelect) specializedSelect.value = '';
         if (sshHost)     sshHost.value     = '';

@@ -1422,10 +1422,11 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
 };
 
 $clientRequestedStream = isset($payload['stream']) && $payload['stream'] === true;
-$useSearchTool   = $searxngBaseUrl !== '';
-$useSdTool       = hasSdEndpoints();
-$useComfyTool    = hasComfyEndpoints();
-$useDocQueryTool = hasDocumentUploads($sessionUserId);
+$endpointSupportsToolCalling = (bool) ($endpoint['supports_tool_calling'] ?? true);
+$useSearchTool   = $searxngBaseUrl !== '' && $endpointSupportsToolCalling;
+$useSdTool       = hasSdEndpoints() && $endpointSupportsToolCalling;
+$useComfyTool    = hasComfyEndpoints() && $endpointSupportsToolCalling;
+$useDocQueryTool = hasDocumentUploads($sessionUserId) && $endpointSupportsToolCalling;
 $useTools        = $useSearchTool || $useSdTool || $useComfyTool || $useDocQueryTool;
 $stream = $clientRequestedStream && !$useTools;
 
@@ -1507,7 +1508,13 @@ if ($useTools) {
         $toolPayload['messages'] = $messages;
         $toolPayload['stream'] = false;
         $toolPayload['tools'] = $tools;
-        $toolPayload['tool_choice'] = 'auto';
+        // On the first iteration, force search_web when SearXNG is available and no
+        // pre-fetched search result was already injected via force_search_query.
+        if ($useSearchTool && $iteration === 0 && $forceSearchQuery === '') {
+            $toolPayload['tool_choice'] = ['type' => 'function', 'function' => ['name' => 'search_web']];
+        } else {
+            $toolPayload['tool_choice'] = 'auto';
+        }
         writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
 
         $ch = curl_init($url);
