@@ -54,6 +54,27 @@ $db->exec("
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 
+
+// API keys for OpenAI-compatible external clients.
+$db->exec("
+    CREATE TABLE IF NOT EXISTS api_keys (
+        id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_id      INT             NOT NULL,
+        name         VARCHAR(150)    NOT NULL DEFAULT '',
+        description  VARCHAR(255)    NOT NULL DEFAULT '',
+        key_prefix   VARCHAR(20)     NOT NULL DEFAULT '',
+        api_key_hash CHAR(64)        NOT NULL,
+        created_at   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMP       NULL,
+        expires_at   TIMESTAMP       NULL,
+        is_active    TINYINT(1)      NOT NULL DEFAULT 1,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_api_key_hash (api_key_hash),
+        KEY idx_api_user (user_id, is_active),
+        KEY idx_api_expires (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+");
+
 // Endpoints: each row represents one LM Studio (or compatible) API instance.
 // Endpoints sharing the same default_model form a load-balancing group.
 $db->exec("

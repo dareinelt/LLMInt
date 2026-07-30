@@ -1811,6 +1811,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     <span class="sidebar-label">Verwaltung</span>
     <a href="#users-card">👤 Benutzerkonten</a>
+    <a href="api_keys.php">🗝️ API-Keys</a>
     <a href="#password-card">🔑 Passwort ändern</a>
 </aside>
 
