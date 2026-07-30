@@ -94,6 +94,12 @@ function ensureRuntimeSchema(PDO $pdo): void
         $pdo->exec("ALTER TABLE endpoints ADD COLUMN specialized_for_category VARCHAR(100) NOT NULL DEFAULT '' AFTER default_model");
     } catch (Throwable $_e) { /* column already exists */ }
 
+    // Tool-calling support flag: whether the model served by this endpoint supports
+    // the OpenAI-compatible tool-calling API. Defaults to 1 (supported).
+    try {
+        $pdo->exec("ALTER TABLE endpoints ADD COLUMN supports_tool_calling TINYINT(1) NOT NULL DEFAULT 1 AFTER specialized_for_category");
+    } catch (Throwable $_e) { /* column already exists */ }
+
     // SSH credentials for system-metric polling (RAM, CPU load, CPU temp via lm-sensors).
     foreach ([
         "ALTER TABLE endpoints ADD COLUMN ssh_host     VARCHAR(255) NOT NULL DEFAULT '' AFTER is_active",
