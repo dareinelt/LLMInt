@@ -298,6 +298,69 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    // Embedding columns on document_chunks (added lazily for backward compatibility).
+    foreach ([
+        "ALTER TABLE document_chunks ADD COLUMN embedding         MEDIUMTEXT   NULL AFTER chunk_text",
+        "ALTER TABLE document_chunks ADD COLUMN embedding_dimension SMALLINT UNSIGNED NULL AFTER embedding",
+        "ALTER TABLE document_chunks ADD COLUMN embedding_model   VARCHAR(255) NOT NULL DEFAULT '' AFTER embedding_dimension",
+        "ALTER TABLE document_chunks ADD COLUMN embedding_created_at TIMESTAMP(3) NULL AFTER embedding_model",
+    ] as $emAlter) {
+        try { $pdo->exec($emAlter); } catch (Throwable $_e) { /* column already exists */ }
+    }
+
+    // Embedding status on document_uploads.
+    try {
+        $pdo->exec("ALTER TABLE document_uploads ADD COLUMN embedding_status ENUM('pending','processing','done','error','skipped') NOT NULL DEFAULT 'pending' AFTER processed_at");
+    } catch (Throwable $_e) { /* column already exists */ }
+
+    // Embedding endpoints: one row per OpenAI-compatible embedding API server.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS embedding_endpoints (
+            id         INT          NOT NULL AUTO_INCREMENT,
+            alias      VARCHAR(120) NOT NULL DEFAULT '',
+            base_url   VARCHAR(500) NOT NULL,
+            model      VARCHAR(255) NOT NULL DEFAULT '',
+            api_key    TEXT         NULL,
+            timeout    INT          NOT NULL DEFAULT 60,
+            is_active  TINYINT(1)   NOT NULL DEFAULT 1,
+            sort_order INT          NOT NULL DEFAULT 0,
+            created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                    ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // Cache for query embeddings (optional, controlled by embedding_cache_enabled setting).
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS embedding_cache (
+            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            query_hash CHAR(64)        NOT NULL,
+            model      VARCHAR(255)    NOT NULL DEFAULT '',
+            embedding  MEDIUMTEXT      NOT NULL,
+            created_at TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_ec_hash_model (query_hash, model),
+            KEY idx_ec_created (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // Embedding request log for monitoring.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS embedding_logs (
+            id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            type          ENUM('chunk','query','rerank') NOT NULL DEFAULT 'query',
+            model         VARCHAR(255)    NOT NULL DEFAULT '',
+            duration_ms   INT UNSIGNED    NULL,
+            similarity    FLOAT           NULL,
+            cache_hit     TINYINT(1)      NOT NULL DEFAULT 0,
+            status        ENUM('ok','error') NOT NULL DEFAULT 'ok',
+            created_at    TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            KEY idx_el_type_created (type, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS conversation_sessions (
             session_id           CHAR(64)     NOT NULL,

@@ -58,6 +58,23 @@ $ldapEmailAttr       = getSetting('ldap_email_attr',       'mail');
 $ldapDisplayNameAttr = getSetting('ldap_display_name_attr','displayName');
 $ldapSspiEnabled     = getSetting('ldap_sspi_enabled',     '0') === '1';
 
+// ── Hybrid-RAG / Embedding settings ──────────────────────────────────────────
+require_once __DIR__ . '/../api/embedding.php';
+$embeddingEnabled      = getSetting('embedding_enabled',      '0') === '1';
+$embeddingModel        = getSetting('embedding_model',        '');
+$embeddingDimensions   = (int) getSetting('embedding_dimensions',   '0');
+$embeddingTimeout      = (int) getSetting('embedding_timeout',      '60');
+$embeddingCacheEnabled = getSetting('embedding_cache_enabled', '0') === '1';
+$embeddingCacheTtlDays = (int) getSetting('embedding_cache_ttl_days', '7');
+$hybridSearchEnabled   = getSetting('hybrid_search_enabled',  '0') === '1';
+$bm25Weight            = getSetting('bm25_weight',            '0.5');
+$embeddingWeight       = getSetting('embedding_weight',       '0.5');
+$rerankerEnabled       = getSetting('reranker_enabled',       '0') === '1';
+$rerankerEndpoint      = getSetting('reranker_endpoint',      '');
+$rerankerModel         = getSetting('reranker_model',         '');
+$rerankerTimeout       = (int) getSetting('reranker_timeout', '30');
+$rerankerTopK          = (int) getSetting('reranker_top_k',   '5');
+
 // ── Generate CSRF token ───────────────────────────────────────────────────────
 
 if (empty($_SESSION['csrf_token'])) {
@@ -580,6 +597,131 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $logRetentionDays = $newRetention;
             $flashOk = 'Protokollierungseinstellungen gespeichert.';
 
+        // ── Add embedding endpoint ────────────────────────────────────────────
+        } elseif ($action === 'add_embedding_endpoint') {
+            $epAlias   = trim($_POST['emb_alias']   ?? '');
+            $epUrl     = trim($_POST['emb_base_url'] ?? '');
+            $epModel   = trim($_POST['emb_model']   ?? '');
+            $epApiKey  = $_POST['emb_api_key']      ?? '';
+            $epTimeout = max(5, min(600, (int) ($_POST['emb_timeout'] ?? 60)));
+            $epActive  = isset($_POST['emb_is_active']) ? 1 : 0;
+
+            if ($epUrl === '') {
+                $flashError = 'URL darf nicht leer sein.';
+            } elseif (filter_var($epUrl, FILTER_VALIDATE_URL) === false) {
+                $flashError = 'Bitte eine gültige URL eingeben.';
+            } elseif ($epModel === '') {
+                $flashError = 'Modellname darf nicht leer sein.';
+            } else {
+                $maxOrder = (int) $db->query('SELECT COALESCE(MAX(sort_order), -1) FROM embedding_endpoints')->fetchColumn();
+                $db->prepare(
+                    'INSERT INTO embedding_endpoints (alias, base_url, model, api_key, timeout, is_active, sort_order)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)'
+                )->execute([$epAlias, rtrim($epUrl, '/'), $epModel, $epApiKey !== '' ? $epApiKey : null, $epTimeout, $epActive, $maxOrder + 1]);
+                $flashOk = 'Embedding-Endpunkt hinzugefügt.';
+            }
+
+        // ── Update embedding endpoint ─────────────────────────────────────────
+        } elseif ($action === 'update_embedding_endpoint') {
+            $epId      = (int) ($_POST['emb_id'] ?? 0);
+            $epAlias   = trim($_POST['emb_alias']   ?? '');
+            $epUrl     = trim($_POST['emb_base_url'] ?? '');
+            $epModel   = trim($_POST['emb_model']   ?? '');
+            $epApiKey  = $_POST['emb_api_key']      ?? '';
+            $epTimeout = max(5, min(600, (int) ($_POST['emb_timeout'] ?? 60)));
+            $epActive  = isset($_POST['emb_is_active']) ? 1 : 0;
+
+            if ($epId <= 0) {
+                $flashError = 'Ungültige Endpunkt-ID.';
+            } elseif ($epUrl === '') {
+                $flashError = 'URL darf nicht leer sein.';
+            } elseif (filter_var($epUrl, FILTER_VALIDATE_URL) === false) {
+                $flashError = 'Bitte eine gültige URL eingeben.';
+            } elseif ($epModel === '') {
+                $flashError = 'Modellname darf nicht leer sein.';
+            } else {
+                if ($epApiKey !== '') {
+                    $db->prepare(
+                        'UPDATE embedding_endpoints SET alias=?, base_url=?, model=?, api_key=?, timeout=?, is_active=? WHERE id=?'
+                    )->execute([$epAlias, rtrim($epUrl, '/'), $epModel, $epApiKey, $epTimeout, $epActive, $epId]);
+                } else {
+                    $db->prepare(
+                        'UPDATE embedding_endpoints SET alias=?, base_url=?, model=?, timeout=?, is_active=? WHERE id=?'
+                    )->execute([$epAlias, rtrim($epUrl, '/'), $epModel, $epTimeout, $epActive, $epId]);
+                }
+                $embeddingModel = $epModel;
+                setSetting('embedding_model', $epModel);
+                $flashOk = 'Embedding-Endpunkt gespeichert.';
+            }
+
+        // ── Delete embedding endpoint ─────────────────────────────────────────
+        } elseif ($action === 'delete_embedding_endpoint') {
+            $epId = (int) ($_POST['emb_id'] ?? 0);
+            if ($epId > 0) {
+                $db->prepare('DELETE FROM embedding_endpoints WHERE id = ?')->execute([$epId]);
+                $flashOk = 'Embedding-Endpunkt gelöscht.';
+            }
+
+        // ── Save hybrid search settings ───────────────────────────────────────
+        } elseif ($action === 'save_hybrid_search_settings') {
+            $newHybridEnabled      = isset($_POST['hybrid_search_enabled']) ? '1' : '0';
+            $newEmbeddingEnabled   = isset($_POST['embedding_enabled'])     ? '1' : '0';
+            $newEmbeddingModel     = trim($_POST['embedding_model']         ?? '');
+            $newEmbeddingDims      = max(0, (int) ($_POST['embedding_dimensions']   ?? 0));
+            $newEmbeddingTimeout   = max(5, min(600, (int) ($_POST['embedding_timeout'] ?? 60)));
+            $newBm25Weight         = max(0.0, min(1.0, (float) str_replace(',', '.', $_POST['bm25_weight'] ?? '0.5')));
+            $newEmbeddingWeight    = max(0.0, min(1.0, (float) str_replace(',', '.', $_POST['embedding_weight'] ?? '0.5')));
+            $newCacheEnabled       = isset($_POST['embedding_cache_enabled']) ? '1' : '0';
+            $newCacheTtl           = max(1, min(365, (int) ($_POST['embedding_cache_ttl_days'] ?? 7)));
+
+            setSetting('hybrid_search_enabled',   $newHybridEnabled);
+            setSetting('embedding_enabled',        $newEmbeddingEnabled);
+            setSetting('embedding_model',          $newEmbeddingModel);
+            setSetting('embedding_dimensions',     (string) $newEmbeddingDims);
+            setSetting('embedding_timeout',        (string) $newEmbeddingTimeout);
+            setSetting('bm25_weight',              number_format($newBm25Weight, 2, '.', ''));
+            setSetting('embedding_weight',         number_format($newEmbeddingWeight, 2, '.', ''));
+            setSetting('embedding_cache_enabled',  $newCacheEnabled);
+            setSetting('embedding_cache_ttl_days', (string) $newCacheTtl);
+
+            $hybridSearchEnabled   = $newHybridEnabled === '1';
+            $embeddingEnabled      = $newEmbeddingEnabled === '1';
+            $embeddingModel        = $newEmbeddingModel;
+            $embeddingDimensions   = $newEmbeddingDims;
+            $embeddingTimeout      = $newEmbeddingTimeout;
+            $bm25Weight            = number_format($newBm25Weight, 2, '.', '');
+            $embeddingWeight       = number_format($newEmbeddingWeight, 2, '.', '');
+            $embeddingCacheEnabled = $newCacheEnabled === '1';
+            $embeddingCacheTtlDays = $newCacheTtl;
+
+            $flashOk = 'Hybrid-Search-Einstellungen gespeichert.';
+
+        // ── Save reranker settings ────────────────────────────────────────────
+        } elseif ($action === 'save_reranker_settings') {
+            $newRerankerEnabled  = isset($_POST['reranker_enabled']) ? '1' : '0';
+            $newRerankerEndpoint = trim($_POST['reranker_endpoint'] ?? '');
+            $newRerankerModel    = trim($_POST['reranker_model']    ?? '');
+            $newRerankerTimeout  = max(5, min(300, (int) ($_POST['reranker_timeout'] ?? 30)));
+            $newRerankerTopK     = max(1, min(50,  (int) ($_POST['reranker_top_k']   ?? 5)));
+
+            if ($newRerankerEndpoint !== '' && filter_var($newRerankerEndpoint, FILTER_VALIDATE_URL) === false) {
+                $flashError = 'Bitte eine gültige Reranker-URL eingeben oder das Feld leer lassen.';
+            } else {
+                setSetting('reranker_enabled',  $newRerankerEnabled);
+                setSetting('reranker_endpoint', $newRerankerEndpoint);
+                setSetting('reranker_model',    $newRerankerModel);
+                setSetting('reranker_timeout',  (string) $newRerankerTimeout);
+                setSetting('reranker_top_k',    (string) $newRerankerTopK);
+
+                $rerankerEnabled  = $newRerankerEnabled === '1';
+                $rerankerEndpoint = $newRerankerEndpoint;
+                $rerankerModel    = $newRerankerModel;
+                $rerankerTimeout  = $newRerankerTimeout;
+                $rerankerTopK     = $newRerankerTopK;
+
+                $flashOk = 'Reranker-Einstellungen gespeichert.';
+            }
+
         // ── Change password ───────────────────────────────────────────────────
         } elseif ($action === 'change_password') {
             $oldPass  = $_POST['old_password']         ?? '';
@@ -927,7 +1069,72 @@ if (isset($_GET['edit_comfy']) && (int) $_GET['edit_comfy'] > 0) {
     }
 }
 
-// ── Connected-client stats ────────────────────────────────────────────────────
+// ── Embedding endpoints and statistics ────────────────────────────────────────
+
+$embeddingEndpoints = [];
+$editEmbEp          = null;
+$embeddingStatsRow  = [
+    'total_chunks'       => 0,
+    'chunks_with_embed'  => 0,
+    'chunks_missing'     => 0,
+    'uploads_done'       => 0,
+    'uploads_pending'    => 0,
+    'uploads_error'      => 0,
+    'cache_entries'      => 0,
+    'avg_duration_ms'    => null,
+    'avg_rerank_ms'      => null,
+    'error_count'        => 0,
+];
+
+try {
+    $embeddingEndpoints = $db->query(
+        'SELECT * FROM embedding_endpoints ORDER BY sort_order ASC, id ASC'
+    )->fetchAll();
+} catch (PDOException $e) {
+    // Table may not exist yet – migrations run on first getDb() call.
+}
+
+try {
+    $totalChunks = (int) $db->query('SELECT COUNT(*) FROM document_chunks')->fetchColumn();
+    $chunksWithEmbed = (int) $db->query("SELECT COUNT(*) FROM document_chunks WHERE embedding IS NOT NULL AND embedding != ''")->fetchColumn();
+    $embeddingStatsRow['total_chunks']      = $totalChunks;
+    $embeddingStatsRow['chunks_with_embed'] = $chunksWithEmbed;
+    $embeddingStatsRow['chunks_missing']    = max(0, $totalChunks - $chunksWithEmbed);
+    $embeddingStatsRow['uploads_done']    = (int) $db->query("SELECT COUNT(*) FROM document_uploads WHERE embedding_status = 'done'")->fetchColumn();
+    $embeddingStatsRow['uploads_pending'] = (int) $db->query("SELECT COUNT(*) FROM document_uploads WHERE embedding_status IN ('pending','processing')")->fetchColumn();
+    $embeddingStatsRow['uploads_error']   = (int) $db->query("SELECT COUNT(*) FROM document_uploads WHERE embedding_status = 'error'")->fetchColumn();
+} catch (PDOException $e) { /* table may not exist */ }
+
+try {
+    $embeddingStatsRow['cache_entries'] = (int) $db->query('SELECT COUNT(*) FROM embedding_cache')->fetchColumn();
+} catch (PDOException $e) { /* table may not exist */ }
+
+try {
+    $elRow = $db->query("
+        SELECT
+            AVG(CASE WHEN type = 'query' AND status = 'ok' THEN duration_ms END) AS avg_query_ms,
+            AVG(CASE WHEN type = 'rerank' AND status = 'ok' THEN duration_ms END) AS avg_rerank_ms,
+            SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count
+        FROM embedding_logs
+        WHERE created_at >= NOW() - INTERVAL 24 HOUR
+    ")->fetch();
+    if ($elRow) {
+        $embeddingStatsRow['avg_duration_ms'] = $elRow['avg_query_ms'] !== null ? round((float) $elRow['avg_query_ms'], 1) : null;
+        $embeddingStatsRow['avg_rerank_ms']   = $elRow['avg_rerank_ms'] !== null ? round((float) $elRow['avg_rerank_ms'], 1) : null;
+        $embeddingStatsRow['error_count']     = (int) ($elRow['error_count'] ?? 0);
+    }
+} catch (PDOException $e) { /* table may not exist */ }
+
+// Populate $editEmbEp if the URL requests editing a specific embedding endpoint.
+if (isset($_GET['edit_emb']) && (int) $_GET['edit_emb'] > 0) {
+    $editEmbId = (int) $_GET['edit_emb'];
+    foreach ($embeddingEndpoints as $embEp) {
+        if ((int) $embEp['id'] === $editEmbId) {
+            $editEmbEp = $embEp;
+            break;
+        }
+    }
+}
 
 $clientStats = ['current' => 0, 'today_min' => 0, 'today_max' => 0, 'today_avg' => 0.0];
 try {
@@ -1175,9 +1382,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         #config-sd-card { order: 7; }
         #config-comfy-card { order: 8; }
         #config-routing-card { order: 9; }
-        #config-system-messages-card { order: 10; }
-        #log-config-card { order: 11; }
-        #log-viewer-card { order: 12; }
+        #config-embedding-card { order: 10; }
+        #config-hybrid-search-card { order: 11; }
+        #config-reranker-card { order: 12; }
+        #embedding-stats-card { order: 13; }
+        #config-system-messages-card { order: 14; }
+        #log-config-card { order: 15; }
+        #log-viewer-card { order: 16; }
 
         /* ── User row hover ──────────────────────────────────────── */
         .user-row:hover td { background: rgba(108,99,255,.06); }
@@ -1584,6 +1795,12 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <a href="#config-comfy-card">🖼️ ComfyUI</a>
     <a href="#config-routing-card">🧭 Modellrouting</a>
     <a href="#config-decision-card">🗂️ Entscheidungsfindung</a>
+
+    <span class="sidebar-label">Hybrid-RAG</span>
+    <a href="#config-embedding-card">🧬 Embedding-Endpunkte</a>
+    <a href="#config-hybrid-search-card">🔀 Hybrid-Suche</a>
+    <a href="#config-reranker-card">🏆 Reranker</a>
+    <a href="#embedding-stats-card">📊 RAG-Statistik</a>
 
     <span class="sidebar-label">Systemmeldungen</span>
     <a href="#config-system-messages-card">💬 Systemmeldungen</a>
@@ -2971,6 +3188,309 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             </form>
         </div>
 
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Embedding-Endpunkte (Hybrid-RAG)
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-embedding-card">
+        <details class="config-panel" open>
+            <summary>🧬 Embedding-Endpunkte</summary>
+
+            <p class="hint" style="margin-bottom:16px">
+                Konfiguriere OpenAI-kompatible Embedding-Server (z.B. LM Studio, Ollama, OpenAI).
+                Embeddings werden für jeden Dokument-Chunk erzeugt und ermöglichen die semantische Suche.
+            </p>
+
+            <?php if (empty($embeddingEndpoints)): ?>
+                <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:16px">
+                    Noch keine Embedding-Endpunkte konfiguriert.
+                </p>
+            <?php else: ?>
+                <table class="data-table" style="margin-bottom:20px">
+                    <thead>
+                        <tr>
+                            <th>Alias</th>
+                            <th>URL</th>
+                            <th>Modell</th>
+                            <th>Timeout</th>
+                            <th>Aktiv</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($embeddingEndpoints as $embEp): ?>
+                        <tr>
+                            <td><?= htmlspecialchars($embEp['alias'] !== '' ? $embEp['alias'] : '–') ?></td>
+                            <td style="font-size:.82rem;color:var(--text-muted)"><?= htmlspecialchars($embEp['base_url']) ?></td>
+                            <td><?= htmlspecialchars($embEp['model']) ?></td>
+                            <td><?= (int)$embEp['timeout'] ?>s</td>
+                            <td><?= $embEp['is_active'] ? '<span style="color:var(--success)">✓</span>' : '<span style="color:var(--text-muted)">–</span>' ?></td>
+                            <td>
+                                <a href="?edit_emb=<?= (int)$embEp['id'] ?>#config-embedding-card"
+                                   style="font-size:.8rem;color:var(--accent)">Bearbeiten</a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+
+            <!-- Add / Edit form -->
+            <div class="ep-form-section">
+                <h3><?= $editEmbEp !== null ? '✏️ Endpunkt bearbeiten' : '➕ Endpunkt hinzufügen' ?></h3>
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                    <input type="hidden" name="action"
+                           value="<?= $editEmbEp !== null ? 'update_embedding_endpoint' : 'add_embedding_endpoint' ?>">
+                    <?php if ($editEmbEp !== null): ?>
+                        <input type="hidden" name="emb_id" value="<?= (int)$editEmbEp['id'] ?>">
+                    <?php endif; ?>
+
+                    <div class="form-group">
+                        <label for="emb-alias">Alias (optional)</label>
+                        <input type="text" id="emb-alias" name="emb_alias"
+                               value="<?= htmlspecialchars($editEmbEp['alias'] ?? '') ?>" placeholder="z.B. LM Studio Embed">
+                    </div>
+                    <div class="form-group">
+                        <label for="emb-base-url">Basis-URL <small style="color:var(--text-muted)">(ohne /v1/embeddings)</small></label>
+                        <input type="url" id="emb-base-url" name="emb_base_url" required
+                               value="<?= htmlspecialchars($editEmbEp['base_url'] ?? '') ?>"
+                               placeholder="http://localhost:1234">
+                    </div>
+                    <div class="form-group">
+                        <label for="emb-model">Modell</label>
+                        <input type="text" id="emb-model" name="emb_model" required
+                               value="<?= htmlspecialchars($editEmbEp['model'] ?? '') ?>"
+                               placeholder="text-embedding-nomic-embed-text-v1.5">
+                    </div>
+                    <div class="form-group">
+                        <label for="emb-api-key">API-Key <small style="color:var(--text-muted)">(leer lassen wenn nicht benötigt)</small></label>
+                        <input type="password" id="emb-api-key" name="emb_api_key"
+                               placeholder="<?= $editEmbEp !== null ? '(leer lassen = unverändert)' : '' ?>">
+                    </div>
+                    <div class="form-group">
+                        <label for="emb-timeout">Timeout (Sekunden)</label>
+                        <input type="number" id="emb-timeout" name="emb_timeout"
+                               value="<?= (int)($editEmbEp['timeout'] ?? 60) ?>" min="5" max="600">
+                    </div>
+                    <div class="form-group" style="flex-direction:row;align-items:center;gap:10px">
+                        <input type="checkbox" id="emb-active" name="emb_is_active"
+                               <?= ($editEmbEp === null || $editEmbEp['is_active']) ? 'checked' : '' ?>>
+                        <label for="emb-active" style="margin:0">Endpunkt aktiv</label>
+                    </div>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap">
+                        <button type="submit" class="btn">
+                            <?= $editEmbEp !== null ? '💾 Speichern' : '➕ Hinzufügen' ?>
+                        </button>
+                        <?php if ($editEmbEp !== null): ?>
+                            <form method="POST" style="display:inline">
+                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                                <input type="hidden" name="action" value="delete_embedding_endpoint">
+                                <input type="hidden" name="emb_id" value="<?= (int)$editEmbEp['id'] ?>">
+                                <button type="submit" class="btn btn-danger"
+                                        onclick="return confirm('Endpunkt wirklich löschen?')">🗑 Löschen</button>
+                            </form>
+                        <?php endif; ?>
+                    </div>
+                </form>
+            </div>
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Hybrid-Suche Einstellungen
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-hybrid-search-card">
+        <details class="config-panel" open>
+            <summary>🔀 Hybrid-Suche &amp; Embedding</summary>
+
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action" value="save_hybrid_search_settings">
+
+                <div class="form-group" style="flex-direction:row;align-items:center;gap:10px">
+                    <input type="checkbox" id="hybrid-enabled" name="hybrid_search_enabled"
+                           <?= $hybridSearchEnabled ? 'checked' : '' ?>>
+                    <label for="hybrid-enabled" style="margin:0;font-weight:600">Hybrid-Suche aktivieren (BM25 + Embedding)</label>
+                </div>
+                <div class="form-group" style="flex-direction:row;align-items:center;gap:10px">
+                    <input type="checkbox" id="embedding-enabled" name="embedding_enabled"
+                           <?= $embeddingEnabled ? 'checked' : '' ?>>
+                    <label for="embedding-enabled" style="margin:0">Embeddings aktivieren</label>
+                </div>
+
+                <div class="form-group">
+                    <label for="embedding-model">Standard-Embedding-Modell <small style="color:var(--text-muted)">(für Query-Embedding-Cache)</small></label>
+                    <input type="text" id="embedding-model" name="embedding_model"
+                           value="<?= htmlspecialchars($embeddingModel) ?>"
+                           placeholder="text-embedding-nomic-embed-text-v1.5">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                    <div class="form-group">
+                        <label for="bm25-weight">BM25-Gewichtung (0–1)</label>
+                        <input type="number" id="bm25-weight" name="bm25_weight" step="0.05" min="0" max="1"
+                               value="<?= htmlspecialchars($bm25Weight) ?>">
+                    </div>
+                    <div class="form-group">
+                        <label for="embedding-weight">Embedding-Gewichtung (0–1)</label>
+                        <input type="number" id="embedding-weight" name="embedding_weight" step="0.05" min="0" max="1"
+                               value="<?= htmlspecialchars($embeddingWeight) ?>">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="embedding-timeout">Embedding-Timeout (Sekunden)</label>
+                    <input type="number" id="embedding-timeout" name="embedding_timeout"
+                           value="<?= (int)$embeddingTimeout ?>" min="5" max="600">
+                </div>
+                <div class="form-group" style="flex-direction:row;align-items:center;gap:10px">
+                    <input type="checkbox" id="embedding-cache-enabled" name="embedding_cache_enabled"
+                           <?= $embeddingCacheEnabled ? 'checked' : '' ?>>
+                    <label for="embedding-cache-enabled" style="margin:0">Query-Embedding-Cache aktivieren (Datenbank)</label>
+                </div>
+                <div class="form-group">
+                    <label for="cache-ttl">Cache-Lebensdauer (Tage)</label>
+                    <input type="number" id="cache-ttl" name="embedding_cache_ttl_days"
+                           value="<?= (int)$embeddingCacheTtlDays ?>" min="1" max="365">
+                </div>
+
+                <button type="submit" class="btn">💾 Speichern</button>
+            </form>
+
+            <!-- Embeddings neu berechnen -->
+            <hr style="border-color:var(--border);margin:24px 0">
+            <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">🔄 Embeddings neu berechnen</h3>
+            <p class="hint">Berechnet fehlende oder veraltete Embeddings für alle Dokument-Chunks.
+                Läuft im Hintergrund und kann mehrere Minuten dauern.</p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+                <button type="button" class="btn" id="rebuild-emb-btn">🔄 Neu berechnen (fehlende)</button>
+                <button type="button" class="btn btn-secondary" id="rebuild-emb-all-btn">♻️ Alle neu berechnen</button>
+            </div>
+            <div id="rebuild-emb-result" style="margin-top:10px;font-size:.85rem;color:var(--text-muted)"></div>
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Reranker Einstellungen
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-reranker-card">
+        <details class="config-panel" open>
+            <summary>🏆 Reranker</summary>
+
+            <p class="hint" style="margin-bottom:16px">
+                Ein Reranker bewertet die fusionierten Suchergebnisse neu und gibt eine präzisere Rangfolge zurück.
+                Kompatibel mit: Cohere Rerank, Jina Reranker, lokalen Rerank-APIs.
+                Falls nicht konfiguriert oder nicht erreichbar, werden die RRF-Ergebnisse direkt verwendet.
+            </p>
+
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action" value="save_reranker_settings">
+
+                <div class="form-group" style="flex-direction:row;align-items:center;gap:10px">
+                    <input type="checkbox" id="reranker-enabled" name="reranker_enabled"
+                           <?= $rerankerEnabled ? 'checked' : '' ?>>
+                    <label for="reranker-enabled" style="margin:0;font-weight:600">Reranker aktivieren</label>
+                </div>
+                <div class="form-group">
+                    <label for="reranker-endpoint">Reranker-Endpunkt <small style="color:var(--text-muted)">(POST /v1/rerank)</small></label>
+                    <input type="url" id="reranker-endpoint" name="reranker_endpoint"
+                           value="<?= htmlspecialchars($rerankerEndpoint) ?>"
+                           placeholder="http://localhost:8080">
+                </div>
+                <div class="form-group">
+                    <label for="reranker-model">Reranker-Modell</label>
+                    <input type="text" id="reranker-model" name="reranker_model"
+                           value="<?= htmlspecialchars($rerankerModel) ?>"
+                           placeholder="rerank-multilingual-v3.0">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                    <div class="form-group">
+                        <label for="reranker-timeout">Timeout (Sekunden)</label>
+                        <input type="number" id="reranker-timeout" name="reranker_timeout"
+                               value="<?= (int)$rerankerTimeout ?>" min="5" max="300">
+                    </div>
+                    <div class="form-group">
+                        <label for="reranker-top-k">Top-K Ergebnisse</label>
+                        <input type="number" id="reranker-top-k" name="reranker_top_k"
+                               value="<?= (int)$rerankerTopK ?>" min="1" max="50">
+                    </div>
+                </div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                    <button type="submit" class="btn">💾 Speichern</button>
+                    <button type="button" class="btn btn-secondary" id="test-reranker-btn">🔌 Verbindung testen</button>
+                </div>
+                <div id="reranker-test-result" style="margin-top:10px;font-size:.85rem"></div>
+            </form>
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         RAG-Statistik / Monitoring
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="embedding-stats-card">
+        <details class="config-panel" open>
+            <summary>📊 RAG-Statistik &amp; Monitoring</summary>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px">
+                <div class="stat-box">
+                    <span class="stat-label">Chunks gesamt</span>
+                    <span class="stat-value"><?= number_format($embeddingStatsRow['total_chunks']) ?></span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Mit Embedding</span>
+                    <span class="stat-value" style="color:var(--success)"><?= number_format($embeddingStatsRow['chunks_with_embed']) ?></span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Ohne Embedding</span>
+                    <span class="stat-value" style="color:<?= $embeddingStatsRow['chunks_missing'] > 0 ? 'var(--warning)' : 'var(--text-muted)' ?>">
+                        <?= number_format($embeddingStatsRow['chunks_missing']) ?>
+                    </span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Uploads ✓</span>
+                    <span class="stat-value" style="color:var(--success)"><?= number_format($embeddingStatsRow['uploads_done']) ?></span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Ausstehend</span>
+                    <span class="stat-value"><?= number_format($embeddingStatsRow['uploads_pending']) ?></span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Fehler</span>
+                    <span class="stat-value" style="color:<?= $embeddingStatsRow['uploads_error'] > 0 ? 'var(--error)' : 'var(--text-muted)' ?>">
+                        <?= number_format($embeddingStatsRow['uploads_error']) ?>
+                    </span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Cache-Einträge</span>
+                    <span class="stat-value"><?= number_format($embeddingStatsRow['cache_entries']) ?></span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Ø Query-Zeit (24h)</span>
+                    <span class="stat-value">
+                        <?= $embeddingStatsRow['avg_duration_ms'] !== null ? $embeddingStatsRow['avg_duration_ms'] . ' ms' : '–' ?>
+                    </span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Ø Rerank-Zeit (24h)</span>
+                    <span class="stat-value">
+                        <?= $embeddingStatsRow['avg_rerank_ms'] !== null ? $embeddingStatsRow['avg_rerank_ms'] . ' ms' : '–' ?>
+                    </span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Fehler (24h)</span>
+                    <span class="stat-value" style="color:<?= $embeddingStatsRow['error_count'] > 0 ? 'var(--error)' : 'var(--text-muted)' ?>">
+                        <?= number_format($embeddingStatsRow['error_count']) ?>
+                    </span>
+                </div>
+            </div>
+
+            <p class="hint">
+                Zeigt den Status der Hybrid-RAG-Pipeline. Embedding-Anfragen werden in
+                <code>embedding_logs</code> protokolliert.
+                Die Statistiken beziehen sich auf die letzten 24 Stunden.
+            </p>
         </details>
     </div>
 
@@ -5263,6 +5783,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         'dashboard-card', 'config-smtp-card', 'config-ldap-card', 'config-searxng-card',
         'config-endpoints-card', 'config-request-handling-card',
         'config-sd-card', 'config-comfy-card', 'config-system-messages-card',
+        'config-embedding-card', 'config-hybrid-search-card', 'config-reranker-card', 'embedding-stats-card',
         'log-config-card', 'log-viewer-card', 'users-card', 'password-card'
     ];
 
@@ -5483,5 +6004,101 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         document.getElementById('rc-import-file').value            = '';
         document.getElementById('rc-import-json').value            = '';
     };
+}());
+</script>
+
+<script>
+/* ── Hybrid-RAG: Embedding rebuild buttons ───────────────────────────────── */
+(function () {
+    'use strict';
+
+    const csrfToken = <?= json_encode($csrfToken) ?>;
+
+    async function runRebuild(forceAll) {
+        const resultEl = document.getElementById('rebuild-emb-result');
+        if (resultEl) resultEl.textContent = '⟳ Verarbeite …';
+
+        const body = new URLSearchParams({ csrf_token: csrfToken, batch_size: '200' });
+        if (forceAll) body.set('force_all', '1');
+
+        try {
+            const res  = await fetch('../api/rebuild_embeddings.php', { method: 'POST', body });
+            const data = await res.json();
+
+            if (resultEl) {
+                resultEl.textContent = data.ok
+                    ? '✓ ' + (data.message || 'Fertig.')
+                    : '✗ ' + (data.message || 'Fehler.');
+                resultEl.style.color = data.ok ? 'var(--success)' : 'var(--error)';
+            }
+        } catch (err) {
+            if (resultEl) {
+                resultEl.textContent = '✗ Netzwerkfehler: ' + err.message;
+                resultEl.style.color = 'var(--error)';
+            }
+        }
+    }
+
+    const rebuildBtn    = document.getElementById('rebuild-emb-btn');
+    const rebuildAllBtn = document.getElementById('rebuild-emb-all-btn');
+
+    if (rebuildBtn)    rebuildBtn.addEventListener('click', () => runRebuild(false));
+    if (rebuildAllBtn) rebuildAllBtn.addEventListener('click', () => {
+        if (!confirm('Alle Embeddings neu berechnen? Dies kann je nach Datenmenge sehr lange dauern.')) return;
+        runRebuild(true);
+    });
+}());
+</script>
+
+<script>
+/* ── Reranker connection test ─────────────────────────────────────────────── */
+(function () {
+    'use strict';
+    const btn = document.getElementById('test-reranker-btn');
+    if (!btn) return;
+
+    btn.addEventListener('click', async function () {
+        const endpointEl = document.getElementById('reranker-endpoint');
+        const modelEl    = document.getElementById('reranker-model');
+        const resultEl   = document.getElementById('reranker-test-result');
+
+        const endpoint = endpointEl ? endpointEl.value.trim() : '';
+        const model    = modelEl    ? modelEl.value.trim()    : '';
+
+        if (!endpoint) {
+            if (resultEl) { resultEl.textContent = '✗ Bitte zuerst eine Endpunkt-URL eingeben.'; resultEl.style.color = 'var(--error)'; }
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = '⟳ Teste …';
+        if (resultEl) resultEl.textContent = '';
+
+        try {
+            const res = await fetch(endpoint.replace(/\/$/, '') + '/v1/rerank', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: model || 'test', query: 'test', documents: ['hello world'] }),
+                signal: AbortSignal.timeout(10000),
+            });
+            if (resultEl) {
+                if (res.ok || res.status === 422) {
+                    resultEl.textContent = '✓ Reranker erreichbar (HTTP ' + res.status + ')';
+                    resultEl.style.color = 'var(--success)';
+                } else {
+                    resultEl.textContent = '⚠ HTTP ' + res.status + ' – Endpunkt antwortet, aber mit Fehler.';
+                    resultEl.style.color = 'var(--warning)';
+                }
+            }
+        } catch (err) {
+            if (resultEl) {
+                resultEl.textContent = '✗ Nicht erreichbar: ' + err.message;
+                resultEl.style.color = 'var(--error)';
+            }
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '🔌 Verbindung testen';
+        }
+    });
 }());
 </script>
