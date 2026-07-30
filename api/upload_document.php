@@ -28,6 +28,7 @@ if (!isset($_SESSION['admin_id'])) {
 }
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/embedding.php';
 
 function normalizeDocumentText(string $text): string
 {
@@ -276,6 +277,13 @@ if ($mimeType === 'application/pdf') {
           WHERE id = ?"
     )->execute([$content, $chunkCount, $uploadId]);
 
+    // Generate embeddings asynchronously (errors must not abort the upload).
+    try {
+        generateAndStoreChunkEmbeddings($db, $uploadId);
+    } catch (Throwable $_e) {
+        writeLog('warning', 'Embedding-Erzeugung nach PDF-Upload fehlgeschlagen: ' . $_e->getMessage());
+    }
+
     echo json_encode([
         'ok'      => true,
         'id'      => $uploadId,
@@ -465,6 +473,13 @@ $db->prepare(
             processed_at = NOW(3)
       WHERE id = ?"
 )->execute([$content, $chunkCount, $uploadId]);
+
+// Generate embeddings (errors must not abort the upload response).
+try {
+    generateAndStoreChunkEmbeddings($db, $uploadId);
+} catch (Throwable $_e) {
+    writeLog('warning', 'Embedding-Erzeugung nach Dokument-Upload fehlgeschlagen: ' . $_e->getMessage());
+}
 
 echo json_encode([
     'ok'      => true,

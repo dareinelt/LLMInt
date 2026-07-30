@@ -27,6 +27,7 @@ require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/balancer.php';
 require_once __DIR__ . '/sd_balancer.php';
 require_once __DIR__ . '/comfy_balancer.php';
+require_once __DIR__ . '/embedding.php';
 
 function buildSearxngSearchUrl(string $baseUrl, string $query): string
 {
@@ -454,6 +455,16 @@ function createDocumentQueryToolDefinition(): array
 
 /**
  * Search through extracted document texts for relevant content.
+ *
+ * When hybrid search is enabled (hybrid_search_enabled = 1) and an
+ * embedding endpoint is configured, results are obtained through:
+ *   1. BM25-style keyword scoring (existing logic).
+ *   2. Cosine-similarity scoring against stored chunk embeddings.
+ *   3. Reciprocal Rank Fusion (RRF) of both result lists.
+ *   4. Optional reranking via an OpenAI-compatible reranker API.
+ *
+ * Falls back to plain BM25 when embeddings or the reranker are unavailable.
+ *
  * Returns an array with matching document excerpts.
  */
 function queryDocuments(string $query, ?int $userId): array
@@ -466,20 +477,37 @@ function queryDocuments(string $query, ?int $userId): array
         return ['error' => 'Dokumentsuche ist nur für angemeldete Nutzer verfügbar.'];
     }
 
-    writeLog('info', 'Dokumentensuche im Wissensspeicher gestartet.');
+    // Read configuration.
+    $hybridEnabled    = getSetting('hybrid_search_enabled', '0') === '1';
+    $embeddingEnabled = getSetting('embedding_enabled', '0') === '1';
+    $rerankerEnabled  = getSetting('reranker_enabled', '0') === '1';
+    $bm25Weight       = max(0.0, (float) getSetting('bm25_weight', '0.5'));
+    $embeddingWeight  = max(0.0, (float) getSetting('embedding_weight', '0.5'));
+    $rerankerTopK     = max(1, (int) getSetting('reranker_top_k', '5'));
+
+    // Number of candidates to load for each step.
+    $chunkLimit       = 200; // fetch limit from DB
+    $fusionCandidates = 50;  // max candidates after RRF fusion, before reranking
+
+    writeLog('info', 'Dokumentensuche im Wissensspeicher gestartet' . ($hybridEnabled ? ' (Hybrid-Modus)' : '') . '.');
 
     try {
-        $db = getDb();
+        $db    = getDb();
         $terms = array_slice(tokenizeQueryTerms($query), 0, 12);
 
+        // ── Step 1: Load chunk candidates ────────────────────────────────────
+        // When hybrid search is on and embeddings exist, also fetch the stored
+        // embedding so we can compute cosine similarity in PHP.
+        $selectEmbedding = ($hybridEnabled && $embeddingEnabled) ? ', dc.embedding' : '';
         $stmt = $db->prepare(
-            "SELECT du.id AS document_id, du.original_name, dc.chunk_index, dc.chunk_text
+            "SELECT du.id AS document_id, du.original_name,
+                    dc.id AS chunk_id, dc.chunk_index, dc.chunk_text{$selectEmbedding}
                FROM document_chunks dc
                JOIN document_uploads du ON du.id = dc.document_upload_id
               WHERE du.status = 'done'
                 AND (du.user_id = ? OR du.is_global_rag = 1)
               ORDER BY du.uploaded_at DESC, dc.chunk_index ASC
-              LIMIT 500"
+              LIMIT {$chunkLimit}"
         );
         $stmt->execute([$userId]);
         $rows = $stmt->fetchAll();
@@ -487,12 +515,13 @@ function queryDocuments(string $query, ?int $userId): array
         if (empty($rows)) {
             writeLog('info', 'Dokumentensuche lieferte 0 relevante Dokumente.');
             return [
-                'found' => false,
+                'found'   => false,
                 'message' => 'Es sind noch keine analysierten Dokument-Chunks (eigene oder global freigegebene) verfügbar.',
             ];
         }
 
-        $ranked = [];
+        // ── Step 2: BM25-style scoring ────────────────────────────────────────
+        $bm25Results = [];
         foreach ($rows as $row) {
             $chunkText = trim((string) ($row['chunk_text'] ?? ''));
             if ($chunkText === '') {
@@ -502,40 +531,156 @@ function queryDocuments(string $query, ?int $userId): array
             if ($score <= 0.0) {
                 continue;
             }
-            $ranked[] = [
-                'document_id' => (int) ($row['document_id'] ?? 0),
-                'document' => (string) ($row['original_name'] ?? 'Unbekannt'),
-                'chunk_index' => (int) ($row['chunk_index'] ?? 0),
-                'content' => buildRagSnippet($chunkText, $terms),
-                'score' => $score,
+            $bm25Results[] = [
+                'document_id'  => (int) ($row['document_id'] ?? 0),
+                'document'     => (string) ($row['original_name'] ?? 'Unbekannt'),
+                'chunk_id'     => (int) ($row['chunk_id'] ?? 0),
+                'chunk_index'  => (int) ($row['chunk_index'] ?? 0),
+                'chunk_text'   => $chunkText,
+                'content'      => buildRagSnippet($chunkText, $terms),
+                'bm25_score'   => $score,
+                'embedding'    => $row['embedding'] ?? null,
             ];
         }
 
-        usort($ranked, static function (array $a, array $b): int {
-            return $b['score'] <=> $a['score'];
-        });
+        // Sort BM25 results by score descending.
+        usort($bm25Results, static fn($a, $b) => $b['bm25_score'] <=> $a['bm25_score']);
 
-        $ranked = array_slice($ranked, 0, 5);
-        if (empty($ranked)) {
+        // ── Step 3: Embedding search (optional) ───────────────────────────────
+        $embeddingResults = [];
+        $useEmbedding = $hybridEnabled && $embeddingEnabled && hasActiveEmbeddingEndpoint();
+
+        if ($useEmbedding) {
+            // Retrieve or compute the query embedding.
+            $embModel   = trim(getSetting('embedding_model', ''));
+            $queryEmbed = null;
+
+            if ($embModel !== '') {
+                $queryEmbed = getCachedQueryEmbedding($query, $embModel);
+            }
+
+            if ($queryEmbed === null) {
+                $startMs    = (int) round(microtime(true) * 1000);
+                $queryEmbed = generateEmbeddingAuto($query, 'query');
+                $durationMs = (int) round(microtime(true) * 1000) - $startMs;
+
+                if ($queryEmbed !== null && $embModel !== '') {
+                    setCachedQueryEmbedding($query, $embModel, $queryEmbed);
+                }
+            }
+
+            if ($queryEmbed !== null) {
+                // Score every chunk that has a stored embedding.
+                $maxSim = null;
+                foreach ($rows as $row) {
+                    $chunkText = trim((string) ($row['chunk_text'] ?? ''));
+                    if ($chunkText === '') {
+                        continue;
+                    }
+                    $chunkEmbed = embeddingFromJson($row['embedding'] ?? null);
+                    if ($chunkEmbed === null) {
+                        continue;
+                    }
+                    $sim = cosineSimilarity($queryEmbed, $chunkEmbed);
+                    if ($sim <= 0.0) {
+                        continue;
+                    }
+                    if ($maxSim === null || $sim > $maxSim) {
+                        $maxSim = $sim;
+                    }
+                    $embeddingResults[] = [
+                        'document_id' => (int) ($row['document_id'] ?? 0),
+                        'document'    => (string) ($row['original_name'] ?? 'Unbekannt'),
+                        'chunk_id'    => (int) ($row['chunk_id'] ?? 0),
+                        'chunk_index' => (int) ($row['chunk_index'] ?? 0),
+                        'chunk_text'  => $chunkText,
+                        'content'     => buildRagSnippet($chunkText, $terms),
+                        'sim_score'   => $sim,
+                    ];
+                }
+                // Sort embedding results by similarity descending.
+                usort($embeddingResults, static fn($a, $b) => $b['sim_score'] <=> $a['sim_score']);
+
+                if ($maxSim !== null) {
+                    logEmbeddingRequest('query', $embModel, 0, $maxSim, false, 'ok');
+                }
+            }
+        }
+
+        // ── Step 4: Reciprocal Rank Fusion (RRF) ─────────────────────────────
+        // k = 60 is the standard constant that prevents very high-rank dominance.
+        $rrfK       = 60;
+        $rrfScores  = []; // keyed by chunk_id
+        $rrfMeta    = []; // keyed by chunk_id → metadata
+
+        // Helper to assign RRF contribution from one ranked list.
+        $applyRrf = static function (array $list, float $weight) use ($rrfK, &$rrfScores, &$rrfMeta): void {
+            foreach ($list as $rank => $item) {
+                $cid = (int) ($item['chunk_id'] ?? 0);
+                if ($cid <= 0) {
+                    continue;
+                }
+                $contribution = $weight * (1.0 / ($rrfK + $rank + 1));
+                $rrfScores[$cid] = ($rrfScores[$cid] ?? 0.0) + $contribution;
+                if (!isset($rrfMeta[$cid])) {
+                    $rrfMeta[$cid] = $item;
+                }
+            }
+        };
+
+        if ($useEmbedding && !empty($embeddingResults)) {
+            // Both lists contribute with their configured weights.
+            $applyRrf($bm25Results, $bm25Weight);
+            $applyRrf($embeddingResults, $embeddingWeight);
+        } else {
+            // Only BM25 available – use it directly (weight = 1.0 for simplicity).
+            $applyRrf($bm25Results, 1.0);
+        }
+
+        // Sort fused results by RRF score descending.
+        arsort($rrfScores);
+
+        // Build fused candidate list (up to $fusionCandidates entries).
+        $fused = [];
+        foreach (array_slice($rrfScores, 0, $fusionCandidates, true) as $cid => $rrfScore) {
+            if (!isset($rrfMeta[$cid])) {
+                continue;
+            }
+            $item = $rrfMeta[$cid];
+            $item['rrf_score'] = $rrfScore;
+            $fused[] = $item;
+        }
+
+        if (empty($fused)) {
+            // No BM25 hits either – nothing found.
             writeLog('info', 'Dokumentensuche lieferte 0 relevante Dokumente.');
             return [
-                'found' => false,
+                'found'   => false,
                 'message' => 'Keine passenden Informationen in den analysierten Dokumenten gefunden.',
             ];
         }
 
+        // ── Step 5: Optional reranking ────────────────────────────────────────
+        if ($rerankerEnabled && getSetting('reranker_endpoint', '') !== '') {
+            $fused = rerankDocuments($query, $fused, $rerankerTopK);
+        } else {
+            // No reranker – just take top N from fusion (default 5, or rerankerTopK).
+            $fused = array_slice($fused, 0, $rerankerTopK);
+        }
+
+        // ── Step 6: Format output ─────────────────────────────────────────────
         $results = array_map(static function (array $row): array {
             return [
-                'document' => $row['document'],
-                'chunk' => $row['chunk_index'] + 1,
-                'relevance' => round((float) $row['score'], 3),
-                'content' => $row['content'],
+                'document'  => $row['document'],
+                'chunk'     => $row['chunk_index'] + 1,
+                'relevance' => round((float) ($row['rrf_score'] ?? $row['bm25_score'] ?? 0.0), 4),
+                'content'   => $row['content'],
             ];
-        }, $ranked);
+        }, $fused);
 
         $relevantDocumentCount = count(array_unique(array_map(
-            static fn (array $row): int => (int) $row['document_id'],
-            $ranked
+            static fn(array $row): int => (int) ($row['document_id'] ?? 0),
+            $fused
         )));
         writeLog('info', 'Dokumentensuche lieferte ' . $relevantDocumentCount . ' relevante Dokumente.');
 
@@ -544,10 +689,11 @@ function queryDocuments(string $query, ?int $userId): array
             'results' => $results,
         ];
     } catch (Throwable $e) {
-        writeLog('info', 'Dokumentensuche lieferte 0 relevante Dokumente.');
+        writeLog('error', 'Dokumentensuche Fehler: ' . $e->getMessage());
         return ['error' => 'Datenbankfehler: ' . $e->getMessage()];
     }
 }
+
 
 /**
  * Returns true when at least one active ComfyUI endpoint is configured.
