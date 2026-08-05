@@ -26,6 +26,7 @@ $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
 $intelligenceUpgradeMessage = getSetting('intelligence_upgrade_message', '');
 $loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
 $loginBannerText    = getSetting('login_banner_text', '');
+$registrationEmailText = getSetting('registration_email_text', '');
 $routingCategories = loadRoutingCategories();
 $routingCategoriesData = loadRoutingCategoriesFromDb();
 $routingRules = loadRoutingRules();
@@ -267,6 +268,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $loginBannerText    = trim($_POST['login_banner_text'] ?? '');
             setSetting('login_banner_enabled', $loginBannerEnabled ? '1' : '0');
             setSetting('login_banner_text', $loginBannerText);
+            $newRegistrationEmailText = trim($_POST['registration_email_text'] ?? '');
+            $registrationEmailText = $newRegistrationEmailText;
+            setSetting('registration_email_text', $newRegistrationEmailText);
             $flashOk = 'Systemmeldungen gespeichert.';
 
         // ── Save vision model ─────────────────────────────────────────────────
@@ -3543,6 +3547,22 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                               rows="5" style="width:100%;resize:vertical;font-family:inherit"
                     ><?= htmlspecialchars($loginBannerText) ?></textarea>
                     <p class="hint">HTML ist erlaubt (z.&nbsp;B. <code>&lt;b&gt;</code>, <code>&lt;br&gt;</code>). Leer lassen, um keinen Text anzuzeigen.</p>
+                </div>
+
+                <hr style="margin:24px 0;border-color:var(--border)">
+
+                <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">✉️ Registrierungs-E-Mail</h3>
+                <div class="form-group">
+                    <label for="registration-email-text">Begrüßungstext in der Bestätigungs-E-Mail</label>
+                    <textarea id="registration-email-text" name="registration_email_text"
+                              rows="3" style="width:100%;resize:vertical;font-family:inherit"
+                    ><?= htmlspecialchars($registrationEmailText) ?></textarea>
+                    <p class="hint">
+                        Dieser Text erscheint in der E-Mail, die neue Benutzer nach der Registrierung zur
+                        Bestätigung ihrer E-Mail-Adresse erhalten. Platzhalter <code>{sitename}</code> wird durch
+                        den Namen der Anwendung ersetzt. Leer lassen, um den Standardtext zu verwenden:
+                        <em>„danke für Deine Registrierung bei {sitename}."</em>
+                    </p>
                 </div>
             </form>
         </details>

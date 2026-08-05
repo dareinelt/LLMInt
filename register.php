@@ -97,8 +97,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     $siteName = getSetting('smtp_from_name', 'LLMInt');
 
+                    $registrationEmailText = getSetting('registration_email_text', '');
+                    if ($registrationEmailText === '') {
+                        $registrationEmailText = 'danke für Deine Registrierung bei {sitename}.';
+                    }
+                    $registrationEmailText = str_replace('{sitename}', $siteName, $registrationEmailText);
+
                     $textBody = "Hallo {$username},\r\n\r\n"
-                        . "danke für Deine Registrierung bei {$siteName}.\r\n\r\n"
+                        . "{$registrationEmailText}\r\n\r\n"
                         . "Bitte klicke auf den folgenden Link, um Deine E-Mail-Adresse zu bestätigen:\r\n"
                         . "{$verifyUrl}\r\n\r\n"
                         . "Der Link ist 24 Stunden gültig.\r\n\r\n"
@@ -106,7 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         . "Viele Grüße,\r\nDein {$siteName}-Team";
 
                     $htmlBody = '<p>Hallo <strong>' . htmlspecialchars($username) . '</strong>,</p>'
-                        . '<p>danke für Deine Registrierung bei <strong>' . htmlspecialchars($siteName) . '</strong>.</p>'
+                        . '<p>' . nl2br(htmlspecialchars($registrationEmailText)) . '</p>'
                         . '<p>Bitte bestätige Deine E-Mail-Adresse durch Klick auf den Button:</p>'
                         . '<p><a href="' . htmlspecialchars($verifyUrl) . '" '
                         . 'style="display:inline-block;padding:10px 20px;background:#6c63ff;color:#fff;'
