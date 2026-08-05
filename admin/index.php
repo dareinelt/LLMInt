@@ -10,12 +10,9 @@
 
 session_start();
 
-if (!isset($_SESSION['admin_user'])) {
-    header('Location: login.php');
-    exit;
-}
-
 require_once __DIR__ . '/../db.php';
+
+requireAdminOrRedirect('login.php');
 
 $db = getDb();
 $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
@@ -818,7 +815,7 @@ $endpoints = $db->query(
 )->fetchAll();
 
 $users = $db->query(
-    'SELECT id, username, email, email_verified, default_model, can_upload_documents, auth_source, created_at, last_login
+    'SELECT id, username, email, email_verified, default_model, can_upload_documents, role, auth_source, created_at, last_login
        FROM users ORDER BY id'
 )->fetchAll();
 
@@ -3746,6 +3743,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <th>Benutzername</th>
                     <th>E-Mail</th>
                     <th>Bestätigt</th>
+                    <th>Rolle</th>
                     <th>Standard-Modell</th>
                     <th>Erstellt am</th>
                     <th>Letzter Login</th>
@@ -3760,6 +3758,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         'email_verified'       => (int) ($u['email_verified'] ?? 0),
                         'default_model'        => $u['default_model'] ?? '',
                         'can_upload_documents' => (int) ($u['can_upload_documents'] ?? 0),
+                        'role'                 => $u['role'] ?? 'user',
                         'auth_source'          => $u['auth_source'] ?? 'local',
                     ]), ENT_QUOTES) ?>'
                     style="cursor:pointer" title="Klicken für Benutzerdetails">
@@ -3778,6 +3777,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                                 <span style="color:var(--success)">✓</span>
                             <?php else: ?>
                                 <span style="color:var(--text-muted)">–</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if (($u['role'] ?? 'user') === 'admin'): ?>
+                                <span class="badge-you" style="background:rgba(108,99,255,.18);color:#6c63ff;border-color:rgba(108,99,255,.35)">Admin</span>
+                            <?php else: ?>
+                                <span style="color:var(--text-muted)">Benutzer</span>
                             <?php endif; ?>
                         </td>
                         <td>
@@ -3819,6 +3825,26 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             <h2 style="font-size:1rem;margin-bottom:4px" id="overlay-username"></h2>
             <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:20px" id="overlay-email"></p>
+
+            <!-- Role selector -->
+            <div class="form-group">
+                <label for="overlay-role">Rolle</label>
+                <select id="overlay-role" style="width:100%;padding:8px 12px;background:var(--bg);
+                        border:1px solid var(--border);border-radius:var(--radius);
+                        color:var(--text);font-size:.88rem;font-family:var(--font)">
+                    <option value="user">Benutzer</option>
+                    <option value="admin">Admin</option>
+                </select>
+                <p class="hint">
+                    Nur Benutzer mit der Rolle "Admin" können den Verwaltungsbereich (/admin) aufrufen.
+                </p>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px">
+                <button id="overlay-save-role" class="btn btn-sm">💾 Rolle speichern</button>
+                <span id="overlay-role-result" style="font-size:.82rem"></span>
+            </div>
+
+            <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
 
             <!-- Model selector -->
             <div class="form-group">
@@ -5432,6 +5458,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const docPermResult  = document.getElementById('overlay-doc-perm-result');
     const pwResetSection = document.getElementById('overlay-pw-reset-section');
     const ldapNotice     = document.getElementById('overlay-ldap-notice');
+    const roleSelect     = document.getElementById('overlay-role');
+    const saveRoleBtn    = document.getElementById('overlay-save-role');
+    const roleResult     = document.getElementById('overlay-role-result');
 
     const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
@@ -5466,6 +5495,11 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             }
         }
 
+        // Pre-select current role
+        if (roleSelect) {
+            roleSelect.value = user.role || 'user';
+        }
+
         // Set document upload toggle
         if (docUploadChk) {
             docUploadChk.checked = !!user.can_upload_documents;
@@ -5480,6 +5514,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         if (modelResult)   modelResult.textContent  = '';
         if (resetResult)   resetResult.textContent   = '';
         if (docPermResult) docPermResult.textContent = '';
+        if (roleResult)    roleResult.textContent    = '';
 
         overlay.style.display = 'flex';
         document.body.style.overflow = 'hidden';
@@ -5510,6 +5545,52 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') closeOverlay();
     });
+
+    // ── Save role ─────────────────────────────────────────────────────────────
+    if (saveRoleBtn) {
+        saveRoleBtn.addEventListener('click', async function () {
+            const userId = userIdInput.value;
+            const role   = roleSelect ? roleSelect.value : 'user';
+
+            saveRoleBtn.disabled    = true;
+            saveRoleBtn.textContent = '⟳ Speichern …';
+            if (roleResult) roleResult.textContent = '';
+
+            try {
+                const res  = await fetch('../api/admin_user_action.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_user_role', user_id: parseInt(userId), role, csrf_token: CSRF }),
+                });
+                const data = await res.json();
+                if (roleResult) {
+                    roleResult.style.color = data.ok ? 'var(--success)' : 'var(--error)';
+                    roleResult.textContent = (data.ok ? '✓ ' : '✗ ') + data.message;
+                }
+                if (data.ok) {
+                    document.querySelectorAll('.user-row').forEach(row => {
+                        try {
+                            const u = JSON.parse(row.dataset.user);
+                            if (u.id === parseInt(userId)) {
+                                u.role = role;
+                                row.dataset.user = JSON.stringify(u);
+                            }
+                        } catch (_) {}
+                    });
+                    // Reflect change immediately; reload to refresh the table's role column/count.
+                    setTimeout(() => window.location.reload(), 600);
+                }
+            } catch (e) {
+                if (roleResult) {
+                    roleResult.style.color = 'var(--error)';
+                    roleResult.textContent = '✗ Netzwerkfehler: ' + e.message;
+                }
+            } finally {
+                saveRoleBtn.disabled    = false;
+                saveRoleBtn.textContent = '💾 Rolle speichern';
+            }
+        });
+    }
 
     // ── Save model ────────────────────────────────────────────────────────────
     if (saveModelBtn) {

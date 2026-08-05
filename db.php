@@ -664,6 +664,86 @@ function setSetting(string $key, string $value): void
 }
 
 /**
+ * Return the role ('user' | 'admin') of the currently logged-in user,
+ * or null if nobody is logged in / the user no longer exists.
+ *
+ * The role is always read fresh from the database (never trusted from the
+ * session) so that a promotion/demotion by an administrator takes effect
+ * immediately, without requiring the affected user to log out and back in.
+ */
+function currentUserRole(): ?string
+{
+    if (empty($_SESSION['admin_id'])) {
+        return null;
+    }
+
+    try {
+        $stmt = getDb()->prepare('SELECT role FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([(int) $_SESSION['admin_id']]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+        return ($row['role'] ?? 'user') === 'admin' ? 'admin' : 'user';
+    } catch (PDOException $e) {
+        return null;
+    }
+}
+
+/**
+ * Whether the currently logged-in user has the 'admin' role.
+ */
+function isCurrentUserAdmin(): bool
+{
+    return currentUserRole() === 'admin';
+}
+
+/**
+ * Guard for pages/endpoints that render HTML and require the 'admin' role.
+ * Redirects to $loginUrl when not logged in, or shows a 403 page when
+ * logged in as a non-admin user.
+ */
+function requireAdminOrRedirect(string $loginUrl = 'login.php'): void
+{
+    if (empty($_SESSION['admin_user'])) {
+        header('Location: ' . $loginUrl);
+        exit;
+    }
+    if (!isCurrentUserAdmin()) {
+        http_response_code(403);
+        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">'
+            . '<title>Zugriff verweigert</title></head><body style="font-family:sans-serif;'
+            . 'background:#212121;color:#ececf1;display:flex;align-items:center;'
+            . 'justify-content:center;height:100vh;margin:0;">'
+            . '<div style="text-align:center;"><h1>403 – Zugriff verweigert</h1>'
+            . '<p>Für diesen Bereich sind Administratorrechte erforderlich.</p>'
+            . '<p><a href="../index.php" style="color:#6c63ff;">← Zurück zum Chat</a></p></div>'
+            . '</body></html>';
+        exit;
+    }
+}
+
+/**
+ * Guard for JSON API endpoints that require the 'admin' role.
+ * Emits a 403 JSON response and terminates the request when not authorized.
+ */
+function requireAdminOrJson403(): void
+{
+    if (empty($_SESSION['admin_user'])) {
+        http_response_code(403);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['ok' => false, 'message' => 'Nicht authentifiziert.']);
+        exit;
+    }
+    if (!isCurrentUserAdmin()) {
+        http_response_code(403);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['ok' => false, 'message' => 'Administratorrechte erforderlich.']);
+        exit;
+    }
+}
+
+/**
  * Write a log entry to the app_logs table.
  *
  * The effective minimum log level is controlled by the setting 'log_level'

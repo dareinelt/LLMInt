@@ -44,6 +44,7 @@ $db->exec("
         default_model              VARCHAR(255) NOT NULL DEFAULT '',
         requires_password_change   TINYINT(1)   NOT NULL DEFAULT 0,
         can_upload_documents       TINYINT(1)   NOT NULL DEFAULT 0,
+        role                       ENUM('user','admin') NOT NULL DEFAULT 'user',
         auth_source                VARCHAR(10)  NOT NULL DEFAULT 'local',
         ldap_dn                    VARCHAR(500) NULL,
         created_at                 TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -210,6 +211,13 @@ $db->exec("
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 
+// Migration for existing installations that predate the role column.
+try {
+    $db->exec("ALTER TABLE users ADD COLUMN role ENUM('user','admin') NOT NULL DEFAULT 'user' AFTER can_upload_documents");
+} catch (Throwable $_e) {
+    // column already exists
+}
+
 try {
     $db->exec("ALTER TABLE document_uploads ADD COLUMN chunk_count INT UNSIGNED NOT NULL DEFAULT 0 AFTER extracted_text");
 } catch (Throwable $_e) {
@@ -293,7 +301,7 @@ $count = (int) $db->query('SELECT COUNT(*) FROM users')->fetchColumn();
 
 if ($count === 0) {
     $hash = password_hash('admin', PASSWORD_BCRYPT);
-    $db->prepare('INSERT INTO users (username, password_hash, can_upload_documents) VALUES (?, ?, 1)')->execute(['admin', $hash]);
+    $db->prepare("INSERT INTO users (username, password_hash, can_upload_documents, role) VALUES (?, ?, 1, 'admin')")->execute(['admin', $hash]);
     echo "\n";
     echo "Default admin user created:\n";
     echo "  Username : admin\n";
@@ -301,6 +309,29 @@ if ($count === 0) {
     echo "\n!! Change the password immediately after first login !!\n";
 } else {
     echo "Admin user(s) already exist – skipping.\n";
+
+    // ── Migration safety net ──────────────────────────────────────────────────
+    // If this install predates the role column, every existing user was just
+    // migrated to role='user'. Without at least one admin nobody could reach
+    // the admin panel anymore, so promote the 'admin' account (or, failing
+    // that, the oldest account) once.
+    $adminCount = (int) $db->query("SELECT COUNT(*) FROM users WHERE role = 'admin'")->fetchColumn();
+    if ($adminCount === 0) {
+        $stmt = $db->prepare("SELECT id, username FROM users WHERE username = 'admin' LIMIT 1");
+        $stmt->execute();
+        $promote = $stmt->fetch();
+
+        if (!$promote) {
+            $stmt = $db->query('SELECT id, username FROM users ORDER BY id ASC LIMIT 1');
+            $promote = $stmt->fetch();
+        }
+
+        if ($promote) {
+            $db->prepare("UPDATE users SET role = 'admin' WHERE id = ?")->execute([$promote['id']]);
+            echo "Kein Administrator gefunden – \"{$promote['username']}\" wurde automatisch zum Admin befördert.\n";
+            echo "Bitte in der Benutzerverwaltung prüfen, ob dies korrekt ist.\n";
+        }
+    }
 }
 
 echo "\nSetup complete.\n";
