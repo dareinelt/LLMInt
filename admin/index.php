@@ -2492,12 +2492,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <label class="inline">
                         <input type="checkbox" id="ep-supports-tool-calling" name="ep_supports_tool_calling"
                                <?= (!$editEp || (int) ($editEp['supports_tool_calling'] ?? 1)) ? 'checked' : '' ?>>
-                        Tool-Calling unterstützt (search_web wird immer aufgerufen)
+                        Tool-Calling unterstützt (search_web bei Bedarf verfügbar)
                     </label>
                     <p class="hint">
                         Aktivieren, wenn das Modell die OpenAI-kompatible Tool-Calling-API unterstützt.
-                        Ist diese Option aktiviert und SearXNG konfiguriert, wird <code>search_web</code>
-                        bei jeder Anfrage automatisch aufgerufen, um die Antwort mit aktuellen Webinhalten zu verbessern.
+                        Ist diese Option aktiviert und SearXNG konfiguriert, steht <code>search_web</code>
+                        als Tool zur Verfügung. Das Modell entscheidet selbst, ob es aufgerufen wird –
+                        nur wenn es keine ausreichend aktuellen Informationen zu einem Thema hat.
                     </p>
                 </div>
 
