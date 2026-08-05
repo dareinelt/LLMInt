@@ -6,6 +6,7 @@ LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer inte
 
 - [Funktionen](#funktionen)
 - [Architektur](#architektur)
+- [Intelligence Upgrade](#intelligence-upgrade)
 - [Lastverteilung](#lastverteilung)
 - [Voraussetzungen](#voraussetzungen)
 - [Schnellstart mit Docker](#schnellstart-mit-docker)
@@ -22,6 +23,7 @@ LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer inte
 
 - **Chat mit Streaming:** Server-Sent Events und persistente Chat-Sitzungen pro Benutzer.
 - **Routing und Lastverteilung:** optionale semantische Klassifikation; aktive Endpunkte derselben Modellgruppe werden nach aktueller Last und Fairness ausgewählt. Pro Endpunkt sind standardmäßig bis zu vier parallele Tasks zulässig.
+- **Intelligence Upgrade:** beantwortet einfache Anfragen zunächst ressourcenschonend und bietet bei freier Kapazität optional ein leistungsfähigeres Modell für eine erneute Bearbeitung an.
 - **Hybrid-RAG:** Dokument-Upload mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
 - **Chat-Tools:** Websuche mit SearXNG, Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
 - **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO.
@@ -46,6 +48,32 @@ Wichtige Komponenten:
 - `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an.
 - `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
 - `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
+
+## Intelligence Upgrade
+
+Das Intelligence Upgrade verbindet angemessenen Ressourceneinsatz mit der Möglichkeit, bei anspruchsvolleren Aufgaben mehr Modellleistung zu nutzen. Eine Anfrage wird zunächst mit dem ausgewählten Modell beantwortet. Ist ein leistungsfähigeres Modell mit freier Kapazität verfügbar, erhält der Benutzer anschließend ein optionales Upgrade-Angebot. Nach Zustimmung wird dieselbe Anfrage mit dem vorgeschlagenen Modell erneut ausgeführt; die Auswahl gilt anschließend für die aktuelle Chat-Sitzung.
+
+```mermaid
+flowchart TD
+    A[Benutzeranfrage] --> B[Ausgewähltes Modell<br/>beantwortet Anfrage]
+    B --> C{Leistungsfähigeres Modell<br/>mit freier Kapazität verfügbar?}
+    C -- Nein --> D[Antwort anzeigen]
+    C -- Ja --> E[Antwort anzeigen und<br/>Upgrade anbieten]
+    E --> F{Upgrade zustimmen?}
+    F -- Nein --> D
+    F -- Ja --> G[Anfrage erneut mit<br/>leistungsfähigerem Modell ausführen]
+    G --> H[Upgrade-Modell für<br/>Chat-Sitzung speichern]
+    H --> I[Verbesserte Antwort anzeigen]
+```
+
+**Vorteile**
+
+- **Ressourcenschonend:** Für einfache Fragen reicht ein kleines Modell; leistungsfähige Modelle bleiben für komplexe Aufgaben verfügbar.
+- **Bessere Antwortqualität bei Bedarf:** Benutzer können bei anspruchsvollen Fragen gezielt eine erneute Bearbeitung mit höherer Modellintelligenz anfordern.
+- **Transparente Entscheidung:** Das Upgrade erfolgt nur nach Zustimmung und nur, wenn ein geeigneter Endpunkt Kapazität hat.
+- **Passende Spezialisierung:** Bei erkannter Kategorie werden nur allgemeine oder zur Kategorie passende Upgrade-Modelle vorgeschlagen.
+
+Damit ein Modell berücksichtigt wird, muss seine Modellbezeichnung eine Intelligenzstufe wie `8b` oder `70b` enthalten, beispielsweise `modell-8b` oder `modell 70b`. In der Administration kann bei **Systemmeldungen** der Text des Upgrade-Angebots angepasst werden.
 
 ## Lastverteilung
 
