@@ -1331,6 +1331,9 @@ $csrfToken = $_SESSION['csrf_token'];
     }
 
     function inlineMarkdown(str) {
+        // Explicit line break <br> / <br/> / <br /> (escaped by escapeHtmlContent
+        // beforehand, so this restores it as a real line break instead of literal text).
+        str = str.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
         // Strikethrough ~~text~~
         str = str.replace(/~~(.+?)~~/g, '<del>$1</del>');
         // Bold+italic ***text***
