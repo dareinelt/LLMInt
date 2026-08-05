@@ -6,6 +6,7 @@ LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer inte
 
 - [Funktionen](#funktionen)
 - [Architektur](#architektur)
+- [Lastverteilung](#lastverteilung)
 - [Voraussetzungen](#voraussetzungen)
 - [Schnellstart mit Docker](#schnellstart-mit-docker)
 - [Klassische Installation](#klassische-installation)
@@ -45,6 +46,27 @@ Wichtige Komponenten:
 - `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an.
 - `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
 - `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
+
+## Lastverteilung
+
+`api/balancer.php` wählt für ein angefordertes Modell den verfügbaren Endpunkt mit der geringsten Last. Bei gleicher Last erhält der Endpunkt den Vorzug, der am längsten keine Aufgabe erhalten hat; noch nie verwendete Endpunkte werden zuerst gewählt. Die Auswahl und das Anlegen der Aufgabe erfolgen innerhalb einer Datenbanktransaktion, damit parallele Anfragen keinen Endpunkt doppelt belegen.
+
+```mermaid
+flowchart TD
+    A[Anfrage mit Modell] --> B[DB-Transaktion starten]
+    B --> C[Aktive Endpunkte<br/>mit passendem default_model ermitteln]
+    C --> D{Endpunkt mit<br/>weniger als 4 laufenden Tasks?}
+    D -- Nein --> E[Transaktion zurückrollen<br/>Kein Endpunkt verfügbar]
+    D -- Ja --> F[Nach laufenden Tasks aufsteigend sortieren]
+    F --> G{Gleiche Last?}
+    G -- Ja --> H[Unbenutzte Endpunkte zuerst,<br/>danach älteste letzte Zuweisung]
+    G -- Nein --> I[Am geringsten belasteten<br/>Endpunkt wählen]
+    H --> J[Task mit Status running anlegen]
+    I --> J
+    J --> K[Transaktion bestätigen]
+    K --> L[Endpunkt und Task-ID zurückgeben]
+    L --> M[Nach Verarbeitung Task als<br/>done oder error markieren]
+```
 
 ## Voraussetzungen
 
