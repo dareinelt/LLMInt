@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -56,6 +55,7 @@ if (empty($_SESSION['csrf_token'])) {
 }
 $csrfToken = $_SESSION['csrf_token'];
 ?>
+<!DOCTYPE html>
 <html lang="de">
 <head>
     <meta charset="UTF-8">
