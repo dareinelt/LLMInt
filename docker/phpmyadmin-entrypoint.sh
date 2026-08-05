@@ -24,7 +24,7 @@ php -r '
     file_put_contents($file, $user . ":" . $hash . PHP_EOL);
 ' "$PMA_BASIC_AUTH_USER" "$PMA_BASIC_AUTH_PASSWORD" "$HTPASSWD_FILE"
 
-chmod 600 "$HTPASSWD_FILE"
+chmod 644 "$HTPASSWD_FILE"
 
 echo "[phpmyadmin-entrypoint] Basic Auth configured for user '${PMA_BASIC_AUTH_USER}'."
 
