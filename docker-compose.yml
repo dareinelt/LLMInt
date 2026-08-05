@@ -50,9 +50,14 @@ services:
       # - ./krb5.conf:/etc/krb5.conf:ro
 
   # ── phpMyAdmin ────────────────────────────────────────────────────────────────
+  # Protected by HTTP Basic Auth (credentials from PMA_BASIC_AUTH_USER /
+  # PMA_BASIC_AUTH_PASSWORD) in addition to the phpMyAdmin login form, so it
+  # is password-protected by default. Change the defaults in .env before
+  # deploying!
   phpmyadmin:
     image: phpmyadmin:latest
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "/usr/local/bin/phpmyadmin-entrypoint.sh"]
     ports:
       - "${PMA_PORT:-8081}:80"
     depends_on:
@@ -64,6 +69,11 @@ services:
       PMA_USER: ${DB_USER:-llmint}
       PMA_PASSWORD: ${DB_PASS:-llmint}
       UPLOAD_LIMIT: 64M
+      PMA_BASIC_AUTH_USER: ${PMA_BASIC_AUTH_USER:-admin}
+      PMA_BASIC_AUTH_PASSWORD: ${PMA_BASIC_AUTH_PASSWORD:-changeme}
+    volumes:
+      - ./docker/phpmyadmin-entrypoint.sh:/usr/local/bin/phpmyadmin-entrypoint.sh:ro
+      - ./docker/phpmyadmin-basicauth.conf:/etc/apache2/conf-enabled/zzz-basicauth.conf:ro
 
 volumes:
   db_data:
