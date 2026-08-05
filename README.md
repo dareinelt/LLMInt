@@ -6,6 +6,7 @@ LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer inte
 
 - [Funktionen](#funktionen)
 - [Architektur](#architektur)
+- [Modellrouting und Entscheidungsfindung](#modellrouting-und-entscheidungsfindung)
 - [Intelligence Upgrade](#intelligence-upgrade)
 - [Lastverteilung](#lastverteilung)
 - [Voraussetzungen](#voraussetzungen)
@@ -48,6 +49,36 @@ Wichtige Komponenten:
 - `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an.
 - `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
 - `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
+
+## Modellrouting und Entscheidungsfindung
+
+Ist ein Entscheidungsmodell konfiguriert, bewertet LLMInt die letzte Nutzernachricht vor der eigentlichen Verarbeitung. Es ordnet sie anhand der konfigurierten Kategorien und priorisierten Entscheidungsregeln genau einer Kategorie zu. Eine Routing-Regel kann diese Kategorie einem passenden Zielmodell zuordnen. Fehlt eine Zuordnung, ist das Entscheidungsmodell nicht verfügbar oder kann keine Nachricht klassifiziert werden, bleibt die ursprünglich angeforderte Modellauswahl erhalten.
+
+```mermaid
+flowchart TD
+    A[Benutzeranfrage mit ausgewähltem Modell] --> B{Entscheidungsmodell<br/>konfiguriert?}
+    B -- Nein --> H[Ursprüngliches Modell beibehalten]
+    B -- Ja --> C[Letzte Nutzernachricht extrahieren]
+    C --> D{Nachricht und<br/>Klassifikationsprompt vorhanden?}
+    D -- Nein --> H
+    D -- Ja --> E{Freier Endpunkt für<br/>Entscheidungsmodell verfügbar?}
+    E -- Nein --> H
+    E -- Ja --> F[Entscheidungsmodell ordnet<br/>genau eine Kategorie zu]
+    F --> G{Routing-Regel für<br/>Kategorie vorhanden?}
+    G -- Nein --> H
+    G -- Ja --> I[Zugeordnetes Zielmodell auswählen]
+    H --> J[Verfügbaren Endpunkt des Modells<br/>nach Last und Fairness wählen]
+    I --> J
+    J --> K[Anfrage an Modell senden<br/>und Antwort ausgeben]
+```
+
+**Vorteile**
+
+- **Passende Modellwahl:** Fachliche, kreative oder allgemeine Anfragen können an jeweils geeignete Modellgruppen geleitet werden.
+- **Effizienter Ressourceneinsatz:** Leistungsfähige oder spezialisierte Modelle werden gezielt genutzt, statt jede Anfrage gleich zu behandeln.
+- **Konfigurierbare Entscheidungen:** Kategorien, Prioritäten und Modellzuordnungen werden im Admin-Bereich gepflegt und lassen sich ohne Codeänderung anpassen.
+- **Robuster Betrieb:** Bei fehlender Klassifikation oder Kapazität wird die Benutzeranfrage weiterhin mit dem ursprünglich gewählten Modell verarbeitet.
+- **Faire Auslastung:** Nach der Modellentscheidung verteilt die Lastverteilung Anfragen auf freie Endpunkte mit der geringsten Last und bevorzugt bei Gleichstand lange nicht genutzte Endpunkte.
 
 ## Intelligence Upgrade
 
