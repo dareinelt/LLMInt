@@ -2277,6 +2277,7 @@ if ($stream) {
     // any data has been written to the client.
     $dataWritten      = false;
     $tailBuffer       = '';
+    $lineBuffer       = '';  // holds incomplete SSE line across chunk boundaries
     $accumulatedText  = '';  // for session persistence
     $streamCurlErr    = '';
     $streamHttpCode   = 0;
@@ -2286,6 +2287,7 @@ if ($stream) {
 
     do {
         $tailBuffer      = '';
+        $lineBuffer      = '';
         $accumulatedText = '';
         $dataWritten     = false;
         $firstTokenLogged = false;
@@ -2304,7 +2306,7 @@ if ($stream) {
         writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
 
         curl_setopt($chStream, CURLOPT_WRITEFUNCTION,
-            static function ($ch, $data) use (&$tailBuffer, &$accumulatedText, &$dataWritten, &$firstTokenLogged, &$streamStartedLogged, &$clientAborted, $requestStart): int {
+            static function ($ch, $data) use (&$tailBuffer, &$lineBuffer, &$accumulatedText, &$dataWritten, &$firstTokenLogged, &$streamStartedLogged, &$clientAborted, $requestStart): int {
                 if (!$dataWritten) {
                     // Emit SSE headers on first data chunk (deferred so we can
                     // still switch the endpoint if the connection was refused).
@@ -2331,18 +2333,30 @@ if ($stream) {
                 if (strlen($tailBuffer) > 8192) {
                     $tailBuffer = substr($tailBuffer, -8192);
                 }
-                // Accumulate assistant content from delta events.
-                if (preg_match_all('/^data:\s*(\{.+\})$/m', $data, $dm)) {
-                    foreach ($dm[1] as $djson) {
-                        $dobj = json_decode($djson, true);
-                        if (is_array($dobj) && isset($dobj['choices'][0]['delta']['content'])) {
-                            $deltaContent = (string) $dobj['choices'][0]['delta']['content'];
-                            if ($deltaContent !== '' && !$firstTokenLogged) {
-                                writeLog('info', 'Erste Antworttokens nach ' . elapsedMilliseconds($requestStart) . ' ms erzeugt.');
-                                $firstTokenLogged = true;
-                            }
-                            $accumulatedText .= $deltaContent;
+                // Accumulate assistant content from delta events. Network chunks can
+                // split an SSE "data: {...}" line in the middle, so line boundaries
+                // must be tracked across calls rather than regex-matching each raw
+                // chunk in isolation (which silently drops split events).
+                $lineBuffer .= $data;
+                $lines = explode("\n", $lineBuffer);
+                $lineBuffer = array_pop($lines);
+                foreach ($lines as $line) {
+                    $line = rtrim($line, "\r");
+                    if (!preg_match('/^data:\s?(.*)$/', $line, $dm)) {
+                        continue;
+                    }
+                    $djson = trim($dm[1]);
+                    if ($djson === '' || $djson === '[DONE]') {
+                        continue;
+                    }
+                    $dobj = json_decode($djson, true);
+                    if (is_array($dobj) && isset($dobj['choices'][0]['delta']['content'])) {
+                        $deltaContent = (string) $dobj['choices'][0]['delta']['content'];
+                        if ($deltaContent !== '' && !$firstTokenLogged) {
+                            writeLog('info', 'Erste Antworttokens nach ' . elapsedMilliseconds($requestStart) . ' ms erzeugt.');
+                            $firstTokenLogged = true;
                         }
+                        $accumulatedText .= $deltaContent;
                     }
                 }
                 return strlen($data);
@@ -2353,6 +2367,22 @@ if ($stream) {
         $streamCurlErr  = curl_error($chStream);
         $streamHttpCode = (int) curl_getinfo($chStream, CURLINFO_HTTP_CODE);
         curl_close($chStream);
+
+        // Process any trailing line left in the buffer (stream ended without a
+        // final newline after the last "data: ..." event).
+        if ($lineBuffer !== '') {
+            $line = rtrim($lineBuffer, "\r");
+            if (preg_match('/^data:\s?(.*)$/', $line, $dm)) {
+                $djson = trim($dm[1]);
+                if ($djson !== '' && $djson !== '[DONE]') {
+                    $dobj = json_decode($djson, true);
+                    if (is_array($dobj) && isset($dobj['choices'][0]['delta']['content'])) {
+                        $accumulatedText .= (string) $dobj['choices'][0]['delta']['content'];
+                    }
+                }
+            }
+            $lineBuffer = '';
+        }
 
         // Retry with a different endpoint only if the failure occurred before we sent
         // anything to the client (headers not yet committed) AND it looks like a
