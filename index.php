@@ -494,6 +494,16 @@ $csrfToken = $_SESSION['csrf_token'];
         #status-bar.error { color: var(--error); }
         #status-bar.info  { color: var(--text-muted); }
 
+        /* ── Footer info (below input) ─────────────────────────────── */
+        #footer-info {
+            text-align: center;
+            font-size: .7rem;
+            color: var(--text-muted);
+            opacity: .55;
+            padding: 0 16px 10px;
+            user-select: none;
+        }
+
         /* ── Scrollbar ─────────────────────────────────────────────── */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -1015,6 +1025,7 @@ $csrfToken = $_SESSION['csrf_token'];
         </div>
 
     </div>
+    <div id="footer-info">LLMInt by Daniel-André Reinelt</div>
 </div>
 
 </div><!-- /#main-area -->
