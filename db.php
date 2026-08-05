@@ -424,8 +424,8 @@ function ensureRuntimeSchema(PDO $pdo): void
         CREATE TABLE IF NOT EXISTS routing_categories (
             id                INT          NOT NULL AUTO_INCREMENT,
             name              VARCHAR(100) NOT NULL,
-            definition        TEXT         NOT NULL DEFAULT '',
-            decision_rule     TEXT         NOT NULL DEFAULT '',
+            definition        TEXT         NOT NULL,
+            decision_rule     TEXT         NOT NULL,
             sort_order        INT          NOT NULL DEFAULT 0,
             decision_priority INT          NOT NULL DEFAULT 0,
             PRIMARY KEY (id),
