@@ -1721,12 +1721,18 @@ if ($useTools) {
         $toolPayload = $forwardPayload;
         $toolPayload['messages'] = $messages;
         $toolPayload['stream'] = false;
-        $toolPayload['tools'] = $tools;
         // On the first iteration, force search_web when SearXNG is available and no
         // pre-fetched search result was already injected via force_search_query.
+        // Many local OpenAI-compatible servers (e.g. llama.cpp / LM Studio) reject
+        // the named-function tool_choice form ({"type":"function","function":{"name":...}})
+        // with HTTP 400 for models without native "forced named tool" support. Using the
+        // widely-supported "required" string instead, combined with a tools list that only
+        // contains search_web, achieves the same forced-search behaviour without the 400.
         if ($useSearchTool && $iteration === 0 && $forceSearchQuery === '') {
-            $toolPayload['tool_choice'] = ['type' => 'function', 'function' => ['name' => 'search_web']];
+            $toolPayload['tools'] = createSearchToolDefinition();
+            $toolPayload['tool_choice'] = 'required';
         } else {
+            $toolPayload['tools'] = $tools;
             $toolPayload['tool_choice'] = 'auto';
         }
         writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
@@ -1775,13 +1781,16 @@ if ($useTools) {
             $msg = isset($data['error']['message'])
                 ? $data['error']['message']
                 : 'LM Studio Fehler (HTTP ' . $httpCode . ')';
+            // Only 5xx / server-side failures warrant an endpoint failover: retrying an
+            // identical payload against another endpoint after a 4xx (client/payload)
+            // rejection just repeats the same malformed request and wastes the retry budget.
             if ($httpCode >= 500) {
                 writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
-            }
-            if ($switchEndpoint()) {
-                $url = $baseUrl . '/chat/completions';
-                $iteration--;  // redo this iteration with the new endpoint
-                continue;
+                if ($switchEndpoint()) {
+                    $url = $baseUrl . '/chat/completions';
+                    $iteration--;  // redo this iteration with the new endpoint
+                    continue;
+                }
             }
             $taskFinished = true;
             completeTask($taskId, 'error');
@@ -2027,15 +2036,18 @@ if ($stream) {
         $streamHttpCode = (int) curl_getinfo($chStream, CURLINFO_HTTP_CODE);
         curl_close($chStream);
 
-        // Retry with a different endpoint only if the failure occurred before
-        // we sent anything to the client (headers not yet committed).
+        // Retry with a different endpoint only if the failure occurred before we sent
+        // anything to the client (headers not yet committed) AND it looks like a
+        // transient/server-side failure (connection error or 5xx). A 4xx means the
+        // request itself was rejected, so retrying the identical payload elsewhere
+        // would just repeat the same error and waste the retry budget.
         if (($streamCurlErr !== '' || ($streamHttpCode !== 0 && $streamHttpCode !== 200)) && !$dataWritten) {
             if ($streamCurlErr !== '' || $streamHttpCode >= 500) {
                 writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
-            }
-            if ($switchEndpoint(true)) {
-                $forwardPayload['stream'] = true;
-                continue;
+                if ($switchEndpoint(true)) {
+                    $forwardPayload['stream'] = true;
+                    continue;
+                }
             }
         }
         break;
@@ -2133,19 +2145,22 @@ do {
         $msg  = isset($data['error']['message'])
             ? $data['error']['message']
             : 'LM Studio Fehler (HTTP ' . $httpCode . ')';
+        // Only failover to another endpoint on server-side (5xx) failures. A 4xx means
+        // the request payload itself was rejected, so resending it unchanged elsewhere
+        // would just reproduce the same error and burn through the retry budget.
         if ($httpCode >= 500) {
             writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
-        }
-        if ($switchEndpoint()) {
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_POST           => true,
-                CURLOPT_POSTFIELDS     => json_encode($forwardPayload),
-                CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Accept: application/json'],
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT        => $timeout,
-            ]);
-            continue;
+            if ($switchEndpoint()) {
+                $ch = curl_init($url);
+                curl_setopt_array($ch, [
+                    CURLOPT_POST           => true,
+                    CURLOPT_POSTFIELDS     => json_encode($forwardPayload),
+                    CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Accept: application/json'],
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_TIMEOUT        => $timeout,
+                ]);
+                continue;
+            }
         }
         $taskFinished = true;
         completeTask($taskId, 'error');
