@@ -1077,7 +1077,7 @@ function emitResponseDetailsSse(?array $responseDetails): void
     ]);
 }
 
-function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null, ?array $responseDetails = null): void
+function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null, ?array $responseDetails = null, bool $contentAlreadySent = false): void
 {
     $content = normalizeAssistantContent($data['choices'][0]['message']['content'] ?? '');
     $id = (string) ($data['id'] ?? ('chatcmpl-' . bin2hex(random_bytes(8))));
@@ -1085,7 +1085,13 @@ function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null, ?arr
     $model = (string) ($data['model'] ?? '');
 
     ensureSseHeaders();
-    writeLog('info', 'Streaming der Antwort an User gestartet.');
+    if ($contentAlreadySent) {
+        // The answer was already forwarded token by token, only the closing
+        // events are still missing.
+        $content = '';
+    } else {
+        writeLog('info', 'Streaming der Antwort an User gestartet.');
+    }
 
     if ($content !== '') {
         emitSseData([
@@ -1122,6 +1128,285 @@ function emitSyntheticStream(array $data, ?array $upgradeSuggestion = null, ?arr
     } else {
         writeLog('warning', 'Anfrage durch User abgebrochen.');
     }
+}
+
+/**
+ * Merge streamed tool_call deltas into the accumulated tool call list.
+ * Name and arguments arrive in fragments and are concatenated per index.
+ */
+function mergeToolCallDeltas(array &$toolCalls, array $deltas): void
+{
+    foreach ($deltas as $position => $part) {
+        if (!is_array($part)) {
+            continue;
+        }
+        $index = isset($part['index']) ? (int) $part['index'] : (int) $position;
+        if (!isset($toolCalls[$index])) {
+            $toolCalls[$index] = [
+                'id'       => '',
+                'type'     => 'function',
+                'function' => ['name' => '', 'arguments' => ''],
+            ];
+        }
+        if (!empty($part['id'])) {
+            $toolCalls[$index]['id'] = (string) $part['id'];
+        }
+        if (!empty($part['type'])) {
+            $toolCalls[$index]['type'] = (string) $part['type'];
+        }
+        if (isset($part['function']['name'])) {
+            $toolCalls[$index]['function']['name'] .= (string) $part['function']['name'];
+        }
+        if (isset($part['function']['arguments'])) {
+            $toolCalls[$index]['function']['arguments'] .= (string) $part['function']['arguments'];
+        }
+    }
+}
+
+/**
+ * Run a single chat completion with upstream streaming enabled and assemble the
+ * result into the same shape a non-streaming response would have.
+ *
+ * Content and reasoning deltas are forwarded to the client as SSE chunks while
+ * they arrive, so the answer builds up live even during the tool-calling phase.
+ * Tool call deltas are collected instead of forwarded; a small hold-back buffer
+ * makes sure nothing is forwarded for a turn that turns out to be a tool call.
+ *
+ * @return array{error:string,http_code:int,data:?array,forwarded:bool,body:string}
+ */
+function streamChatCompletionRequest(
+    string $url,
+    array $payload,
+    int $timeout,
+    bool $forwardToClient,
+    float $requestStart,
+    bool &$firstTokenLogged,
+    bool &$streamStartedLogged,
+    bool &$clientAborted
+): array {
+    $payload['stream'] = true;
+    $payload['stream_options'] = ['include_usage' => true];
+
+    $buffer           = '';
+    $rawHead          = '';
+    $content          = '';
+    $reasoning        = '';
+    $pendingContent   = '';
+    $pendingReasoning = '';
+    $toolCalls        = [];
+    $usage            = null;
+    $finishReason     = null;
+    $id               = '';
+    $model            = (string) ($payload['model'] ?? '');
+    $created          = time();
+    $forwarded        = false;
+    $sawToolCall      = false;
+
+    $flushPending = function () use (
+        &$pendingContent, &$pendingReasoning, &$forwarded, &$streamStartedLogged,
+        &$id, &$created, &$model, $forwardToClient
+    ): void {
+        if (!$forwardToClient) {
+            $pendingContent = '';
+            $pendingReasoning = '';
+            return;
+        }
+        if ($pendingContent === '' && $pendingReasoning === '') {
+            return;
+        }
+        $delta = [];
+        if ($pendingReasoning !== '') {
+            $delta['reasoning_content'] = $pendingReasoning;
+        }
+        if ($pendingContent !== '') {
+            $delta['content'] = $pendingContent;
+        }
+        $pendingContent = '';
+        $pendingReasoning = '';
+
+        ensureSseHeaders();
+        if (!$streamStartedLogged) {
+            writeLog('info', 'Streaming der Antwort an User gestartet.');
+            $streamStartedLogged = true;
+        }
+        emitSseData([
+            'id'      => $id !== '' ? $id : 'chatcmpl-live',
+            'object'  => 'chat.completion.chunk',
+            'created' => $created,
+            'model'   => $model,
+            'choices' => [[
+                'index'         => 0,
+                'delta'         => $delta,
+                'finish_reason' => null,
+            ]],
+        ]);
+        $forwarded = true;
+    };
+
+    $processLine = function (string $line) use (
+        &$content, &$reasoning, &$pendingContent, &$pendingReasoning, &$toolCalls,
+        &$usage, &$finishReason, &$id, &$created, &$model, &$sawToolCall,
+        &$firstTokenLogged, $requestStart
+    ): void {
+        if (!preg_match('/^data:\s?(.*)$/', $line, $m)) {
+            return;
+        }
+        $raw = trim($m[1]);
+        if ($raw === '' || $raw === '[DONE]') {
+            return;
+        }
+        $obj = json_decode($raw, true);
+        if (!is_array($obj)) {
+            return;
+        }
+
+        if (!empty($obj['id'])) {
+            $id = (string) $obj['id'];
+        }
+        if (!empty($obj['created'])) {
+            $created = (int) $obj['created'];
+        }
+        if (!empty($obj['model'])) {
+            $model = (string) $obj['model'];
+        }
+        if (isset($obj['usage']['total_tokens'])) {
+            $usage = [
+                'prompt_tokens'     => (int) ($obj['usage']['prompt_tokens'] ?? 0),
+                'completion_tokens' => (int) ($obj['usage']['completion_tokens'] ?? 0),
+                'total_tokens'      => (int) $obj['usage']['total_tokens'],
+            ];
+        }
+
+        $choice = $obj['choices'][0] ?? null;
+        if (!is_array($choice)) {
+            return;
+        }
+        if (!empty($choice['finish_reason'])) {
+            $finishReason = (string) $choice['finish_reason'];
+        }
+
+        $delta = $choice['delta'] ?? [];
+        if (!is_array($delta)) {
+            return;
+        }
+
+        if (isset($delta['tool_calls']) && is_array($delta['tool_calls'])) {
+            $sawToolCall = true;
+            mergeToolCallDeltas($toolCalls, $delta['tool_calls']);
+        }
+        if (isset($delta['reasoning_content']) && is_string($delta['reasoning_content']) && $delta['reasoning_content'] !== '') {
+            $reasoning .= $delta['reasoning_content'];
+            $pendingReasoning .= $delta['reasoning_content'];
+        }
+        if (isset($delta['content']) && is_string($delta['content']) && $delta['content'] !== '') {
+            if (!$firstTokenLogged) {
+                writeLog('info', 'Erste Antworttokens nach ' . elapsedMilliseconds($requestStart) . ' ms erzeugt.');
+                $firstTokenLogged = true;
+            }
+            $content .= $delta['content'];
+            $pendingContent .= $delta['content'];
+        }
+    };
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_HTTPHEADER     => [
+            'Content-Type: application/json',
+            'Accept: text/event-stream',
+        ],
+        CURLOPT_RETURNTRANSFER => false,
+        CURLOPT_CONNECTTIMEOUT => $timeout,
+        CURLOPT_TIMEOUT        => 0,
+    ]);
+    curl_setopt($ch, CURLOPT_WRITEFUNCTION, static function ($curl, $chunk) use (
+        &$buffer, &$rawHead, &$sawToolCall, &$clientAborted, $processLine, $flushPending
+    ): int {
+        if (strlen($rawHead) < 4096) {
+            $rawHead .= substr($chunk, 0, 4096 - strlen($rawHead));
+        }
+
+        $buffer .= $chunk;
+        $lines = explode("\n", $buffer);
+        $buffer = array_pop($lines);
+        foreach ($lines as $line) {
+            $processLine(rtrim($line, "\r"));
+        }
+
+        // Hold back the very first characters so a turn that turns out to be a
+        // tool call never leaks partial text to the client.
+        if (!$sawToolCall) {
+            $flushPending();
+        }
+
+        if (connection_aborted()) {
+            if (!$clientAborted) {
+                writeLog('warning', 'Anfrage durch User abgebrochen.');
+                $clientAborted = true;
+            }
+            return 0;
+        }
+        return strlen($chunk);
+    });
+
+    curl_exec($ch);
+    $curlErr  = curl_error($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($buffer !== '') {
+        $processLine(rtrim($buffer, "\r"));
+        $buffer = '';
+    }
+    if (!$sawToolCall && $httpCode === 200 && $curlErr === '') {
+        $flushPending();
+    } else {
+        $pendingContent = '';
+        $pendingReasoning = '';
+    }
+
+    if ($curlErr !== '' || ($httpCode !== 0 && $httpCode !== 200)) {
+        return [
+            'error'     => $curlErr,
+            'http_code' => $httpCode,
+            'data'      => null,
+            'forwarded' => $forwarded,
+            'body'      => $rawHead,
+        ];
+    }
+
+    $message = ['role' => 'assistant', 'content' => $content];
+    if ($reasoning !== '') {
+        $message['reasoning_content'] = $reasoning;
+    }
+    if ($toolCalls !== []) {
+        ksort($toolCalls);
+        $message['tool_calls'] = array_values($toolCalls);
+    }
+
+    $data = [
+        'id'      => $id !== '' ? $id : ('chatcmpl-' . bin2hex(random_bytes(8))),
+        'object'  => 'chat.completion',
+        'created' => $created,
+        'model'   => $model,
+        'choices' => [[
+            'index'         => 0,
+            'message'       => $message,
+            'finish_reason' => $finishReason ?? 'stop',
+        ]],
+    ];
+    if ($usage !== null) {
+        $data['usage'] = $usage;
+    }
+
+    return [
+        'error'     => '',
+        'http_code' => $httpCode === 0 ? 200 : $httpCode,
+        'data'      => $data,
+        'forwarded' => $forwarded,
+        'body'      => $rawHead,
+    ];
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -1717,6 +2002,20 @@ if ($useTools) {
         $tools = array_merge($tools, createDocumentQueryToolDefinition());
     }
 
+    // Tool calling used to force a non-streaming upstream request, which meant the
+    // client only ever saw a blinking cursor until the complete answer had been
+    // generated. The upstream request is now streamed as well: content is pushed
+    // to the client while it is produced, tool call deltas are collected instead.
+    $toolStreamLive        = $clientRequestedStream;
+    $liveStreamed          = false;
+    $toolFirstTokenLogged  = false;
+    $toolStreamStartLogged = false;
+    $toolClientAborted     = false;
+    if ($toolStreamLive) {
+        ignore_user_abort(true);
+        @set_time_limit(0);
+    }
+
     for ($iteration = 0; $iteration < 6; $iteration++) {
         $toolPayload = $forwardPayload;
         $toolPayload['messages'] = $messages;
@@ -1728,30 +2027,56 @@ if ($useTools) {
         $toolPayload['tool_choice'] = 'auto';
         writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
 
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => json_encode($toolPayload),
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/json',
-                'Accept: application/json',
-            ],
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => $timeout,
-        ]);
+        if ($toolStreamLive) {
+            $streamResult = streamChatCompletionRequest(
+                $url,
+                $toolPayload,
+                $timeout,
+                true,
+                $requestStart,
+                $toolFirstTokenLogged,
+                $toolStreamStartLogged,
+                $toolClientAborted
+            );
+            if ($streamResult['forwarded']) {
+                $liveStreamed = true;
+            }
+            $body     = $streamResult['body'];
+            $httpCode = $streamResult['http_code'];
+            $curlErr  = $streamResult['error'];
+            $data     = $streamResult['data'];
+            if ($toolClientAborted) {
+                $taskFinished = true;
+                completeTask($taskId, 'error');
+                exit;
+            }
+        } else {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => json_encode($toolPayload),
+                CURLOPT_HTTPHEADER     => [
+                    'Content-Type: application/json',
+                    'Accept: application/json',
+                ],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => $timeout,
+            ]);
 
-        $body = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlErr = curl_error($ch);
-        curl_close($ch);
+            $body = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlErr = curl_error($ch);
+            curl_close($ch);
+            $data = null;
+        }
 
-        if (!headers_sent()) {
+        if (!$clientRequestedStream && !headers_sent()) {
             header('Content-Type: application/json; charset=utf-8');
         }
 
         if ($curlErr !== '') {
             writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
-            if ($switchEndpoint(true)) {
+            if (!$liveStreamed && $switchEndpoint(true)) {
                 $url = $baseUrl . '/chat/completions';
                 $iteration--;  // redo this iteration with the new endpoint
                 continue;
@@ -1767,7 +2092,9 @@ if ($useTools) {
             exit;
         }
 
-        $data = json_decode($body, true);
+        if ($data === null) {
+            $data = json_decode((string) $body, true);
+        }
         if ($httpCode !== 200 || !is_array($data)) {
             $msg = isset($data['error']['message'])
                 ? $data['error']['message']
@@ -1775,7 +2102,7 @@ if ($useTools) {
             // Only 5xx / server-side failures warrant an endpoint failover: retrying an
             // identical payload against another endpoint after a 4xx (client/payload)
             // rejection just repeats the same malformed request and wastes the retry budget.
-            if ($httpCode >= 500) {
+            if ($httpCode >= 500 && !$liveStreamed) {
                 writeLog('warning', 'Modellendpunkt ' . getEndpointLogLabel($endpoint) . ' nicht mehr verfügbar.');
                 if ($switchEndpoint()) {
                     $url = $baseUrl . '/chat/completions';
@@ -1920,7 +2247,7 @@ if ($useTools) {
     }
 
     if ($clientRequestedStream) {
-        emitSyntheticStream($finalData, $intelligenceUpgrade, $responseDetails);
+        emitSyntheticStream($finalData, $intelligenceUpgrade, $responseDetails, $liveStreamed);
     } else {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode($finalData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
