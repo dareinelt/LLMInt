@@ -2054,7 +2054,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
          SMTP / Outgoing Mail Server
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-smtp-card">
-        <details class="config-panel" id="config-smtp">
+        <details class="config-panel" id="config-smtp" open>
             <summary>📧 E-Mail (SMTP)</summary>
             <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
@@ -2148,7 +2148,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
          Active Directory / LDAP
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-ldap-card">
-        <details class="config-panel" id="config-ldap">
+        <details class="config-panel" id="config-ldap" open>
             <summary>🏢 Active Directory (LDAP)</summary>
             <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
