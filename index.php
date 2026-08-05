@@ -1459,6 +1459,17 @@ $csrfToken = $_SESSION['csrf_token'];
         }
     }
 
+    function renderBubbleContent(thinking, text) {
+        let html = '';
+        if (thinking) {
+            html += '<div class="thinking-bubble">' + escapeHtmlContent(thinking) + '</div>';
+        }
+        if (text) {
+            html += renderMarkdown(text);
+        }
+        return html;
+    }
+
     async function executeStreamingRequest(payload, bubble) {
         const res = await fetch('api/chat.php', {
             method:  'POST',
@@ -1522,14 +1533,7 @@ $csrfToken = $_SESSION['csrf_token'];
                 accumulated += delta;
             }
             if (delta || thinkingDelta) {
-                let html = '';
-                if (accumulatedThinking) {
-                    html += '<div class="thinking-bubble">' + escapeHtmlContent(accumulatedThinking) + '</div>';
-                }
-                if (accumulated) {
-                    html += renderMarkdown(accumulated);
-                }
-                bubble.innerHTML = html;
+                bubble.innerHTML = renderBubbleContent(accumulatedThinking, accumulated);
                 scrollToBottom();
             }
             return false;
@@ -1554,7 +1558,7 @@ $csrfToken = $_SESSION['csrf_token'];
             processSseLine(remaining);
         }
 
-        return { accumulated, upgradeSuggestion, responseDetails };
+        return { accumulated, accumulatedThinking, upgradeSuggestion, responseDetails };
     }
 
     function setResponseDetailsForBubble(bubble, responseDetails) {
@@ -1652,6 +1656,7 @@ $csrfToken = $_SESSION['csrf_token'];
                 }
                 const result = await executeStreamingRequest(retryPayload, bubble);
                 let finalText = result.accumulated;
+                let finalThinking = result.accumulatedThinking;
                 let retryResponseDetails = result.responseDetails;
 
                 if (!finalText) {
@@ -1659,11 +1664,12 @@ $csrfToken = $_SESSION['csrf_token'];
                     bubble.innerHTML = '';
                     const retryResult = await executeStreamingRequest(retryPayload, bubble);
                     finalText = retryResult.accumulated;
+                    finalThinking = retryResult.accumulatedThinking;
                     retryResponseDetails = retryResult.responseDetails || retryResponseDetails;
                 }
 
                 finalText = finalText || '(Leere Antwort)';
-                bubble.innerHTML = renderMarkdown(finalText);
+                bubble.innerHTML = renderBubbleContent(finalThinking, finalText);
                 setResponseDetailsForBubble(bubble, retryResponseDetails);
                 bubble.classList.remove('streaming');
 
@@ -1728,6 +1734,7 @@ $csrfToken = $_SESSION['csrf_token'];
         try {
             let result = await executeStreamingRequest(payload, bubble);
             let accumulated = result.accumulated;
+            let accumulatedThinking = result.accumulatedThinking;
             let responseDetails = result.responseDetails;
             let upgradeSuggestion = result.upgradeSuggestion;
 
@@ -1737,6 +1744,7 @@ $csrfToken = $_SESSION['csrf_token'];
                 bubble.innerHTML = '';
                 const retryResult = await executeStreamingRequest(payload, bubble);
                 accumulated = retryResult.accumulated;
+                accumulatedThinking = retryResult.accumulatedThinking;
                 responseDetails = retryResult.responseDetails || responseDetails;
                 upgradeSuggestion = retryResult.upgradeSuggestion || upgradeSuggestion;
 
@@ -1747,12 +1755,13 @@ $csrfToken = $_SESSION['csrf_token'];
                     const upgradePayload = { ...payload, model: upgradeSuggestion.suggested_model };
                     const upgradeResult = await executeStreamingRequest(upgradePayload, bubble);
                     accumulated = upgradeResult.accumulated;
+                    accumulatedThinking = upgradeResult.accumulatedThinking;
                     responseDetails = upgradeResult.responseDetails || responseDetails;
                     upgradeSuggestion = null; // upgrade was already used automatically
                 }
             }
 
-            bubble.innerHTML = accumulated ? renderMarkdown(accumulated) : '(Leere Antwort)';
+            bubble.innerHTML = renderBubbleContent(accumulatedThinking, accumulated || '(Leere Antwort)');
             setResponseDetailsForBubble(bubble, responseDetails);
             bubble.classList.remove('streaming');
 
