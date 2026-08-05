@@ -341,6 +341,45 @@ $csrfToken = $_SESSION['csrf_token'];
             color: var(--text-muted);
         }
 
+        /* ── LaTeX-ish math ($...$ / $$...$$) ───────────────────────── */
+        .message.assistant .bubble .math-inline {
+            font-family: 'Cambria Math', 'STIX Two Math', 'Latin Modern Math', Georgia, serif;
+            font-style: italic;
+            padding: 0 .1em;
+        }
+        .message.assistant .bubble .math-block {
+            display: block;
+            font-family: 'Cambria Math', 'STIX Two Math', 'Latin Modern Math', Georgia, serif;
+            font-style: italic;
+            text-align: center;
+            margin: .7em 0;
+            overflow-x: auto;
+            font-size: 1.05em;
+        }
+        .message.assistant .bubble .math-inline sup,
+        .message.assistant .bubble .math-block sup {
+            font-size: .75em;
+        }
+        .message.assistant .bubble .math-inline sub,
+        .message.assistant .bubble .math-block sub {
+            font-size: .75em;
+        }
+        .message.assistant .bubble .math-frac {
+            display: inline-flex;
+            flex-direction: column;
+            vertical-align: middle;
+            text-align: center;
+            margin: 0 .15em;
+            line-height: 1.1;
+        }
+        .message.assistant .bubble .math-frac .math-frac-num {
+            border-bottom: 1px solid currentColor;
+            padding: 0 .2em;
+        }
+        .message.assistant .bubble .math-frac .math-frac-den {
+            padding: 0 .2em;
+        }
+
         /* ── Thinking bubble (reasoning tokens, semi-transparent during streaming) ── */
         .bubble .thinking-bubble {
             opacity: 0.45;
@@ -1291,8 +1330,116 @@ $csrfToken = $_SESSION['csrf_token'];
         return str;
     }
 
+    /* ── LaTeX-ish math rendering ($...$ inline, $$...$$ block) ──── */
+
+    const MATH_SYMBOLS = {
+        alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε',
+        zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'ϑ', iota: 'ι', kappa: 'κ',
+        lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', varpi: 'ϖ', rho: 'ρ',
+        varrho: 'ϱ', sigma: 'σ', varsigma: 'ς', tau: 'τ', upsilon: 'υ', phi: 'φ',
+        varphi: 'ϕ', chi: 'χ', psi: 'ψ', omega: 'ω',
+        Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π',
+        Sigma: 'Σ', Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+        pm: '±', mp: '∓', times: '×', div: '÷', cdot: '·', ast: '∗',
+        approx: '≈', neq: '≠', ne: '≠', leq: '≤', le: '≤', geq: '≥', ge: '≥',
+        ll: '≪', gg: '≫', equiv: '≡', sim: '∼', simeq: '≃', propto: '∝',
+        infty: '∞', partial: '∂', nabla: '∇', forall: '∀', exists: '∃',
+        in: '∈', notin: '∉', ni: '∋', subset: '⊂', subseteq: '⊆', supset: '⊃',
+        supseteq: '⊇', cup: '∪', cap: '∩', emptyset: '∅', varnothing: '∅',
+        wedge: '∧', vee: '∨', neg: '¬', therefore: '∴', because: '∵',
+        cdots: '⋯', ldots: '…', dots: '…', vdots: '⋮', ddots: '⋱',
+        to: '→', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔',
+        Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔',
+        sum: '∑', prod: '∏', int: '∫', oint: '∮', degree: '°',
+        angle: '∠', perp: '⊥', parallel: '∥', hbar: 'ℏ', ell: 'ℓ',
+        Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ', imath: 'ı', jmath: 'ȷ', prime: '′'
+    };
+
+    function renderMathBody(escapedLatex) {
+        let s = escapedLatex.trim();
+
+        // Strip \left / \right sizing prefixes on delimiters.
+        s = s.replace(/\\left([([{|])/g, '$1').replace(/\\right([)\]}|])/g, '$1');
+        s = s.replace(/\\left\\?\{/g, '{').replace(/\\right\\?\}/g, '}');
+        s = s.replace(/\\left\./g, '').replace(/\\right\./g, '');
+
+        // \text{...}, \mathrm{...}, \mathbf{...} → keep inner content.
+        s = s.replace(/\\(?:text|mathrm|operatorname)\{([^{}]*)\}/g, '$1');
+        s = s.replace(/\\mathbf\{([^{}]*)\}/g, '<strong>$1</strong>');
+        s = s.replace(/\\(?:mathit|mathnormal)\{([^{}]*)\}/g, '<em>$1</em>');
+
+        // \sqrt{x} and \sqrt[n]{x}
+        s = s.replace(/\\sqrt\[([^\]]*)\]\{([^{}]*)\}/g, '<sup>$1</sup>&radic;($2)');
+        s = s.replace(/\\sqrt\{([^{}]*)\}/g, '&radic;($1)');
+        s = s.replace(/\\sqrt(\S)/g, '&radic;$1');
+
+        // \frac{a}{b} (single level of nesting supported).
+        for (let i = 0; i < 3; i++) {
+            s = s.replace(/\\(?:d|t)?frac\{([^{}]*)\}\{([^{}]*)\}/g,
+                '<span class="math-frac"><span class="math-frac-num">$1</span><span class="math-frac-den">$2</span></span>');
+        }
+
+        // Superscript / subscript.
+        s = s.replace(/\^\{([^{}]*)\}/g, '<sup>$1</sup>');
+        s = s.replace(/_\{([^{}]*)\}/g, '<sub>$1</sub>');
+        s = s.replace(/\^(\\?[a-zA-Z0-9])/g, function (_, c) { return '<sup>' + (MATH_SYMBOLS[c] || c) + '</sup>'; });
+        s = s.replace(/_(\\?[a-zA-Z0-9])/g, function (_, c) { return '<sub>' + (MATH_SYMBOLS[c] || c) + '</sub>'; });
+
+        // Greek letters & symbol commands: \pi, \approx, \ldots, etc.
+        s = s.replace(/\\([a-zA-Z]+)/g, function (_, name) {
+            return Object.prototype.hasOwnProperty.call(MATH_SYMBOLS, name) ? MATH_SYMBOLS[name] : name;
+        });
+
+        // Drop now-meaningless grouping braces left over from other commands.
+        s = s.replace(/[{}]/g, '');
+
+        return s;
+    }
+
+    function renderMath(rawLatex, displayMode) {
+        const escaped = escapeHtmlContent(rawLatex);
+        const body = renderMathBody(escaped);
+        return displayMode
+            ? '<span class="math-block">' + body + '</span>'
+            : '<span class="math-inline">' + body + '</span>';
+    }
+
+    // Pull $$...$$ and $...$ math segments out of the raw text before any
+    // other markdown processing, so LaTeX control characters (\, _, *, {})
+    // are never mangled by the list/emphasis parsing below.
+    function extractMath(text) {
+        const store = [];
+        const marker = i => '\uE000MATH' + i + '\uE001';
+
+        // Block math: $$ ... $$ (can span multiple lines).
+        text = text.replace(/\$\$([\s\S]+?)\$\$/g, function (_, latex) {
+            const idx = store.length;
+            store.push(renderMath(latex, true));
+            return marker(idx);
+        });
+
+        // Inline math: $ ... $ (single line, not empty).
+        text = text.replace(/\$([^\s$][^$\n]*?)\$/g, function (_, latex) {
+            const idx = store.length;
+            store.push(renderMath(latex, false));
+            return marker(idx);
+        });
+
+        return { text, store };
+    }
+
+    function reinsertMath(html, store) {
+        if (!store.length) return html;
+        // Unwrap a stray <p> around a solitary block/inline math token.
+        html = html.replace(/<p>(\uE000MATH\d+\uE001)<\/p>/g, '$1');
+        return html.replace(/\uE000MATH(\d+)\uE001/g, function (_, idx) {
+            return store[Number(idx)] !== undefined ? store[Number(idx)] : '';
+        });
+    }
+
     function renderMarkdown(text) {
-        const lines = text.split('\n');
+        const { text: textWithoutMath, store: mathStore } = extractMath(text);
+        const lines = textWithoutMath.split('\n');
         let html = '';
         let inCodeBlock = false;
         let codeContent = '';
@@ -1391,7 +1538,7 @@ $csrfToken = $_SESSION['csrf_token'];
             html += '<pre><code>' + escapeHtmlContent(codeContent) + '</code></pre>';
         }
 
-        return html;
+        return reinsertMath(html, mathStore);
     }
 
     /* ── Render a message bubble ─────────────────────────── */
