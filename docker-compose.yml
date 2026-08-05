@@ -49,6 +49,22 @@ services:
       # - ./krb5.keytab:/etc/krb5.keytab:ro
       # - ./krb5.conf:/etc/krb5.conf:ro
 
+  # ── phpMyAdmin ────────────────────────────────────────────────────────────────
+  phpmyadmin:
+    image: phpmyadmin:latest
+    restart: unless-stopped
+    ports:
+      - "${PMA_PORT:-8081}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: ${DB_USER:-llmint}
+      PMA_PASSWORD: ${DB_PASS:-llmint}
+      UPLOAD_LIMIT: 64M
+
 volumes:
   db_data:
   doc_uploads:
