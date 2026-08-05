@@ -143,7 +143,7 @@ function createSearchToolDefinition(): array
         'type' => 'function',
         'function' => [
             'name' => 'search_web',
-            'description' => 'Suche aktuelle Informationen im Web über SearXNG.',
+            'description' => 'Sucht aktuelle Informationen im Web über SearXNG. Nur aufrufen, wenn die Anfrage aktuelle, sich häufig ändernde oder nach dem Wissensstand des Modells liegende Informationen erfordert (z. B. aktuelle Ereignisse, Preise, Versionsnummern) und diese nicht bereits zuverlässig aus eigenem Wissen beantwortet werden können. Für allgemeines, zeitloses Wissen NICHT aufrufen.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -1721,20 +1721,11 @@ if ($useTools) {
         $toolPayload = $forwardPayload;
         $toolPayload['messages'] = $messages;
         $toolPayload['stream'] = false;
-        // On the first iteration, force search_web when SearXNG is available and no
-        // pre-fetched search result was already injected via force_search_query.
-        // Many local OpenAI-compatible servers (e.g. llama.cpp / LM Studio) reject
-        // the named-function tool_choice form ({"type":"function","function":{"name":...}})
-        // with HTTP 400 for models without native "forced named tool" support. Using the
-        // widely-supported "required" string instead, combined with a tools list that only
-        // contains search_web, achieves the same forced-search behaviour without the 400.
-        if ($useSearchTool && $iteration === 0 && $forceSearchQuery === '') {
-            $toolPayload['tools'] = createSearchToolDefinition();
-            $toolPayload['tool_choice'] = 'required';
-        } else {
-            $toolPayload['tools'] = $tools;
-            $toolPayload['tool_choice'] = 'auto';
-        }
+        // search_web is never forced: the model decides on its own, per iteration,
+        // whether it lacks current information and needs to call the tool. This
+        // avoids an unconditional web search on every prompt.
+        $toolPayload['tools'] = $tools;
+        $toolPayload['tool_choice'] = 'auto';
         writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
 
         $ch = curl_init($url);
