@@ -344,6 +344,26 @@ $csrfToken = $_SESSION['csrf_token'];
             padding: .2em .8em;
             color: var(--text-muted);
         }
+        .message.assistant .bubble blockquote blockquote {
+            margin: .3em 0;
+        }
+        .message.assistant .bubble table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: .6em 0;
+            font-size: .9em;
+        }
+        .message.assistant .bubble th,
+        .message.assistant .bubble td {
+            border: 1px solid var(--border);
+            padding: .4em .7em;
+            text-align: left;
+        }
+        .message.assistant .bubble th {
+            background: rgba(255,255,255,.06);
+            font-weight: 600;
+        }
+        .message.assistant .bubble del { opacity: .7; }
 
         /* ── LaTeX-ish math ($...$ / $$...$$) ───────────────────────── */
         .message.assistant .bubble .math-inline {
@@ -1311,6 +1331,8 @@ $csrfToken = $_SESSION['csrf_token'];
     }
 
     function inlineMarkdown(str) {
+        // Strikethrough ~~text~~
+        str = str.replace(/~~(.+?)~~/g, '<del>$1</del>');
         // Bold+italic ***text***
         str = str.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
         // Bold **text**
@@ -1450,23 +1472,81 @@ $csrfToken = $_SESSION['csrf_token'];
         let html = '';
         let inCodeBlock = false;
         let codeContent = '';
-        let inList = false;
-        let listOrdered = false;
+        let listStack = []; // { type: 'ul'|'ol', indent: number }
+        let bqDepth = 0;
 
-        function closeList() {
-            if (inList) {
-                html += listOrdered ? '</ol>' : '</ul>';
-                inList = false;
+        function closeLists() {
+            while (listStack.length) {
+                html += '</li>';
+                html += listStack.pop().type === 'ol' ? '</ol>' : '</ul>';
             }
         }
+
+        function closeBlockquotes(toDepth) {
+            while (bqDepth > toDepth) {
+                html += '</blockquote>';
+                bqDepth--;
+            }
+        }
+
+        function closeBlocks() {
+            closeLists();
+            closeBlockquotes(0);
+        }
+
+        function addListItem(type, indent, contentHtml) {
+            if (listStack.length === 0) {
+                html += type === 'ol' ? '<ol>' : '<ul>';
+                listStack.push({ type: type, indent: indent });
+                html += '<li>' + contentHtml;
+                return;
+            }
+            const top = listStack[listStack.length - 1];
+            if (indent > top.indent) {
+                html += type === 'ol' ? '<ol>' : '<ul>';
+                listStack.push({ type: type, indent: indent });
+                html += '<li>' + contentHtml;
+                return;
+            }
+            while (listStack.length && indent < listStack[listStack.length - 1].indent) {
+                html += '</li>';
+                html += listStack.pop().type === 'ol' ? '</ol>' : '</ul>';
+            }
+            const matched = listStack[listStack.length - 1];
+            if (matched && matched.indent === indent) {
+                if (matched.type !== type) {
+                    html += '</li>';
+                    html += matched.type === 'ol' ? '</ol>' : '</ul>';
+                    listStack.pop();
+                    html += type === 'ol' ? '<ol>' : '<ul>';
+                    listStack.push({ type: type, indent: indent });
+                    html += '<li>' + contentHtml;
+                } else {
+                    html += '</li><li>' + contentHtml;
+                }
+            } else {
+                html += type === 'ol' ? '<ol>' : '<ul>';
+                listStack.push({ type: type, indent: indent });
+                html += '<li>' + contentHtml;
+            }
+        }
+
+        function splitTableRow(row) {
+            let r = row.trim();
+            if (r.startsWith('|')) r = r.slice(1);
+            if (r.endsWith('|')) r = r.slice(0, -1);
+            return r.split('|').map(c => c.trim());
+        }
+
+        const tableSeparatorRe = /^\s*\|?\s*:?-{1,}:?\s*\|\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
 
-            // Fenced code block (``` or ~~~)
-            if (/^(`{3,}|~{3,})/.test(line)) {
+            // Fenced code block (``` or ~~~), tolerating up to 3 leading spaces
+            if (/^\s{0,3}(`{3,}|~{3,})/.test(line)) {
                 if (!inCodeBlock) {
-                    closeList();
+                    closeBlocks();
                     inCodeBlock = true;
                     codeContent = '';
                 } else {
@@ -1484,51 +1564,93 @@ $csrfToken = $_SESSION['csrf_token'];
 
             // Horizontal rule
             if (/^[-*_]{3,}\s*$/.test(line)) {
-                closeList();
+                closeBlocks();
                 html += '<hr>';
+                continue;
+            }
+
+            // Table: header row followed by a "|---|---|" alignment row
+            if (/\|/.test(line) && i + 1 < lines.length && tableSeparatorRe.test(lines[i + 1])) {
+                closeBlocks();
+                const headers = splitTableRow(line);
+                const aligns = splitTableRow(lines[i + 1]).map(c => {
+                    const left = c.startsWith(':');
+                    const right = c.endsWith(':');
+                    if (left && right) return 'center';
+                    if (right) return 'right';
+                    if (left) return 'left';
+                    return '';
+                });
+                let tableHtml = '<table><thead><tr>';
+                headers.forEach((h, idx) => {
+                    const style = aligns[idx] ? ` style="text-align:${aligns[idx]}"` : '';
+                    tableHtml += `<th${style}>${inlineMarkdown(escapeHtmlContent(h))}</th>`;
+                });
+                tableHtml += '</tr></thead><tbody>';
+                let j = i + 2;
+                while (j < lines.length && /\|/.test(lines[j]) && lines[j].trim() !== '') {
+                    const cells = splitTableRow(lines[j]);
+                    tableHtml += '<tr>';
+                    cells.forEach((c, idx) => {
+                        const style = aligns[idx] ? ` style="text-align:${aligns[idx]}"` : '';
+                        tableHtml += `<td${style}>${inlineMarkdown(escapeHtmlContent(c))}</td>`;
+                    });
+                    tableHtml += '</tr>';
+                    j++;
+                }
+                tableHtml += '</tbody></table>';
+                html += tableHtml;
+                i = j - 1;
                 continue;
             }
 
             // Headings
             const hMatch = line.match(/^(#{1,4}) (.+)$/);
             if (hMatch) {
-                closeList();
+                closeBlocks();
                 const level = hMatch[1].length;
                 html += `<h${level}>${inlineMarkdown(escapeHtmlContent(hMatch[2]))}</h${level}>`;
                 continue;
             }
 
-            // Blockquote
-            const bqMatch = line.match(/^> (.*)$/);
+            // Blockquote (supports nesting via repeated '>')
+            const bqMatch = line.trimStart().match(/^(>+) ?(.*)$/);
             if (bqMatch) {
-                closeList();
-                html += `<blockquote>${inlineMarkdown(escapeHtmlContent(bqMatch[1]))}</blockquote>`;
+                closeLists();
+                const depth = bqMatch[1].length;
+                if (depth > bqDepth) {
+                    while (bqDepth < depth) { html += '<blockquote>'; bqDepth++; }
+                } else if (depth < bqDepth) {
+                    closeBlockquotes(depth);
+                }
+                html += inlineMarkdown(escapeHtmlContent(bqMatch[2]));
                 continue;
             }
+            if (bqDepth > 0) {
+                closeBlockquotes(0);
+            }
 
-            // Ordered list item (1. text)
-            const olMatch = line.match(/^\d+\. (.+)$/);
+            // Ordered list item (1. text), leading whitespace = nesting level
+            const olMatch = line.match(/^(\s*)\d+\.\s+(.+)$/);
             if (olMatch) {
-                if (!inList || !listOrdered) { closeList(); html += '<ol>'; inList = true; listOrdered = true; }
-                html += `<li>${inlineMarkdown(escapeHtmlContent(olMatch[1]))}</li>`;
+                addListItem('ol', olMatch[1].length, inlineMarkdown(escapeHtmlContent(olMatch[2])));
                 continue;
             }
 
-            // Unordered list item (*, -, +)
-            const ulMatch = line.match(/^[*\-+] (.+)$/);
+            // Unordered list item (*, -, +), leading whitespace = nesting level
+            const ulMatch = line.match(/^(\s*)[*\-+]\s+(.+)$/);
             if (ulMatch) {
-                if (!inList || listOrdered) { closeList(); html += '<ul>'; inList = true; listOrdered = false; }
-                html += `<li>${inlineMarkdown(escapeHtmlContent(ulMatch[1]))}</li>`;
+                addListItem('ul', ulMatch[1].length, inlineMarkdown(escapeHtmlContent(ulMatch[2])));
                 continue;
             }
 
-            // Empty line → close list or add spacing
+            // Empty line → close open blocks or add spacing
             if (line.trim() === '') {
-                if (inList) {
-                    closeList();
+                if (listStack.length || bqDepth > 0) {
+                    closeBlocks();
                 } else {
                     // Only add break if the previous output doesn't already end with a block element
-                    if (html && !/(<\/(?:h[1-4]|p|ul|ol|pre|blockquote|hr)>|<hr>)$/.test(html)) {
+                    if (html && !/(<\/(?:h[1-4]|p|ul|ol|pre|blockquote|table)>|<hr>)$/.test(html)) {
                         html += '<br>';
                     }
                 }
@@ -1536,11 +1658,11 @@ $csrfToken = $_SESSION['csrf_token'];
             }
 
             // Regular line
-            closeList();
+            closeBlocks();
             html += `<p>${inlineMarkdown(escaped)}</p>`;
         }
 
-        closeList();
+        closeBlocks();
         if (inCodeBlock) {
             html += '<pre><code>' + escapeHtmlContent(codeContent) + '</code></pre>';
         }
