@@ -24,6 +24,7 @@ $intelligenceUpgradeMessage = getSetting('intelligence_upgrade_message', '');
 $loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
 $loginBannerText    = getSetting('login_banner_text', '');
 $registrationEmailText = getSetting('registration_email_text', '');
+$streamingEnabled = getSetting('streaming_enabled', '1') === '1';
 $routingCategories = loadRoutingCategories();
 $routingCategoriesData = loadRoutingCategoriesFromDb();
 $routingRules = loadRoutingRules();
@@ -255,6 +256,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newUserDefaultModel = $newModel;
             setSetting('new_user_default_model', $newModel);
             $flashOk = 'Standard-Modell für neue Benutzer gespeichert.';
+
+        // ── Save streaming setting ────────────────────────────────────────────
+        } elseif ($action === 'save_streaming_settings') {
+            $streamingEnabled = isset($_POST['streaming_enabled']);
+            setSetting('streaming_enabled', $streamingEnabled ? '1' : '0');
+            $flashOk = $streamingEnabled
+                ? 'Streaming aktiviert. Antworten werden live im Chat angezeigt.'
+                : 'Streaming deaktiviert. Antworten erscheinen erst vollständig nach Fertigstellung.';
 
         // ── Save system messages ──────────────────────────────────────────────
         } elseif ($action === 'save_system_messages') {
@@ -2624,6 +2633,31 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                    <p class="hint">
                        Dieses Modell wird neu registrierten Benutzern automatisch als persönliches Standard-Modell zugewiesen.
                        Leer lassen, um das systemweite Standard-Modell zu verwenden.
+                   </p>
+               </div>
+
+               <div class="action-row">
+                   <button type="submit" class="btn btn-primary">💾 Speichern</button>
+               </div>
+           </form>
+
+           <hr style="border:none;border-top:1px solid var(--border);margin:20px 0">
+
+           <form method="POST">
+               <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+               <input type="hidden" name="action" value="save_streaming_settings">
+
+               <div class="form-group">
+                   <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                       <input type="checkbox" name="streaming_enabled"
+                              <?= $streamingEnabled ? 'checked' : '' ?>>
+                       Streaming der Antworten aktivieren
+                   </label>
+                   <p class="hint">
+                       Wenn aktiviert, wird die Antwort im Chat live Wort für Wort angezeigt, sobald sie vom Modell
+                       erzeugt wird (der blinkende Cursor wird dabei fortlaufend durch den generierten Text ersetzt).
+                       Wenn deaktiviert, bleibt der blinkende Cursor sichtbar und die Antwort erscheint erst vollständig,
+                       sobald sie fertig generiert wurde.
                    </p>
                </div>
 

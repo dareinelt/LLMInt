@@ -49,6 +49,10 @@ $visionModelConfigured = trim(getSetting('vision_model', '')) !== '';
 $loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
 $loginBannerText    = getSetting('login_banner_text', '');
 
+// Whether the assistant's reply is rendered token-by-token as it streams in,
+// or only shown in full once the response is complete (blinking cursor only).
+$streamingEnabled = getSetting('streaming_enabled', '1') === '1';
+
 // CSRF token for upload requests.
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -1109,6 +1113,9 @@ $csrfToken = $_SESSION['csrf_token'];
     /* Default model set by the admin */
     const defaultModel = <?= json_encode($defaultModel) ?>;
 
+    /* Whether replies are rendered live as they stream in (admin-configurable) */
+    const streamingEnabled = <?= json_encode($streamingEnabled) ?>;
+
     /* Chat history (role / content pairs sent to the API) */
     let history = [];
     let isStreaming = false;
@@ -1690,7 +1697,9 @@ $csrfToken = $_SESSION['csrf_token'];
                 }
                 accumulated += delta;
             }
-            if (delta || thinkingDelta) {
+            if ((delta || thinkingDelta) && streamingEnabled) {
+                // Live rendering: replace the blinking cursor with the continuously
+                // growing response text as tokens arrive.
                 bubble.innerHTML = renderBubbleContent(accumulatedThinking, accumulated);
                 scrollToBottom();
             }
