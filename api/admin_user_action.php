@@ -21,13 +21,9 @@
 session_start();
 header('Content-Type: application/json; charset=utf-8');
 
-if (!isset($_SESSION['admin_user'])) {
-    http_response_code(403);
-    echo json_encode(['ok' => false, 'message' => 'Nicht authentifiziert.']);
-    exit;
-}
-
 require_once __DIR__ . '/../db.php';
+requireAdminOrJson403();
+
 require_once __DIR__ . '/../lib/mailer.php';
 
 $body   = (string) file_get_contents('php://input');
@@ -236,6 +232,55 @@ if ($action === 'set_user_doc_permission') {
     $msg = $allowed
         ? "Dokument-Upload für {$user['username']} aktiviert."
         : "Dokument-Upload für {$user['username']} deaktiviert.";
+
+    echo json_encode(['ok' => true, 'message' => $msg]);
+    exit;
+}
+
+// ── set_user_role ─────────────────────────────────────────────────────────────
+if ($action === 'set_user_role') {
+    $userId = (int) ($data['user_id'] ?? 0);
+    $role   = (string) ($data['role'] ?? '');
+
+    if ($userId <= 0) {
+        echo json_encode(['ok' => false, 'message' => 'Ungültige Benutzer-ID.']);
+        exit;
+    }
+    if (!in_array($role, ['user', 'admin'], true)) {
+        echo json_encode(['ok' => false, 'message' => 'Ungültige Rolle.']);
+        exit;
+    }
+
+    $stmt = $db->prepare('SELECT id, username, role FROM users WHERE id = ? LIMIT 1');
+    $stmt->execute([$userId]);
+    $user = $stmt->fetch();
+
+    if (!$user) {
+        echo json_encode(['ok' => false, 'message' => 'Benutzer nicht gefunden.']);
+        exit;
+    }
+
+    $currentRole = $user['role'] ?? 'user';
+
+    if ($currentRole === $role) {
+        echo json_encode(['ok' => true, 'message' => "Rolle für {$user['username']} ist bereits \"" . ($role === 'admin' ? 'Admin' : 'Benutzer') . '".']);
+        exit;
+    }
+
+    // Prevent removing the last remaining admin account (would lock everyone out).
+    if ($currentRole === 'admin' && $role === 'user') {
+        $adminCount = (int) $db->query("SELECT COUNT(*) FROM users WHERE role = 'admin'")->fetchColumn();
+        if ($adminCount <= 1) {
+            echo json_encode(['ok' => false, 'message' => 'Diese Aktion würde den letzten Administrator entfernen. Mindestens ein Admin-Konto muss erhalten bleiben.']);
+            exit;
+        }
+    }
+
+    $db->prepare('UPDATE users SET role = ? WHERE id = ?')->execute([$role, $userId]);
+
+    $msg = $role === 'admin'
+        ? "{$user['username']} wurde zum Administrator befördert."
+        : "{$user['username']} wurde zum normalen Benutzer zurückgestuft.";
 
     echo json_encode(['ok' => true, 'message' => $msg]);
     exit;

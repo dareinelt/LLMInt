@@ -21,13 +21,9 @@
 session_start();
 header('Content-Type: application/json; charset=utf-8');
 
-if (!isset($_SESSION['admin_user'])) {
-    http_response_code(403);
-    echo json_encode(['ok' => false, 'message' => 'Nicht authentifiziert.']);
-    exit;
-}
-
 require_once __DIR__ . '/../db.php';
+requireAdminOrJson403();
+
 require_once __DIR__ . '/../lib/ldap_auth.php';
 
 $body = (string) file_get_contents('php://input');

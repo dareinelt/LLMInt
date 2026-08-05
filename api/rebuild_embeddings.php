@@ -26,14 +26,11 @@ if (session_status() === PHP_SESSION_NONE) {
 
 header('Content-Type: application/json; charset=utf-8');
 
-// Auth: admin only.
-if (!isset($_SESSION['admin_user'])) {
-    http_response_code(403);
-    echo json_encode(['ok' => false, 'message' => 'Nicht authentifiziert.']);
-    exit;
-}
-
 require_once __DIR__ . '/../db.php';
+
+// Auth: admin only.
+requireAdminOrJson403();
+
 require_once __DIR__ . '/embedding.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {

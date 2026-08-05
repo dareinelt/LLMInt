@@ -13,12 +13,9 @@
 
 session_start();
 
-if (!isset($_SESSION['admin_user'])) {
-    header('Location: login.php');
-    exit;
-}
-
 require_once __DIR__ . '/../db.php';
+requireAdminOrRedirect('login.php');
+
 require_once __DIR__ . '/../lib/prompt_security.php';
 
 $db        = getDb();

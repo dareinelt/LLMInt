@@ -19,16 +19,9 @@
 
 session_start();
 
-if (!isset($_SESSION['admin_user'])) {
-    http_response_code(401);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['error' => 'Nicht angemeldet.']);
-    exit;
-}
-
 require_once __DIR__ . '/../db.php';
-
 header('Content-Type: application/json; charset=utf-8');
+requireAdminOrJson403();
 
 // ── Determine target endpoint ─────────────────────────────────────────────────
 

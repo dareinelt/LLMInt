@@ -24,14 +24,9 @@
 
 session_start();
 
-if (!isset($_SESSION['admin_user'])) {
-    http_response_code(401);
-    echo json_encode(['ok' => false, 'error' => 'Unauthorized']);
-    exit;
-}
-session_write_close();
-
 require_once __DIR__ . '/../db.php';
+requireAdminOrJson403();
+session_write_close();
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
