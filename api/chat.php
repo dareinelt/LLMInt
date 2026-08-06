@@ -1954,7 +1954,6 @@ if ($useTools) {
         $forceSearchQuery = trim($payload['force_search_query']);
     }
     if ($forceSearchQuery !== '') {
-        $fakeToolCallId = 'call_' . bin2hex(random_bytes(8));
         $searchLogId = startSearchLog(substr($forceSearchQuery, 0, 400));
         $searchStartedAt = microtime(true);
         try {
@@ -1968,23 +1967,20 @@ if ($useTools) {
             completeSearchLog($searchLogId, 'error');
             $searchResult = ['error' => $e->getMessage()];
         }
-        $messages[] = [
-            'role'       => 'assistant',
-            'content'    => null,
-            'tool_calls' => [[
-                'id'       => $fakeToolCallId,
-                'type'     => 'function',
-                'function' => [
-                    'name'      => 'search_web',
-                    'arguments' => json_encode(['query' => $forceSearchQuery], JSON_UNESCAPED_UNICODE),
-                ],
-            ]],
-        ];
-        $messages[] = [
-            'role'         => 'tool',
-            'tool_call_id' => $fakeToolCallId,
-            'content'      => json_encode($searchResult, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-        ];
+        // Inject the pre-fetched search results as plain text into the last user
+        // message instead of a synthetic assistant tool_call + tool-role message
+        // pair. Endpoints whose chat template has no tool roles (e.g. pure
+        // llama.cpp with Gemma) cannot render such messages and would build a
+        // corrupted prompt, causing the raw template text to leak into the answer.
+        $searchContext = "\n\n[Aktuelle Websuchergebnisse zur Anfrage \"" . $forceSearchQuery . "\":\n"
+            . json_encode($searchResult, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            . "\nNutze diese Ergebnisse zur Beantwortung, ohne sie wörtlich wiederzugeben.]";
+        for ($mi = count($messages) - 1; $mi >= 0; $mi--) {
+            if (($messages[$mi]['role'] ?? '') === 'user' && is_string($messages[$mi]['content'] ?? null)) {
+                $messages[$mi]['content'] .= $searchContext;
+                break;
+            }
+        }
     }
 
     // Build the tool list from active integrations.
