@@ -106,6 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sshPassword         = $_POST['ep_ssh_password'] ?? '';
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
+            $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
 
             if (strlen($newAlias) > 120) {
                 $flashError = 'Alias darf maximal 120 Zeichen lang sein.';
@@ -121,11 +122,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 )->fetchColumn();
                 $db->prepare(
                     'INSERT INTO endpoints (alias, base_url, timeout, default_model, specialized_for_category,
-                                            supports_tool_calling, is_active, sort_order,
+                                            supports_tool_calling, is_llamacpp, is_active, sort_order,
                                             ssh_host, ssh_port, ssh_user, ssh_password)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
                 )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
-                            $supportsToolCalling, $isActive, $maxOrder + 1,
+                            $supportsToolCalling, $isLlamacpp, $isActive, $maxOrder + 1,
                             $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null]);
                 $endpointLabel = $newAlias !== '' ? $newAlias : rtrim($newUrl, '/');
                 writeLog('info', 'Neuer Modellendpunkt erfolgreich registriert (' . $endpointLabel . ', Modell: ' . $newModel . ').');
@@ -146,6 +147,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sshPassword         = $_POST['ep_ssh_password'] ?? null;
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
+            $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
 
             if ($epId <= 0) {
                 $flashError = 'Ungültige Endpunkt-ID.';
@@ -167,20 +169,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $db->prepare(
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
-                                specialized_for_category = ?, supports_tool_calling = ?, is_active = ?,
+                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
-                                $supportsToolCalling, $isActive, $sshHost, $sshPort, $sshUser, $epId]);
+                                $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser, $epId]);
                 } else {
                     $db->prepare(
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
-                                specialized_for_category = ?, supports_tool_calling = ?, is_active = ?,
+                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
-                                $supportsToolCalling, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword, $epId]);
+                                $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword, $epId]);
                 }
                 if (is_array($previousEndpoint) && (int) ($previousEndpoint['is_active'] ?? 0) === 1 && $isActive !== 1) {
                     $endpointLabel = trim((string) ($previousEndpoint['alias'] ?? ''));
@@ -2392,6 +2394,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                             'default_model'            => $ep['default_model'],
                             'specialized_for_category' => $ep['specialized_for_category'] ?? '',
                             'supports_tool_calling'    => (int) ($ep['supports_tool_calling'] ?? 1),
+                            'is_llamacpp'              => (int) ($ep['is_llamacpp'] ?? 0),
                             'is_active'                => $ep['is_active'],
                             'ssh_host'                 => $ep['ssh_host'] ?? '',
                             'ssh_port'                 => $ep['ssh_port'] ?? 22,
@@ -2509,6 +2512,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         Ist diese Option aktiviert und SearXNG konfiguriert, steht <code>search_web</code>
                         als Tool zur Verfügung. Das Modell entscheidet selbst, ob es aufgerufen wird –
                         nur wenn es keine ausreichend aktuellen Informationen zu einem Thema hat.
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label class="inline">
+                        <input type="checkbox" id="ep-is-llamacpp" name="ep_is_llamacpp"
+                               <?= ($editEp && (int) ($editEp['is_llamacpp'] ?? 0)) ? 'checked' : '' ?>>
+                        Direkte llama.cpp-Instanz (Reasoning-Aufwand „high“)
+                    </label>
+                    <p class="hint">
+                        Aktivieren, wenn dieser Endpunkt ein direkt (bare metal) betriebener
+                        llama.cpp-Server ist. Bei der Übergabe des Prompts wird dann
+                        <code>"reasoning_effort":"high"</code> in die JSON-Anfrage aufgenommen.
                     </p>
                 </div>
 
@@ -4060,6 +4076,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const modelList    = document.getElementById('ep-model-list');
     const activeCheck  = document.getElementById('ep-active');
     const toolCallingCheck = document.getElementById('ep-supports-tool-calling');
+    const llamacppCheck    = document.getElementById('ep-is-llamacpp');
     const loadBtn      = document.getElementById('ep-load-btn');
     const endpointConfigPanel = document.getElementById('config-endpoints');
     const specializedSelect = document.getElementById('ep-specialized-for');
@@ -4093,6 +4110,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         modelInput.value       = ep.default_model || '';
         activeCheck.checked    = ep.is_active == 1;
         if (toolCallingCheck) toolCallingCheck.checked = ep.supports_tool_calling != 0;
+        if (llamacppCheck) llamacppCheck.checked = ep.is_llamacpp == 1;
         // Clear datalist options from a previous load-models call.
         modelList.innerHTML    = '';
         // Specialization
@@ -4118,6 +4136,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         modelInput.value      = '';
         activeCheck.checked   = true;
         if (toolCallingCheck) toolCallingCheck.checked = true;
+        if (llamacppCheck) llamacppCheck.checked = false;
         modelList.innerHTML   = '';
         if (specializedSelect) specializedSelect.value = '';
         if (sshHost)     sshHost.value     = '';
