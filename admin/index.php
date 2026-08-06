@@ -2528,6 +2528,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         LM-Studio-Platzhalter wie <code>"max_tokens":-1</code>) und es wird
                         kein Tool-Calling verwendet – ohne <code>--jinja</code> lehnt
                         llama.cpp Anfragen mit <code>tools</code> ab.
+                        Beispiel-Startbefehl:
+                        <code>./llama-server -m /pfad/zum/modell.gguf --host 0.0.0.0 --port 8080 --jinja</code>
                     </p>
                 </div>
 
