@@ -404,19 +404,109 @@ $csrfToken = $_SESSION['csrf_token'];
             padding: 0 .2em;
         }
 
-        /* ── Thinking bubble (reasoning tokens, semi-transparent during streaming) ── */
+        /* ── Thinking display (robot with thought bubble + animated reasoning lines) ── */
         .bubble .thinking-bubble {
-            opacity: 0.45;
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px 14px;
+            margin-bottom: 12px;
+        }
+
+        .bubble .thinking-robot {
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .bubble .thinking-thought {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 6px 9px;
+            margin-bottom: 9px;
+        }
+
+        /* Thought bubble tail (two small trailing circles towards the robot's head) */
+        .bubble .thinking-thought::before {
+            content: '';
+            position: absolute;
+            bottom: -5px;
+            left: 8px;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+        }
+
+        .bubble .thinking-thought::after {
+            content: '';
+            position: absolute;
+            bottom: -10px;
+            left: 5px;
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+        }
+
+        .bubble .thinking-thought span {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            animation: thinkingDot 1.2s ease-in-out infinite;
+        }
+
+        .bubble .thinking-thought span:nth-child(2) { animation-delay: .2s; }
+        .bubble .thinking-thought span:nth-child(3) { animation-delay: .4s; }
+
+        .bubble .thinking-face {
+            font-size: 1.7rem;
+            line-height: 1;
+        }
+
+        .bubble .thinking-content {
+            flex: 1;
+            min-width: 0;
             font-size: .83rem;
             font-style: italic;
             color: var(--text-muted);
-            padding: 6px 10px;
-            border-left: 2px solid var(--accent);
             max-height: 200px;
             overflow-y: auto;
-            white-space: pre-wrap;
+            overflow-x: hidden;
             word-break: break-word;
-            margin-bottom: 10px;
+            align-self: center;
+        }
+
+        .bubble .thinking-content .thinking-line {
+            margin: 0 0 .5em;
+            animation: thinkingFlyIn .45s ease both;
+        }
+
+        .bubble .thinking-content .thinking-line:last-child { margin-bottom: 0; }
+
+        .bubble .thinking-bubble.done .thinking-line { animation: none; }
+        .bubble .thinking-bubble.done .thinking-thought span { animation: none; opacity: .55; }
+
+        @keyframes thinkingFlyIn {
+            from { opacity: 0; transform: translateX(32px); }
+            to   { opacity: 1; transform: none; }
+        }
+
+        @keyframes thinkingDot {
+            0%, 60%, 100% { opacity: .35; transform: translateY(0); }
+            30%           { opacity: 1;   transform: translateY(-2px); }
         }
 
         /* ── Input outer (fade + full-width bg) ───────────────────── */
@@ -1749,15 +1839,86 @@ $csrfToken = $_SESSION['csrf_token'];
         }
     }
 
+    const THINKING_ROBOT_HTML =
+        '<div class="thinking-robot" aria-hidden="true">' +
+            '<div class="thinking-thought"><span></span><span></span><span></span></div>' +
+            '<div class="thinking-face">🤖</div>' +
+        '</div>';
+
+    function thinkingLineHtml(line) {
+        return inlineMarkdown(escapeHtmlContent(line));
+    }
+
     function renderBubbleContent(thinking, text) {
         let html = '';
         if (thinking) {
-            html += '<div class="thinking-bubble">' + escapeHtmlContent(thinking) + '</div>';
+            const lines = thinking.split('\n')
+                .filter(l => l.trim() !== '')
+                .map(l => '<div class="thinking-line">' + thinkingLineHtml(l) + '</div>')
+                .join('');
+            html += '<div class="thinking-bubble done">' + THINKING_ROBOT_HTML +
+                '<div class="thinking-content">' + lines + '</div></div>';
         }
         if (text) {
             html += renderMarkdown(text);
         }
         return html;
+    }
+
+    // Incrementally updates a streaming bubble: the robot's thinking lines fly in
+    // one by one (already rendered lines keep their state, no re-animation), while
+    // the answer part below is re-rendered as markdown on every token.
+    function updateStreamingBubble(bubble, thinking, text) {
+        let thinkEl  = bubble.querySelector(':scope > .thinking-bubble');
+        let answerEl = bubble.querySelector(':scope > .bubble-answer');
+        if (!answerEl) {
+            bubble.innerHTML = '';
+            answerEl = document.createElement('div');
+            answerEl.className = 'bubble-answer';
+            bubble.appendChild(answerEl);
+            thinkEl = null;
+        }
+        if (thinking) {
+            if (!thinkEl) {
+                thinkEl = document.createElement('div');
+                thinkEl.className = 'thinking-bubble';
+                thinkEl.innerHTML = THINKING_ROBOT_HTML + '<div class="thinking-content"></div>';
+                thinkEl._linesDone = 0;
+                thinkEl._currentLineEl = null;
+                bubble.insertBefore(thinkEl, answerEl);
+            }
+            const contentEl = thinkEl.querySelector('.thinking-content');
+            const lines = thinking.split('\n');
+            const completedCount = lines.length - 1;
+            while (thinkEl._linesDone < completedCount) {
+                const lineText = lines[thinkEl._linesDone];
+                if (thinkEl._currentLineEl) {
+                    if (lineText.trim() !== '') {
+                        thinkEl._currentLineEl.innerHTML = thinkingLineHtml(lineText);
+                    } else {
+                        thinkEl._currentLineEl.remove();
+                    }
+                    thinkEl._currentLineEl = null;
+                } else if (lineText.trim() !== '') {
+                    const div = document.createElement('div');
+                    div.className = 'thinking-line';
+                    div.innerHTML = thinkingLineHtml(lineText);
+                    contentEl.appendChild(div);
+                }
+                thinkEl._linesDone++;
+            }
+            const currentLine = lines[completedCount];
+            if (currentLine.trim() !== '') {
+                if (!thinkEl._currentLineEl) {
+                    thinkEl._currentLineEl = document.createElement('div');
+                    thinkEl._currentLineEl.className = 'thinking-line';
+                    contentEl.appendChild(thinkEl._currentLineEl);
+                }
+                thinkEl._currentLineEl.innerHTML = thinkingLineHtml(currentLine);
+            }
+            contentEl.scrollTop = contentEl.scrollHeight;
+        }
+        answerEl.innerHTML = text ? renderMarkdown(text) : '';
     }
 
     async function executeStreamingRequest(payload, bubble) {
@@ -1823,9 +1984,9 @@ $csrfToken = $_SESSION['csrf_token'];
                 accumulated += delta;
             }
             if ((delta || thinkingDelta) && streamingEnabled) {
-                // Live rendering: replace the blinking cursor with the continuously
-                // growing response text as tokens arrive.
-                bubble.innerHTML = renderBubbleContent(accumulatedThinking, accumulated);
+                // Live rendering: thinking lines fly in one by one next to the
+                // robot, the answer text grows continuously as tokens arrive.
+                updateStreamingBubble(bubble, accumulatedThinking, accumulated);
                 scrollToBottom();
             }
             return false;
