@@ -2519,12 +2519,17 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <label class="inline">
                         <input type="checkbox" id="ep-is-llamacpp" name="ep_is_llamacpp"
                                <?= ($editEp && (int) ($editEp['is_llamacpp'] ?? 0)) ? 'checked' : '' ?>>
-                        Direkte llama.cpp-Instanz (Reasoning-Aufwand „high“)
+                        Direkte llama.cpp-Instanz (bare metal)
                     </label>
                     <p class="hint">
                         Aktivieren, wenn dieser Endpunkt ein direkt (bare metal) betriebener
-                        llama.cpp-Server ist. Bei der Übergabe des Prompts wird dann
-                        <code>"reasoning_effort":"high"</code> in die JSON-Anfrage aufgenommen.
+                        llama.cpp-Server ist. Die JSON-Anfrage wird dann llama.cpp-kompatibel
+                        aufgebaut (<code>"reasoning_effort":"high"</code>, keine
+                        LM-Studio-Platzhalter wie <code>"max_tokens":-1</code>) und es wird
+                        kein Tool-Calling verwendet – ohne <code>--jinja</code> lehnt
+                        llama.cpp Anfragen mit <code>tools</code> ab.
+                        Beispiel-Startbefehl:
+                        <code>./llama-server -m /pfad/zum/modell.gguf --host 0.0.0.0 --port 8080 --jinja</code>
                     </p>
                 </div>
 

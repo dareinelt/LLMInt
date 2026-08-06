@@ -1904,9 +1904,15 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     $timeout  = max(1, (int) $endpoint['timeout']);
     $responseDetails = buildResponseDetails($endpoint);
     $url      = $baseUrl . '/chat/completions';
-    // Keep the llama.cpp reasoning-effort flag in sync with the new endpoint.
+    // Keep the llama.cpp payload adjustments in sync with the new endpoint.
     if (!empty($endpoint['is_llamacpp'])) {
         $forwardPayload['reasoning_effort'] = 'high';
+        if (array_key_exists('stop', $forwardPayload) && $forwardPayload['stop'] === null) {
+            unset($forwardPayload['stop']);
+        }
+        if (isset($forwardPayload['max_tokens']) && (int) $forwardPayload['max_tokens'] === -1) {
+            unset($forwardPayload['max_tokens']);
+        }
     } else {
         unset($forwardPayload['reasoning_effort']);
     }
@@ -1918,6 +1924,14 @@ $openAiToolMode = (string) ($GLOBALS['LLMINT_OPENAI_TOOL_MODE'] ?? 'auto');
 $endpointSupportsToolCalling = (bool) ($endpoint['supports_tool_calling'] ?? true);
 if ($openAiToolMode === 'enabled') {
     $endpointSupportsToolCalling = true;
+}
+// Bare-metal llama.cpp servers (started without --jinja) reject any request
+// containing "tools"/"tool_choice" with "tools param requires --jinja flag",
+// and their static chat templates (e.g. gemma) cannot render tool-role
+// messages – the corrupted prompt then leaks template fragments into the
+// answer. Direct llama.cpp endpoints therefore never take part in tool calling.
+if (!empty($endpoint['is_llamacpp'])) {
+    $endpointSupportsToolCalling = false;
 }
 $useSearchTool   = $searxngBaseUrl !== '' && $endpointSupportsToolCalling;
 $useSdTool       = hasSdEndpoints() && $endpointSupportsToolCalling;
@@ -1944,9 +1958,18 @@ $forwardPayload = [
     'stop'        => $payload['stop'] ?? null,
 ];
 
-// Direct llama.cpp instances receive an explicit high reasoning effort.
+// Direct llama.cpp instances receive an explicit high reasoning effort and a
+// payload without LM-Studio-specific placeholder values: llama.cpp expects
+// "stop" to be absent instead of null and "max_tokens" to be absent instead
+// of the LM Studio convention -1.
 if (!empty($endpoint['is_llamacpp'])) {
     $forwardPayload['reasoning_effort'] = 'high';
+    if ($forwardPayload['stop'] === null) {
+        unset($forwardPayload['stop']);
+    }
+    if ((int) $forwardPayload['max_tokens'] === -1) {
+        unset($forwardPayload['max_tokens']);
+    }
 }
 
 $url = $baseUrl . '/chat/completions';
@@ -2030,8 +2053,12 @@ if ($useTools) {
         // search_web is never forced: the model decides on its own, per iteration,
         // whether it lacks current information and needs to call the tool. This
         // avoids an unconditional web search on every prompt.
-        $toolPayload['tools'] = $tools;
-        $toolPayload['tool_choice'] = 'auto';
+        // A failover can move the request onto a direct llama.cpp endpoint, which
+        // rejects "tools"/"tool_choice" without --jinja – never send them there.
+        if (empty($endpoint['is_llamacpp'])) {
+            $toolPayload['tools'] = $tools;
+            $toolPayload['tool_choice'] = 'auto';
+        }
         writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
 
         if ($toolStreamLive) {
