@@ -1904,6 +1904,12 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     $timeout  = max(1, (int) $endpoint['timeout']);
     $responseDetails = buildResponseDetails($endpoint);
     $url      = $baseUrl . '/chat/completions';
+    // Keep the llama.cpp reasoning-effort flag in sync with the new endpoint.
+    if (!empty($endpoint['is_llamacpp'])) {
+        $forwardPayload['reasoning_effort'] = 'high';
+    } else {
+        unset($forwardPayload['reasoning_effort']);
+    }
     return true;
 };
 
@@ -1937,6 +1943,11 @@ $forwardPayload = [
     'top_p'       => $payload['top_p'] ?? 1.0,
     'stop'        => $payload['stop'] ?? null,
 ];
+
+// Direct llama.cpp instances receive an explicit high reasoning effort.
+if (!empty($endpoint['is_llamacpp'])) {
+    $forwardPayload['reasoning_effort'] = 'high';
+}
 
 $url = $baseUrl . '/chat/completions';
 

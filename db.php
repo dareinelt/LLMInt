@@ -100,6 +100,12 @@ function ensureRuntimeSchema(PDO $pdo): void
         $pdo->exec("ALTER TABLE endpoints ADD COLUMN supports_tool_calling TINYINT(1) NOT NULL DEFAULT 1 AFTER specialized_for_category");
     } catch (Throwable $_e) { /* column already exists */ }
 
+    // llama.cpp flag: whether this endpoint is a direct (bare-metal) llama.cpp
+    // instance. Such endpoints receive "reasoning_effort":"high" in the payload.
+    try {
+        $pdo->exec("ALTER TABLE endpoints ADD COLUMN is_llamacpp TINYINT(1) NOT NULL DEFAULT 0 AFTER supports_tool_calling");
+    } catch (Throwable $_e) { /* column already exists */ }
+
     // SSH credentials for system-metric polling (RAM, CPU load, CPU temp via lm-sensors).
     foreach ([
         "ALTER TABLE endpoints ADD COLUMN ssh_host     VARCHAR(255) NOT NULL DEFAULT '' AFTER is_active",

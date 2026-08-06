@@ -43,6 +43,7 @@ function pickEndpointForModel(string $model, int $maxConcurrent = 4): ?array
     try {
         $stmt = $db->prepare('
             SELECT e.id, e.alias, e.base_url, e.timeout, e.default_model,
+                   e.supports_tool_calling, e.is_llamacpp,
                    COALESCE(r.running_count, 0) AS running_count,
                    r.last_task_at
             FROM endpoints e
