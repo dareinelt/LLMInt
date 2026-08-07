@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="440" viewBox="0 0 1100 440" role="img" aria-labelledby="title desc">
+  <title id="title">Routing- und Loadbalancing-Stufen in LLMInt</title>
+  <desc id="desc">Eine Anfrage wird klassifiziert, einer Modellgruppe zugeordnet und anschließend anhand von Gesundheit, Kapazität, Latenz und Kosten an einen Endpunkt verteilt. Retry und Fallback sichern Fehlerfälle ab.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef2ff"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity=".12"/>
+    </filter>
+  </defs>
+  <rect width="1100" height="440" rx="24" fill="url(#bg)"/>
+  <text x="50" y="52" font-family="system-ui, sans-serif" font-size="25" font-weight="700" fill="#0f172a">Vom Prompt zum gesunden Endpunkt</text>
+  <text x="50" y="80" font-family="system-ui, sans-serif" font-size="15" fill="#64748b">Modellrouting und technische Lastverteilung sind getrennte, aufeinanderfolgende Entscheidungen.</text>
+
+  <g filter="url(#shadow)" font-family="system-ui, sans-serif">
+    <rect x="50" y="125" width="170" height="110" rx="16" fill="#fff" stroke="#cbd5e1"/>
+    <circle cx="91" cy="165" r="21" fill="#dbeafe"/>
+    <path d="M82 165h18M91 156v18" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/>
+    <text x="78" y="210" font-size="17" font-weight="700" fill="#0f172a">Anfrage</text>
+
+    <rect x="280" y="110" width="210" height="140" rx="16" fill="#fff" stroke="#93c5fd"/>
+    <text x="305" y="145" font-size="14" font-weight="700" fill="#2563eb">STUFE 1</text>
+    <text x="305" y="176" font-size="18" font-weight="700" fill="#0f172a">Modellrouting</text>
+    <text x="305" y="203" font-size="14" fill="#475569">Kategorie → Modellgruppe</text>
+    <text x="305" y="226" font-size="13" fill="#64748b">oder ursprüngliche Auswahl</text>
+
+    <rect x="550" y="110" width="230" height="140" rx="16" fill="#fff" stroke="#a5b4fc"/>
+    <text x="575" y="145" font-size="14" font-weight="700" fill="#4f46e5">STUFE 2</text>
+    <text x="575" y="176" font-size="18" font-weight="700" fill="#0f172a">Endpoint-Balancer</text>
+    <text x="575" y="203" font-size="14" fill="#475569">Health · Last · Latenz</text>
+    <text x="575" y="226" font-size="14" fill="#475569">Kapazität · Kosten · Fairness</text>
+
+    <rect x="840" y="95" width="210" height="72" rx="14" fill="#ecfdf5" stroke="#6ee7b7"/>
+    <circle cx="875" cy="131" r="13" fill="#10b981"/>
+    <path d="m868 131 5 5 10-12" fill="none" stroke="#fff" stroke-width="3"/>
+    <text x="900" y="126" font-size="16" font-weight="700" fill="#065f46">Endpunkt A</text>
+    <text x="900" y="148" font-size="13" fill="#047857">ausgewählt</text>
+
+    <rect x="840" y="182" width="210" height="58" rx="14" fill="#fff" stroke="#cbd5e1"/>
+    <text x="870" y="217" font-size="15" fill="#475569">Endpunkt B / C</text>
+  </g>
+
+  <g fill="none" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)">
+    <path d="M220 180H272"/>
+    <path d="M490 180H542"/>
+    <path d="M780 180C808 180 806 131 832 131"/>
+  </g>
+
+  <rect x="280" y="310" width="500" height="76" rx="16" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="305" y="342" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#9a3412">Fehlerpfad</text>
+  <text x="305" y="367" font-family="system-ui, sans-serif" font-size="14" fill="#7c2d12">Backoff + anderer Endpunkt → geordnete Fallback-Modelle → Fehler</text>
+  <path d="M945 240V275C945 300 790 300 790 348H788" fill="none" stroke="#ea580c" stroke-width="2.5" stroke-dasharray="7 6" marker-end="url(#arrow)"/>
+
+  <g font-family="system-ui, sans-serif" font-size="12" fill="#64748b">
+    <text x="50" y="420">Circuit Breaker schließen fehlerhafte Endpunkte aus; atomare Reservierungen verhindern Doppelbelegungen.</text>
+  </g>
+</svg>

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="390" viewBox="0 0 1100 390" role="img" aria-labelledby="title desc">
+  <title id="title">Faktoren der Endpunkt-Auswahl</title>
+  <desc id="desc">Gesundheit und freie Slots filtern Kandidaten. Normalisierte Last, Latenz und Kosten priorisieren sie. Die älteste Zuweisung entscheidet bei Gleichstand.</desc>
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#1e293b"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+  <rect width="1100" height="390" rx="24" fill="url(#panel)"/>
+  <text x="48" y="52" font-family="system-ui, sans-serif" font-size="25" font-weight="700" fill="#f8fafc">Endpunkt-Auswahl: Filter, Priorität, Fairness</text>
+  <text x="48" y="80" font-family="system-ui, sans-serif" font-size="15" fill="#94a3b8">Nur verfügbare Kandidaten gelangen in die gewichtete Auswahl.</text>
+
+  <g font-family="system-ui, sans-serif">
+    <rect x="48" y="118" width="255" height="190" rx="18" fill="#172554" stroke="#3b82f6"/>
+    <text x="72" y="151" font-size="13" font-weight="700" fill="#93c5fd">1 · HARTE FILTER</text>
+    <text x="72" y="185" font-size="18" font-weight="700" fill="#fff">Verfügbarkeit</text>
+    <circle cx="80" cy="218" r="5" fill="#60a5fa"/><text x="96" y="223" font-size="14" fill="#dbeafe">aktiv und passende Gruppe</text>
+    <circle cx="80" cy="250" r="5" fill="#60a5fa"/><text x="96" y="255" font-size="14" fill="#dbeafe">Circuit nicht offen</text>
+    <circle cx="80" cy="282" r="5" fill="#60a5fa"/><text x="96" y="287" font-size="14" fill="#dbeafe">freier Task-Slot</text>
+
+    <rect x="373" y="105" width="350" height="216" rx="18" fill="#312e81" stroke="#818cf8"/>
+    <text x="399" y="140" font-size="13" font-weight="700" fill="#c7d2fe">2 · MEHRFAKTOR-PRIORITÄT</text>
+    <text x="399" y="174" font-size="18" font-weight="700" fill="#fff">Bester Kandidat zuerst</text>
+    <rect x="399" y="200" width="275" height="22" rx="11" fill="#1e1b4b"/>
+    <rect x="399" y="200" width="220" height="22" rx="11" fill="#6366f1"/>
+    <text x="409" y="216" font-size="12" fill="#fff">Last ÷ Kapazität</text>
+    <rect x="399" y="239" width="275" height="22" rx="11" fill="#1e1b4b"/>
+    <rect x="399" y="239" width="160" height="22" rx="11" fill="#8b5cf6"/>
+    <text x="409" y="255" font-size="12" fill="#fff">geglättete Latenz</text>
+    <rect x="399" y="278" width="275" height="22" rx="11" fill="#1e1b4b"/>
+    <rect x="399" y="278" width="115" height="22" rx="11" fill="#a855f7"/>
+    <text x="409" y="294" font-size="12" fill="#fff">relative Kosten</text>
+
+    <rect x="793" y="118" width="259" height="190" rx="18" fill="#064e3b" stroke="#34d399"/>
+    <text x="817" y="151" font-size="13" font-weight="700" fill="#a7f3d0">3 · TIE-BREAKER</text>
+    <text x="817" y="185" font-size="18" font-weight="700" fill="#fff">Faire Verteilung</text>
+    <text x="817" y="220" font-size="14" fill="#d1fae5">Noch nie verwendet</text>
+    <text x="817" y="244" font-size="22" fill="#6ee7b7">↓</text>
+    <text x="817" y="272" font-size="14" fill="#d1fae5">älteste Zuweisung</text>
+  </g>
+
+  <g fill="none" stroke="#94a3b8" stroke-width="2.5" marker-end="url(#arrow)">
+    <path d="M303 213H363"/>
+    <path d="M723 213H783"/>
+  </g>
+  <text x="48" y="357" font-family="system-ui, sans-serif" font-size="13" fill="#94a3b8">Die endgültige Reservierung wird unter einer Datenbanksperre erneut geprüft und atomar als laufender Task angelegt.</text>
+</svg>
