@@ -101,7 +101,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($registrationEmailText === '') {
                         $registrationEmailText = 'danke für Deine Registrierung bei {sitename}.';
                     }
-                    $registrationEmailText = str_replace('{sitename}', $siteName, $registrationEmailText);
+                    $registrationEmailText = str_replace(
+                        ['{sitename}', '{username}'],
+                        [$siteName, $username],
+                        $registrationEmailText
+                    );
 
                     $textBody = "Hallo {$username},\r\n\r\n"
                         . "{$registrationEmailText}\r\n\r\n"
