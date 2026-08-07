@@ -23,7 +23,7 @@ LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer inte
 ## Funktionen
 
 - **Chat mit Streaming:** Server-Sent Events und persistente Chat-Sitzungen pro Benutzer.
-- **Routing und Lastverteilung:** optionale semantische Klassifikation; aktive Endpunkte derselben Modellgruppe werden nach aktueller Last und Fairness ausgewählt. Pro Endpunkt sind standardmäßig bis zu vier parallele Tasks zulässig.
+- **Routing und Lastverteilung:** optionale semantische Klassifikation, kategoriebasierte Modellwahl und konfigurierbare Fallback-Ketten; gesunde Endpunkte werden anhand von Auslastung, Kapazität, Latenz, Kosten und Fairness ausgewählt.
 - **Intelligence Upgrade:** beantwortet einfache Anfragen zunächst ressourcenschonend und bietet bei freier Kapazität optional ein leistungsfähigeres Modell für eine erneute Bearbeitung an.
 - **Hybrid-RAG:** Dokument-Upload mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
 - **Chat-Tools:** Websuche mit SearXNG, Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
@@ -45,6 +45,8 @@ LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer inte
 Wichtige Komponenten:
 
 - `api/balancer.php` wählt LLM-Endpunkte und erfasst deren Task-Lifecycle.
+- `api/sd_balancer.php` und `api/comfy_balancer.php` wenden dieselben Balancer-Grundsätze auf die Bildgenerierung an.
+- `lib/balancer_engine.php` bündelt Circuit Breaker, Backoff, Fallback-Ketten, verwaiste Tasks und die konfigurierbaren Balancer-Einstellungen.
 - `api/embedding.php` erstellt Embeddings, führt Ähnlichkeitssuche und optionales Reranking aus.
 - `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an.
 - `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
@@ -52,7 +54,9 @@ Wichtige Komponenten:
 
 ## Modellrouting und Entscheidungsfindung
 
-Ist ein Entscheidungsmodell konfiguriert, bewertet LLMInt die letzte Nutzernachricht vor der eigentlichen Verarbeitung. Es ordnet sie anhand der konfigurierten Kategorien und priorisierten Entscheidungsregeln genau einer Kategorie zu. Eine Routing-Regel kann diese Kategorie einem passenden Zielmodell zuordnen. Fehlt eine Zuordnung, ist das Entscheidungsmodell nicht verfügbar oder kann keine Nachricht klassifiziert werden, bleibt die ursprünglich angeforderte Modellauswahl erhalten.
+Das Routing arbeitet in zwei Stufen: Zuerst bestimmt LLMInt die passende Modellgruppe, danach wählt der Balancer innerhalb dieser Gruppe einen geeigneten Endpunkt. Ist ein Entscheidungsmodell konfiguriert, bewertet es die letzte Nutzernachricht anhand der konfigurierten Kategorien und priorisierten Entscheidungsregeln. Eine Routing-Regel ordnet die erkannte Kategorie einem Zielmodell zu. Fehlt eine Zuordnung, ist das Entscheidungsmodell nicht verfügbar oder kann keine Nachricht klassifiziert werden, bleibt die ursprünglich angeforderte Modellauswahl erhalten.
+
+![Übersicht der Routing- und Loadbalancing-Stufen](docs/images/routing-overview.svg)
 
 ```mermaid
 flowchart TD
@@ -67,9 +71,17 @@ flowchart TD
     F --> G{Routing-Regel für<br/>Kategorie vorhanden?}
     G -- Nein --> H
     G -- Ja --> I[Zugeordnetes Zielmodell auswählen]
-    H --> J[Verfügbaren Endpunkt des Modells<br/>nach Last und Fairness wählen]
+    H --> J[Gesunden Endpunkt des Modells<br/>nach Kapazität, Latenz und Kosten wählen]
     I --> J
-    J --> K[Anfrage an Modell senden<br/>und Antwort ausgeben]
+    J --> K{Verarbeitung erfolgreich?}
+    K -- Ja --> L[Antwort ausgeben]
+    K -- Nein --> M[Backoff mit Jitter<br/>und anderen Endpunkt versuchen]
+    M --> N{Endpunkt derselben<br/>Modellgruppe verfügbar?}
+    N -- Ja --> K
+    N -- Nein --> O[Konfigurierte Fallback-Modelle<br/>der Reihe nach prüfen]
+    O --> P{Fallback verfügbar?}
+    P -- Ja --> K
+    P -- Nein --> Q[Fehler zurückgeben]
 ```
 
 **Vorteile**
@@ -78,11 +90,13 @@ flowchart TD
 - **Effizienter Ressourceneinsatz:** Leistungsfähige oder spezialisierte Modelle werden gezielt genutzt, statt jede Anfrage gleich zu behandeln.
 - **Konfigurierbare Entscheidungen:** Kategorien, Prioritäten und Modellzuordnungen werden im Admin-Bereich gepflegt und lassen sich ohne Codeänderung anpassen.
 - **Robuster Betrieb:** Bei fehlender Klassifikation oder Kapazität wird die Benutzeranfrage weiterhin mit dem ursprünglich gewählten Modell verarbeitet.
-- **Faire Auslastung:** Nach der Modellentscheidung verteilt die Lastverteilung Anfragen auf freie Endpunkte mit der geringsten Last und bevorzugt bei Gleichstand lange nicht genutzte Endpunkte.
+- **Geordnete Fallbacks:** Schlägt ein Endpunkt fehl und ist kein weiterer Endpunkt derselben Modellgruppe frei, werden konfigurierte Ersatzmodelle in der vorgegebenen Reihenfolge geprüft.
+- **Fähigkeits- und Spezialisierungsdaten:** Endpunkte können für Tool Calling und Kategorien gekennzeichnet werden; Upgrade-Vorschläge berücksichtigen die fachliche Spezialisierung.
+- **Faire Auslastung:** Nach der Modellentscheidung verteilt der Balancer Anfragen auf freie, gesunde Endpunkte und bevorzugt bei Gleichstand lange nicht genutzte Endpunkte.
 
 ## Intelligence Upgrade
 
-Das Intelligence Upgrade verbindet angemessenen Ressourceneinsatz mit der Möglichkeit, bei anspruchsvolleren Aufgaben mehr Modellleistung zu nutzen. Eine Anfrage wird zunächst mit dem ausgewählten Modell beantwortet. Ist ein leistungsfähigeres Modell mit freier Kapazität verfügbar, erhält der Benutzer anschließend ein optionales Upgrade-Angebot. Nach Zustimmung wird dieselbe Anfrage mit dem vorgeschlagenen Modell erneut ausgeführt; die Auswahl gilt anschließend für die aktuelle Chat-Sitzung.
+Das Intelligence Upgrade verbindet angemessenen Ressourceneinsatz mit der Möglichkeit, bei anspruchsvolleren Aufgaben mehr Modellleistung zu nutzen. Eine Anfrage wird zunächst mit dem ausgewählten Modell beantwortet. Ist ein leistungsfähigeres Modell mit freier Kapazität verfügbar, erhält der Benutzer anschließend ein optionales Upgrade-Angebot. Nach Zustimmung wird dieselbe Anfrage mit dem vorgeschlagenen Modell erneut ausgeführt; die Auswahl gilt anschließend 20 Minuten lang für die aktuelle Chat-Sitzung.
 
 ```mermaid
 flowchart TD
@@ -108,24 +122,66 @@ Damit ein Modell berücksichtigt wird, muss seine Modellbezeichnung eine Intelli
 
 ## Lastverteilung
 
-`api/balancer.php` wählt für ein angefordertes Modell den verfügbaren Endpunkt mit der geringsten Last. Bei gleicher Last erhält der Endpunkt den Vorzug, der am längsten keine Aufgabe erhalten hat; noch nie verwendete Endpunkte werden zuerst gewählt. Die Auswahl und das Anlegen der Aufgabe erfolgen innerhalb einer Datenbanktransaktion, damit parallele Anfragen keinen Endpunkt doppelt belegen.
+Die LLM-, AUTOMATIC1111- und ComfyUI-Balancer verwenden die gemeinsame Engine aus `lib/balancer_engine.php`. Die maximale Anzahl paralleler Tasks je Endpunkt ist über `balancer_max_concurrent` konfigurierbar und beträgt standardmäßig vier.
+
+Die Auswahl erfolgt in einer festen Prioritätsfolge:
+
+1. Nur aktive Endpunkte der benötigten Modellgruppe beziehungsweise Bild-Engine werden berücksichtigt.
+2. Endpunkte mit offenem Circuit Breaker oder ohne freien Task-Slot werden ausgeschlossen.
+3. Die laufenden Tasks werden durch das individuelle `capacity_weight` des Endpunkts normalisiert; leistungsfähigere Endpunkte können dadurch mehr Verkehr übernehmen.
+4. Danach fließen die geglättete Latenz und das relative `cost_weight` mit konfigurierbaren Gewichtungen ein.
+5. Bei Gleichstand entsteht durch die älteste letzte Zuweisung ein Round-Robin-Effekt; noch nie verwendete Endpunkte kommen zuerst.
+
+![Faktoren der Endpunkt-Auswahl](docs/images/load-balancing-factors.svg)
 
 ```mermaid
 flowchart TD
     A[Anfrage mit Modell] --> B[DB-Transaktion starten]
-    B --> C[Aktive Endpunkte<br/>mit passendem default_model ermitteln]
-    C --> D{Endpunkt mit<br/>weniger als 4 laufenden Tasks?}
+    B --> C[Aktive Kandidaten mit passendem Modell,<br/>geschlossenem Circuit und freiem Slot ermitteln]
+    C --> D{Kandidat vorhanden?}
     D -- Nein --> E[Transaktion zurückrollen<br/>Kein Endpunkt verfügbar]
-    D -- Ja --> F[Nach laufenden Tasks aufsteigend sortieren]
-    F --> G{Gleiche Last?}
-    G -- Ja --> H[Unbenutzte Endpunkte zuerst,<br/>danach älteste letzte Zuweisung]
-    G -- Nein --> I[Am geringsten belasteten<br/>Endpunkt wählen]
-    H --> J[Task mit Status running anlegen]
-    I --> J
-    J --> K[Transaktion bestätigen]
-    K --> L[Endpunkt und Task-ID zurückgeben]
-    L --> M[Nach Verarbeitung Task als<br/>done oder error markieren]
+    D -- Ja --> F[Nach normalisierter Last,<br/>Latenz und Kosten priorisieren]
+    F --> G[Fairness als Tie-Breaker:<br/>älteste Zuweisung zuerst]
+    G --> H[Kandidatenzeile sperren<br/>und freie Kapazität erneut prüfen]
+    H --> I{Slot weiterhin frei?}
+    I -- Nein --> J[Nächsten Kandidaten prüfen]
+    J --> H
+    I -- Ja --> K[Task mit Status running anlegen]
+    K --> L[Transaktion bestätigen]
+    L --> M[Endpunkt und Task-ID zurückgeben]
+    M --> N[Nach Verarbeitung Task als<br/>done oder error markieren]
 ```
+
+### Ausfallsicherheit
+
+- **Circuit Breaker:** Nach standardmäßig drei aufeinanderfolgenden Fehlern wird ein Endpunkt für 30 Sekunden aus dem Routing genommen. Danach prüft eine einzelne Half-Open-Anfrage die Erholung. Erfolg schließt den Circuit, ein weiterer Fehler öffnet ihn erneut.
+- **Retry und Backoff:** Ein fehlgeschlagener LLM-Aufruf kann auf bis zu zwei weiteren Endpunkten wiederholt werden. Exponentielles Backoff mit optionalem Full Jitter verhindert gleichzeitige Retry-Spitzen.
+- **Fallback-Ketten:** Ist beim Retry kein Endpunkt derselben Modellgruppe verfügbar, prüft LLMInt die unter `balancer_fallback_chains` hinterlegten Ersatzmodelle der Reihe nach.
+- **Verwaiste Tasks:** Lange im Status `running` verbliebene Tasks werden nach einem konfigurierbaren Timeout als Fehler abgeschlossen und blockieren keinen Slot dauerhaft.
+- **Atomare Reservierung:** `SELECT ... FOR UPDATE` und eine erneute Kapazitätsprüfung unter der Datenbanksperre verhindern die Doppelbelegung eines Slots.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Closed: Erfolg / Fehlerzähler zurücksetzen
+    Closed --> Open: Fehlerschwelle erreicht
+    Open --> HalfOpen: Cooldown abgelaufen
+    HalfOpen --> Closed: Testanfrage erfolgreich
+    HalfOpen --> Open: Testanfrage fehlgeschlagen
+```
+
+Die Parameter werden unter **Administration → Balancer & Routing** gepflegt:
+
+| Einstellung | Standard | Zweck |
+|---|---:|---|
+| `balancer_max_concurrent` | `4` | parallele Tasks je Endpunkt |
+| `balancer_circuit_fail_threshold` | `3` | Fehler bis zum Öffnen des Circuit Breakers |
+| `balancer_circuit_cooldown_seconds` | `30` | Wartezeit bis zur Half-Open-Testanfrage |
+| `balancer_backoff_base_ms` / `balancer_backoff_max_ms` | `200` / `8000` | Grenzen des exponentiellen Backoffs |
+| `balancer_backoff_jitter` | aktiv | zufällige Verteilung der Retry-Verzögerung |
+| `balancer_orphan_timeout_seconds` | `300` | Timeout für verwaiste Tasks |
+| `balancer_weight_latency` / `balancer_weight_cost` / `balancer_weight_capacity` | `0,35` / `0,25` / `0,40` | Gewichtung der Auswahlfaktoren |
+| `balancer_fallback_chains` | `{}` | geordnete Ersatzmodelle als JSON-Objekt |
 
 ## Voraussetzungen
 
@@ -241,7 +297,7 @@ Nach der Anmeldung unter `/admin/login.php`:
 6. Optional Hybrid-Suche, Reranker und Prompt Security aktivieren.
 7. Verbindungs- und Funktionstests im Admin-Bereich ausführen.
 
-Endpunkte mit demselben `default_model` bilden einen Pool. Das Routing kann eine Nutzeranfrage zuerst einer Kategorie zuordnen und diese über `routing_rules` auf ein Zielmodell abbilden. Ist die Klassifikation nicht verfügbar, wird die ursprüngliche Modellauswahl verwendet.
+Endpunkte mit demselben `default_model` bilden einen Pool. Das Routing kann eine Nutzeranfrage zuerst einer Kategorie zuordnen und diese über `routing_rules` auf ein Zielmodell abbilden. Ist die Klassifikation nicht verfügbar, wird die ursprüngliche Modellauswahl verwendet. Unter **Balancer & Routing** lassen sich außerdem Kapazitätsgrenzen, Circuit Breaker, Retry-Verhalten, Auswahlgewichtungen und Fallback-Ketten konfigurieren.
 
 ## Hybrid-RAG
 
@@ -324,6 +380,8 @@ print(response.choices[0].message.content)
 |---|---|
 | Datenbankfehler oder Setup-Hinweis | DB-Umgebungsvariablen, Datenbankrechte und `php setup.php` |
 | Keine Modelle verfügbar | Endpunkt-URL, Netzwerkpfad, Modellgruppe und Timeout |
+| Endpunkt erhält keine Anfragen | Aktivierung, Modellgruppe, freie Slots, Circuit-Status und Cooldown prüfen |
+| Unerwartetes Fallback-Modell | `balancer_fallback_chains` und Routing-Regeln unter **Balancer & Routing** prüfen |
 | Dokument-Upload schlägt fehl | Upload-Recht, Dateityp/-größe, Schreibrechte und bei PDFs `pdftotext` |
 | Keine Embeddings | `embedding_enabled`, aktiver Embedding-Endpunkt, Endpunkt-URL und Admin-Statistik |
 | LDAP-Login oder SMTP-Versand fehlschlägt | Konfiguration und die jeweiligen Testendpunkte |
