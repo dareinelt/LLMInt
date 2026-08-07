@@ -3,22 +3,31 @@
 /**
  * api/balancer.php
  *
- * Load-balancing logic for multi-endpoint routing.
+ * Load-balancing / routing engine for multi-endpoint LLM routing.
  *
  * Endpoints are grouped by their `default_model` value.
  * Selection rules (applied in order):
- *   1. Only active endpoints whose `default_model` matches the requested model.
- *   2. Only endpoints with fewer than 4 currently-running tasks.
- *   3. Prefer the endpoint with the fewest running tasks (least-loaded first).
- *   4. Among equally-loaded endpoints, prefer the one that received a task
- *      least recently (round-robin effect: after A was used, B goes next).
- *      Endpoints that have never received a task sort before used ones.
+ *   1. Only active endpoints whose `default_model` matches the requested model
+ *      and whose circuit breaker is not currently open (see lib/balancer_engine.php).
+ *   2. Optionally, only endpoints that support tool-calling ($requireToolCalling).
+ *   3. Only endpoints with fewer than $maxConcurrent currently-running tasks
+ *      (configurable via the `balancer_max_concurrent` setting; previously
+ *      hard-coded to 4).
+ *   4. Prefer the endpoint with the best routing score, combining current
+ *      load (capacity headroom), average latency and relative cost.
+ *   5. Among equally-scored endpoints, prefer the one that received a task
+ *      least recently (round-robin effect). Endpoints that have never
+ *      received a task sort before used ones.
  *
- * Task lifecycle is recorded atomically inside a DB transaction to prevent
- * double-booking under concurrent requests.
+ * Task lifecycle is recorded atomically inside a DB transaction. The chosen
+ * endpoint row is locked with SELECT ... FOR UPDATE before the reservation is
+ * finalised, and the running-task count is re-checked under that lock so
+ * concurrent requests can never double-book the same slot (resilient,
+ * race-free reservation instead of relying purely on transaction isolation).
  */
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../lib/balancer_engine.php';
 
 /**
  * Pick the best available endpoint for the given model, register a new task,
@@ -27,23 +36,41 @@ require_once __DIR__ . '/../db.php';
  *
  * Returns null when no endpoint with available capacity exists for the model.
  *
- * @param string $model         The model name to route to.
- * @param int    $maxConcurrent Maximum number of running tasks allowed per endpoint
- *                              before it is considered full. Defaults to 4.
- *                              Pass 3 to reserve one slot per endpoint (e.g. for
- *                              routing-decision calls when the decision model is
- *                              also used for regular user requests).
+ * @param string   $model             The model name to route to.
+ * @param int|null $maxConcurrent     Maximum number of running tasks allowed per
+ *                                    endpoint before it is considered full.
+ *                                    Defaults to the `balancer_max_concurrent`
+ *                                    setting (4 unless configured otherwise).
+ *                                    Pass a lower value to reserve slots per
+ *                                    endpoint (e.g. for routing-decision calls
+ *                                    when the decision model is also used for
+ *                                    regular user requests).
+ * @param bool     $requireToolCalling When true, only endpoints whose model
+ *                                    supports OpenAI-style tool calling are
+ *                                    considered (model-capability routing).
  *
  * @throws PDOException on database errors
  */
-function pickEndpointForModel(string $model, int $maxConcurrent = 4): ?array
+function pickEndpointForModel(string $model, ?int $maxConcurrent = null, bool $requireToolCalling = false): ?array
 {
+    cleanupOrphanedTasks('tasks');
+
+    $maxConcurrent = $maxConcurrent !== null && $maxConcurrent > 0
+        ? $maxConcurrent
+        : getBalancerMaxConcurrent();
+
     $db = getDb();
+    $circuitWhere = balancerCircuitWhereClause();
+    $toolCallingWhere = $requireToolCalling ? 'AND e.supports_tool_calling = 1' : '';
+
     $db->beginTransaction();
     try {
-        $stmt = $db->prepare('
+        // Step 1: gather scored candidates (read-committed snapshot).
+        $stmt = $db->prepare("
             SELECT e.id, e.alias, e.base_url, e.timeout, e.default_model,
                    e.supports_tool_calling, e.is_llamacpp,
+                   e.circuit_state, e.cooldown_until,
+                   e.avg_latency_ms, e.cost_weight, e.capacity_weight,
                    COALESCE(r.running_count, 0) AS running_count,
                    r.last_task_at
             FROM endpoints e
@@ -52,34 +79,70 @@ function pickEndpointForModel(string $model, int $maxConcurrent = 4): ?array
                        COUNT(*)        AS running_count,
                        MAX(started_at) AS last_task_at
                   FROM tasks
-                 WHERE status = \'running\'
+                 WHERE status = 'running'
                  GROUP BY endpoint_id
             ) r ON r.endpoint_id = e.id
             WHERE e.is_active = 1
               AND e.default_model = ?
               AND COALESCE(r.running_count, 0) < ?
+              AND {$circuitWhere}
+              {$toolCallingWhere}
             ORDER BY
-                COALESCE(r.running_count, 0) ASC,
+                (COALESCE(r.running_count, 0) / GREATEST(e.capacity_weight, 0.0001)) ASC,
+                COALESCE(e.avg_latency_ms, 999999) * ? ASC,
+                e.cost_weight * ? ASC,
                 CASE WHEN r.last_task_at IS NULL THEN 0 ELSE 1 END ASC,
                 r.last_task_at ASC
-            LIMIT 1
-        ');
-        $stmt->execute([$model, $maxConcurrent]);
-        $endpoint = $stmt->fetch();
+            LIMIT 8
+        ");
+        $stmt->execute([
+            $model,
+            $maxConcurrent,
+            (float) getBalancerSetting('balancer_weight_latency'),
+            (float) getBalancerSetting('balancer_weight_cost'),
+        ]);
+        $candidates = $stmt->fetchAll();
 
-        if (!$endpoint) {
+        if (empty($candidates)) {
             $db->rollBack();
             return null;
         }
 
-        $db->prepare(
-            "INSERT INTO tasks (endpoint_id, model, status) VALUES (?, ?, 'running')"
-        )->execute([$endpoint['id'], $model]);
+        // Step 2: atomically reserve a slot by locking each candidate row in
+        // turn and re-checking its running-task count under that lock. The
+        // first candidate that still has room wins; INSERT happens while the
+        // lock is held so no other transaction can race us for the same slot.
+        foreach ($candidates as $endpoint) {
+            $endpointId = (int) $endpoint['id'];
 
-        $taskId = (int) $db->lastInsertId();
-        $db->commit();
+            $lockStmt = $db->prepare('SELECT id, is_active FROM endpoints WHERE id = ? FOR UPDATE');
+            $lockStmt->execute([$endpointId]);
+            $locked = $lockStmt->fetch();
+            if ($locked === false || (int) $locked['is_active'] !== 1) {
+                continue;
+            }
 
-        return ['endpoint' => $endpoint, 'task_id' => $taskId];
+            $countStmt = $db->prepare("SELECT COUNT(*) FROM tasks WHERE endpoint_id = ? AND status = 'running'");
+            $countStmt->execute([$endpointId]);
+            $runningCount = (int) $countStmt->fetchColumn();
+            if ($runningCount >= $maxConcurrent) {
+                continue;
+            }
+
+            maybeHalfOpenCircuit('endpoints', $endpointId);
+
+            $db->prepare(
+                "INSERT INTO tasks (endpoint_id, model, status) VALUES (?, ?, 'running')"
+            )->execute([$endpointId, $model]);
+
+            $taskId = (int) $db->lastInsertId();
+            $db->commit();
+
+            return ['endpoint' => $endpoint, 'task_id' => $taskId];
+        }
+
+        $db->rollBack();
+        return null;
     } catch (Throwable $e) {
         if ($db->inTransaction()) {
             $db->rollBack();
@@ -157,22 +220,26 @@ function getUpgradeModelSuggestionForRequestedModel(string $requestedModel, stri
         return null;
     }
 
-    $stmt = getDb()->query('
+    $maxConcurrent = getBalancerMaxConcurrent();
+    $circuitWhere = balancerCircuitWhereClause();
+
+    $stmt = getDb()->prepare("
         SELECT
             e.default_model,
-            MAX(CASE WHEN e.specialized_for_category <> \'\' THEN e.specialized_for_category ELSE NULL END) AS specialized_for_category,
-            SUM(CASE WHEN COALESCE(r.running_count, 0) < 4 THEN 1 ELSE 0 END) AS free_endpoints
+            MAX(CASE WHEN e.specialized_for_category <> '' THEN e.specialized_for_category ELSE NULL END) AS specialized_for_category,
+            SUM(CASE WHEN COALESCE(r.running_count, 0) < ? AND {$circuitWhere} THEN 1 ELSE 0 END) AS free_endpoints
         FROM endpoints e
         LEFT JOIN (
             SELECT endpoint_id, COUNT(*) AS running_count
             FROM tasks
-            WHERE status = \'running\'
+            WHERE status = 'running'
             GROUP BY endpoint_id
         ) r ON r.endpoint_id = e.id
         WHERE e.is_active = 1
-          AND e.default_model <> \'\'
+          AND e.default_model <> ''
         GROUP BY e.default_model
-    ');
+    ");
+    $stmt->execute([$maxConcurrent]);
 
     $bestModel = null;
     $bestIntelligence = null;
@@ -232,15 +299,20 @@ function getUpgradeModelSuggestionForRequestedModel(string $requestedModel, stri
  * @param int|null $promptTokens   Tokens used for the prompt.
  * @param int|null $completionTokens Tokens in the completion.
  * @param int|null $totalTokens    Total tokens (prompt + completion).
+ * @param float|null $latencyMs    Observed request latency in milliseconds,
+ *                                 used to update the endpoint's rolling
+ *                                 average latency for latency-based routing.
  */
 function completeTask(
     int    $taskId,
     string $status           = 'done',
     ?int   $promptTokens     = null,
     ?int   $completionTokens = null,
-    ?int   $totalTokens      = null
+    ?int   $totalTokens      = null,
+    ?float $latencyMs        = null
 ): void {
-    getDb()->prepare('
+    $db = getDb();
+    $db->prepare('
         UPDATE tasks
            SET status            = ?,
                finished_at       = NOW(3),
@@ -249,4 +321,15 @@ function completeTask(
                total_tokens      = ?
          WHERE id = ?
     ')->execute([$status, $promptTokens, $completionTokens, $totalTokens, $taskId]);
+
+    try {
+        $epStmt = $db->prepare('SELECT endpoint_id FROM tasks WHERE id = ?');
+        $epStmt->execute([$taskId]);
+        $endpointId = (int) $epStmt->fetchColumn();
+        if ($endpointId > 0) {
+            recordEndpointOutcome('endpoints', $endpointId, $status === 'done', $latencyMs);
+        }
+    } catch (Throwable $_e) {
+        // Health bookkeeping must never break the caller.
+    }
 }

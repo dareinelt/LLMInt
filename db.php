@@ -243,6 +243,24 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    // Balancer health / circuit-breaker / latency-cost-capacity columns.
+    // Shared shape across endpoints, sd_endpoints and comfy_endpoints so the
+    // routing engine (lib/balancer_engine.php) can treat all three uniformly.
+    foreach (['endpoints', 'sd_endpoints', 'comfy_endpoints'] as $balancerTable) {
+        foreach ([
+            "ALTER TABLE {$balancerTable} ADD COLUMN consecutive_failures INT UNSIGNED NOT NULL DEFAULT 0 AFTER is_active",
+            "ALTER TABLE {$balancerTable} ADD COLUMN circuit_state ENUM('closed','open','half_open') NOT NULL DEFAULT 'closed' AFTER consecutive_failures",
+            "ALTER TABLE {$balancerTable} ADD COLUMN circuit_opened_at TIMESTAMP(3) NULL AFTER circuit_state",
+            "ALTER TABLE {$balancerTable} ADD COLUMN cooldown_until TIMESTAMP(3) NULL AFTER circuit_opened_at",
+            "ALTER TABLE {$balancerTable} ADD COLUMN avg_latency_ms INT UNSIGNED NULL AFTER cooldown_until",
+            "ALTER TABLE {$balancerTable} ADD COLUMN last_latency_ms INT UNSIGNED NULL AFTER avg_latency_ms",
+            "ALTER TABLE {$balancerTable} ADD COLUMN cost_weight DECIMAL(10,4) NOT NULL DEFAULT 1.0000 AFTER last_latency_ms",
+            "ALTER TABLE {$balancerTable} ADD COLUMN capacity_weight DECIMAL(10,4) NOT NULL DEFAULT 1.0000 AFTER cost_weight",
+        ] as $balancerAlter) {
+            try { $pdo->exec($balancerAlter); } catch (Throwable $_e) { /* column already exists */ }
+        }
+    }
+
     // Conversation sessions: persists chat history so a failed endpoint can be
     // replaced transparently. Anonymous rows expire 30 minutes after the last
     // activity; user-linked rows are kept indefinitely.

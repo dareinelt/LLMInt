@@ -1865,14 +1865,43 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     if ($endpointRetries <= 0) {
         return false;
     }
+    $attemptNumber = 3 - $endpointRetries; // 1-based retry attempt count
     $endpointRetries--;
     try {
         completeTask($taskId, 'error');
     } catch (Throwable $e) {}
+
+    // Exponential backoff with jitter before hitting another endpoint, so a
+    // transient blip (e.g. all endpoints briefly overloaded) doesn't cause an
+    // immediate retry storm.
+    try {
+        backoffSleep($attemptNumber);
+    } catch (Throwable $e) {}
+
     try {
         $newSlot = pickEndpointForModel($model, $userSlotMax);
     } catch (Throwable $e) {
         return false;
+    }
+
+    // Try the configured fallback chain for the current model before falling
+    // back to the generic "bigger model" upgrade heuristic.
+    if ($newSlot === null) {
+        try {
+            foreach (getFallbackChain($model) as $fallbackModel) {
+                $newSlot = pickEndpointForModel($fallbackModel, $userSlotMax);
+                if ($newSlot !== null) {
+                    $model = $fallbackModel;
+                    $payload['model'] = $fallbackModel;
+                    $forwardPayload['model'] = $fallbackModel;
+                    $intelligenceUpgrade = null;
+                    writeLog('info', 'Fallback-Kette: Modell ' . $model . ' für die Bearbeitung des Prompts ausgewählt.');
+                    break;
+                }
+            }
+        } catch (Throwable $e) {
+            $newSlot = null;
+        }
     }
 
     if ($newSlot === null && $allowUpgradeFallback && !$upgradeFailoverTried) {
@@ -2265,7 +2294,7 @@ if ($useTools) {
     }
 
     $taskFinished = true;
-    completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total']);
+    completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total'], (microtime(true) - $requestStart) * 1000);
     logResponseFinished($requestStart, $usage['prompt'], $usage['completion']);
 
     // Persist the conversation so it survives future endpoint failures.
@@ -2454,7 +2483,7 @@ if ($stream) {
     $taskFinished = true;
     $streamStatus = ($streamCurlErr === '' && ($streamHttpCode === 0 || $streamHttpCode === 200))
         ? 'done' : 'error';
-    completeTask($taskId, $streamStatus, $promptTokens, $completionTokens, $totalTokens);
+    completeTask($taskId, $streamStatus, $promptTokens, $completionTokens, $totalTokens, (microtime(true) - $requestStart) * 1000);
     if ($streamStatus === 'done') {
         logResponseFinished($requestStart, $promptTokens, $completionTokens);
     }
@@ -2560,7 +2589,7 @@ $completionTokens = isset($data['usage']['completion_tokens']) ? (int) $data['us
 $totalTokens      = isset($data['usage']['total_tokens'])      ? (int) $data['usage']['total_tokens']      : null;
 
 $taskFinished = true;
-completeTask($taskId, 'done', $promptTokens, $completionTokens, $totalTokens);
+completeTask($taskId, 'done', $promptTokens, $completionTokens, $totalTokens, (microtime(true) - $requestStart) * 1000);
 logResponseFinished($requestStart, $promptTokens, $completionTokens);
 
 // Persist conversation on success.

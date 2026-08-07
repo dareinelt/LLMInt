@@ -73,6 +73,7 @@ $taskId     = $slot['task_id'];
 $baseUrl    = rtrim($endpoint['base_url'], '/');
 $timeout    = max(1, (int) $endpoint['timeout']);
 $checkpoint = (string) ($endpoint['default_checkpoint'] ?: '');
+$requestStart = microtime(true);
 
 // Ensure the task is always marked finished, even on unexpected PHP termination.
 $taskFinished = false;
@@ -354,7 +355,7 @@ if (file_put_contents($filePath, $imageData) === false) {
 // ── Finish task and respond ───────────────────────────────────────────────────
 
 $taskFinished = true;
-completeComfyTask($taskId, 'done');
+completeComfyTask($taskId, 'done', (microtime(true) - $requestStart) * 1000);
 
 echo json_encode([
     'image_url' => 'sd_output/' . $filename,
