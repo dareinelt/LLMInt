@@ -75,6 +75,7 @@ $endpoint = $slot['endpoint'];
 $taskId   = $slot['task_id'];
 $baseUrl  = rtrim($endpoint['base_url'], '/');
 $timeout  = max(1, (int) $endpoint['timeout']);
+$requestStart = microtime(true);
 
 // Ensure the task is always marked finished, even on unexpected PHP termination.
 $taskFinished = false;
@@ -194,7 +195,7 @@ if (file_put_contents($filePath, $imageData) === false) {
 // ── Finish task and respond ───────────────────────────────────────────────────
 
 $taskFinished = true;
-completeSdTask($taskId, 'done');
+completeSdTask($taskId, 'done', (microtime(true) - $requestStart) * 1000);
 
 // Extract seed from A1111 info if available.
 $seed = null;

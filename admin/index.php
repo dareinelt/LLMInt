@@ -11,6 +11,7 @@
 session_start();
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../lib/balancer_engine.php';
 
 requireAdminOrRedirect('login.php');
 
@@ -25,6 +26,17 @@ $loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
 $loginBannerText    = getSetting('login_banner_text', '');
 $registrationEmailText = getSetting('registration_email_text', '');
 $streamingEnabled = getSetting('streaming_enabled', '1') === '1';
+$balancerMaxConcurrent        = getBalancerMaxConcurrent();
+$balancerCircuitFailThreshold = getBalancerCircuitFailThreshold();
+$balancerCircuitCooldownSecs  = getBalancerCircuitCooldownSeconds();
+$balancerOrphanTimeoutSecs    = getBalancerOrphanTimeoutSeconds();
+$balancerBackoffBaseMs        = (int) getBalancerSetting('balancer_backoff_base_ms');
+$balancerBackoffMaxMs         = (int) getBalancerSetting('balancer_backoff_max_ms');
+$balancerBackoffJitter        = getBalancerSetting('balancer_backoff_jitter') === '1';
+$balancerWeightLatency        = (float) getBalancerSetting('balancer_weight_latency');
+$balancerWeightCost           = (float) getBalancerSetting('balancer_weight_cost');
+$balancerWeightCapacity       = (float) getBalancerSetting('balancer_weight_capacity');
+$balancerFallbackChainsJson   = getBalancerSetting('balancer_fallback_chains');
 $routingCategories = loadRoutingCategories();
 $routingCategoriesData = loadRoutingCategoriesFromDb();
 $routingRules = loadRoutingRules();
@@ -107,6 +119,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
             $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
+            $costWeight          = max(0.0001, min(1000, (float) ($_POST['ep_cost_weight'] ?? 1.0)));
+            $capacityWeight      = max(0.0001, min(1000, (float) ($_POST['ep_capacity_weight'] ?? 1.0)));
 
             if (strlen($newAlias) > 120) {
                 $flashError = 'Alias darf maximal 120 Zeichen lang sein.';
@@ -123,11 +137,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db->prepare(
                     'INSERT INTO endpoints (alias, base_url, timeout, default_model, specialized_for_category,
                                             supports_tool_calling, is_llamacpp, is_active, sort_order,
-                                            ssh_host, ssh_port, ssh_user, ssh_password)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                                            ssh_host, ssh_port, ssh_user, ssh_password, cost_weight, capacity_weight)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
                 )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
                             $supportsToolCalling, $isLlamacpp, $isActive, $maxOrder + 1,
-                            $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null]);
+                            $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null,
+                            $costWeight, $capacityWeight]);
                 $endpointLabel = $newAlias !== '' ? $newAlias : rtrim($newUrl, '/');
                 writeLog('info', 'Neuer Modellendpunkt erfolgreich registriert (' . $endpointLabel . ', Modell: ' . $newModel . ').');
                 $flashOk = 'Endpunkt hinzugefügt.';
@@ -148,6 +163,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
             $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
+            $costWeight          = max(0.0001, min(1000, (float) ($_POST['ep_cost_weight'] ?? 1.0)));
+            $capacityWeight      = max(0.0001, min(1000, (float) ($_POST['ep_capacity_weight'] ?? 1.0)));
 
             if ($epId <= 0) {
                 $flashError = 'Ungültige Endpunkt-ID.';
@@ -170,19 +187,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
                                 specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, is_active = ?,
-                                ssh_host = ?, ssh_port = ?, ssh_user = ?
+                                ssh_host = ?, ssh_port = ?, ssh_user = ?, cost_weight = ?, capacity_weight = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
-                                $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser, $epId]);
+                                $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser,
+                                $costWeight, $capacityWeight, $epId]);
                 } else {
                     $db->prepare(
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
                                 specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, is_active = ?,
-                                ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?
+                                ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?, cost_weight = ?, capacity_weight = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
-                                $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword, $epId]);
+                                $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword,
+                                $costWeight, $capacityWeight, $epId]);
                 }
                 if (is_array($previousEndpoint) && (int) ($previousEndpoint['is_active'] ?? 0) === 1 && $isActive !== 1) {
                     $endpointLabel = trim((string) ($previousEndpoint['alias'] ?? ''));
@@ -258,6 +277,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newUserDefaultModel = $newModel;
             setSetting('new_user_default_model', $newModel);
             $flashOk = 'Standard-Modell für neue Benutzer gespeichert.';
+
+        // ── Save balancer / routing engine settings ───────────────────────────
+        } elseif ($action === 'save_balancer_settings') {
+            $newMaxConcurrent   = max(1, min(100, (int) ($_POST['balancer_max_concurrent'] ?? 4)));
+            $newFailThreshold   = max(1, min(100, (int) ($_POST['balancer_circuit_fail_threshold'] ?? 3)));
+            $newCooldownSecs    = max(1, min(3600, (int) ($_POST['balancer_circuit_cooldown_seconds'] ?? 30)));
+            $newOrphanTimeout   = max(10, min(86400, (int) ($_POST['balancer_orphan_timeout_seconds'] ?? 300)));
+            $newBackoffBaseMs   = max(1, min(60000, (int) ($_POST['balancer_backoff_base_ms'] ?? 200)));
+            $newBackoffMaxMs    = max($newBackoffBaseMs, min(600000, (int) ($_POST['balancer_backoff_max_ms'] ?? 8000)));
+            $newBackoffJitter   = isset($_POST['balancer_backoff_jitter']);
+            $newWeightLatency   = max(0.0, min(1.0, (float) ($_POST['balancer_weight_latency'] ?? 0.35)));
+            $newWeightCost      = max(0.0, min(1.0, (float) ($_POST['balancer_weight_cost'] ?? 0.25)));
+            $newWeightCapacity  = max(0.0, min(1.0, (float) ($_POST['balancer_weight_capacity'] ?? 0.40)));
+            $newFallbackChains  = trim($_POST['balancer_fallback_chains'] ?? '{}');
+
+            $decodedFallback = json_decode($newFallbackChains === '' ? '{}' : $newFallbackChains, true);
+            if (!is_array($decodedFallback)) {
+                $flashError = 'Ungültiges JSON-Format für die Fallback-Ketten.';
+            } else {
+                setSetting('balancer_max_concurrent', (string) $newMaxConcurrent);
+                setSetting('balancer_circuit_fail_threshold', (string) $newFailThreshold);
+                setSetting('balancer_circuit_cooldown_seconds', (string) $newCooldownSecs);
+                setSetting('balancer_orphan_timeout_seconds', (string) $newOrphanTimeout);
+                setSetting('balancer_backoff_base_ms', (string) $newBackoffBaseMs);
+                setSetting('balancer_backoff_max_ms', (string) $newBackoffMaxMs);
+                setSetting('balancer_backoff_jitter', $newBackoffJitter ? '1' : '0');
+                setSetting('balancer_weight_latency', (string) $newWeightLatency);
+                setSetting('balancer_weight_cost', (string) $newWeightCost);
+                setSetting('balancer_weight_capacity', (string) $newWeightCapacity);
+                saveFallbackChains($decodedFallback);
+
+                $balancerMaxConcurrent        = $newMaxConcurrent;
+                $balancerCircuitFailThreshold = $newFailThreshold;
+                $balancerCircuitCooldownSecs  = $newCooldownSecs;
+                $balancerOrphanTimeoutSecs    = $newOrphanTimeout;
+                $balancerBackoffBaseMs        = $newBackoffBaseMs;
+                $balancerBackoffMaxMs         = $newBackoffMaxMs;
+                $balancerBackoffJitter        = $newBackoffJitter;
+                $balancerWeightLatency        = $newWeightLatency;
+                $balancerWeightCost           = $newWeightCost;
+                $balancerWeightCapacity       = $newWeightCapacity;
+                $balancerFallbackChainsJson   = getBalancerSetting('balancer_fallback_chains');
+                $flashOk = 'Balancer- und Routing-Einstellungen gespeichert.';
+            }
 
         // ── Save streaming setting ────────────────────────────────────────────
         } elseif ($action === 'save_streaming_settings') {
@@ -842,6 +905,10 @@ try {
             e.is_active,
             e.ssh_host,
             e.ssh_user,
+            e.circuit_state,
+            e.consecutive_failures,
+            e.cooldown_until,
+            e.avg_latency_ms,
             COALESCE(SUM(CASE WHEN t.status = \'running\' THEN 1 ELSE 0 END), 0) AS cnt_running,
             COALESCE(SUM(CASE WHEN t.status = \'done\'    THEN 1 ELSE 0 END), 0) AS cnt_done,
             COALESCE(SUM(CASE WHEN t.status = \'error\'   THEN 1 ELSE 0 END), 0) AS cnt_error,
@@ -864,7 +931,8 @@ try {
                          THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0)      AS today_tokens
         FROM endpoints e
         LEFT JOIN tasks t ON t.endpoint_id = e.id
-        GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active, e.ssh_host, e.ssh_user
+        GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active, e.ssh_host, e.ssh_user,
+                 e.circuit_state, e.consecutive_failures, e.cooldown_until, e.avg_latency_ms
         ORDER BY e.sort_order ASC, e.id ASC
     ')->fetchAll();
 
@@ -1391,16 +1459,17 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         #config-searxng-card { order: 4; }
         #config-endpoints-card { order: 5; }
         #config-request-handling-card { order: 6; }
-        #config-sd-card { order: 7; }
-        #config-comfy-card { order: 8; }
-        #config-routing-card { order: 9; }
-        #config-embedding-card { order: 10; }
-        #config-hybrid-search-card { order: 11; }
-        #config-reranker-card { order: 12; }
-        #embedding-stats-card { order: 13; }
-        #config-system-messages-card { order: 14; }
-        #log-config-card { order: 15; }
-        #log-viewer-card { order: 16; }
+        #config-balancer-card { order: 7; }
+        #config-sd-card { order: 8; }
+        #config-comfy-card { order: 9; }
+        #config-routing-card { order: 10; }
+        #config-embedding-card { order: 11; }
+        #config-hybrid-search-card { order: 12; }
+        #config-reranker-card { order: 13; }
+        #embedding-stats-card { order: 14; }
+        #config-system-messages-card { order: 15; }
+        #log-config-card { order: 16; }
+        #log-viewer-card { order: 17; }
 
         /* ── User row hover ──────────────────────────────────────── */
         .user-row:hover td { background: rgba(108,99,255,.06); }
@@ -1804,6 +1873,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <a href="#config-searxng-card">🔎 Websuche</a>
     <a href="#config-endpoints-card">🔗 Endpunkte</a>
     <a href="#config-request-handling-card">📨 Anfragenhandling</a>
+    <a href="#config-balancer-card">⚖️ Balancer &amp; Routing</a>
     <a href="#config-sd-card">🎨 AUTOMATIC1111</a>
     <a href="#config-comfy-card">🖼️ ComfyUI</a>
     <a href="#config-routing-card">🧭 Modellrouting</a>
@@ -1957,6 +2027,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <tr>
                     <th>Endpunkt</th>
                     <th>Modell-Gruppe</th>
+                    <th>Status</th>
                     <th style="text-align:right">Laufend</th>
                     <th style="text-align:right">Erledigt (24 h)</th>
                     <th style="text-align:right">Erledigt (gesamt)</th>
@@ -1983,6 +2054,22 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                             </span>
                         <?php else: ?>
                             <span class="model-badge badge-empty">–</span>
+                        <?php endif; ?>
+                    </td>
+                    <td style="font-size:.78rem">
+                        <?php $circuitState = (string) ($s['circuit_state'] ?? 'closed'); ?>
+                        <?php if ($circuitState === 'open'): ?>
+                            <span style="color:var(--error)" title="Cooldown bis: <?= htmlspecialchars((string) ($s['cooldown_until'] ?? '')) ?>">🔴 Gesperrt (Circuit offen)</span>
+                        <?php elseif ($circuitState === 'half_open'): ?>
+                            <span style="color:var(--warning)">🟡 Testphase (Half-Open)</span>
+                        <?php else: ?>
+                            <span style="color:var(--success)">🟢 Gesund</span>
+                        <?php endif; ?>
+                        <?php if ((int) ($s['consecutive_failures'] ?? 0) > 0): ?>
+                            <br><span style="color:var(--text-muted)"><?= (int) $s['consecutive_failures'] ?>&thinsp;Fehler in Folge</span>
+                        <?php endif; ?>
+                        <?php if ($s['avg_latency_ms'] !== null): ?>
+                            <br><span style="color:var(--text-muted)">⌀&thinsp;<?= number_format((int) $s['avg_latency_ms']) ?>&thinsp;ms</span>
                         <?php endif; ?>
                     </td>
                     <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
@@ -2534,6 +2621,23 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     </p>
                 </div>
 
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ep-cost-weight">Relative Kosten (Routing-Gewichtung)</label>
+                        <input type="number" id="ep-cost-weight" name="ep_cost_weight"
+                               min="0.0001" max="1000" step="0.1"
+                               value="<?= $editEp ? htmlspecialchars((string) ($editEp['cost_weight'] ?? '1.0000')) : '1.0000' ?>">
+                        <p class="hint">Niedrigere Werte werden vom Router bevorzugt (z. B. günstigere Cloud-Instanz).</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="ep-capacity-weight">Relative Kapazität (Routing-Gewichtung)</label>
+                        <input type="number" id="ep-capacity-weight" name="ep_capacity_weight"
+                               min="0.0001" max="1000" step="0.1"
+                               value="<?= $editEp ? htmlspecialchars((string) ($editEp['capacity_weight'] ?? '1.0000')) : '1.0000' ?>">
+                        <p class="hint">Höhere Werte (z. B. bei stärkerer Hardware) lassen den Endpunkt bei gleicher Auslastung relativ weniger belastet erscheinen.</p>
+                    </div>
+                </div>
+
                 <!-- ── SSH-Zugangsdaten (Systemmetriken) ──────────────────────── -->
                 <details id="ep-ssh-details"<?= ($editEp && trim((string) ($editEp['ssh_host'] ?? '')) !== '') ? ' open' : '' ?>>
                     <summary style="cursor:pointer;font-weight:600;margin:12px 0 8px;color:var(--text-muted)">
@@ -2723,6 +2827,98 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                <div class="action-row">
                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
                </div>
+           </form>
+       </details>
+    </div>
+
+    <div class="card" id="config-balancer-card">
+       <details class="config-panel" id="config-balancer">
+           <summary>⚖️ Balancer &amp; Routing</summary>
+
+           <form method="POST">
+              <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+              <input type="hidden" name="action" value="save_balancer_settings">
+
+              <div class="form-group">
+                  <label for="balancer-max-concurrent">Maximale gleichzeitige Tasks je Endpunkt</label>
+                  <input type="number" id="balancer-max-concurrent" name="balancer_max_concurrent"
+                         min="1" max="100" value="<?= (int) $balancerMaxConcurrent ?>">
+                  <p class="hint">Ersetzt das früher fest codierte Limit von 4 gleichzeitig laufenden Tasks pro Endpunkt.</p>
+              </div>
+
+              <div class="form-group">
+                  <label for="balancer-circuit-fail-threshold">Circuit-Breaker: Fehler bis zur Sperrung</label>
+                  <input type="number" id="balancer-circuit-fail-threshold" name="balancer_circuit_fail_threshold"
+                         min="1" max="100" value="<?= (int) $balancerCircuitFailThreshold ?>">
+                  <p class="hint">Anzahl aufeinanderfolgender Fehlschläge, nach denen ein Endpunkt vorübergehend aus dem Routing genommen wird.</p>
+              </div>
+
+              <div class="form-group">
+                  <label for="balancer-circuit-cooldown">Circuit-Breaker: Cooldown (Sekunden)</label>
+                  <input type="number" id="balancer-circuit-cooldown" name="balancer_circuit_cooldown_seconds"
+                         min="1" max="3600" value="<?= (int) $balancerCircuitCooldownSecs ?>">
+                  <p class="hint">Wartezeit, bevor ein gesperrter Endpunkt automatisch mit einer Testanfrage (Half-Open) reaktiviert wird.</p>
+              </div>
+
+              <div class="form-group">
+                  <label for="balancer-orphan-timeout">Bereinigung verwaister Tasks nach (Sekunden)</label>
+                  <input type="number" id="balancer-orphan-timeout" name="balancer_orphan_timeout_seconds"
+                         min="10" max="86400" value="<?= (int) $balancerOrphanTimeoutSecs ?>">
+                  <p class="hint">Tasks, die länger als diese Zeit im Status „running“ verharren (z. B. durch einen Absturz), werden automatisch als Fehler markiert und geben den Slot wieder frei.</p>
+              </div>
+
+              <div class="form-group">
+                  <label for="balancer-backoff-base">Backoff-Basiswert (ms)</label>
+                  <input type="number" id="balancer-backoff-base" name="balancer_backoff_base_ms"
+                         min="1" max="60000" value="<?= (int) $balancerBackoffBaseMs ?>">
+              </div>
+
+              <div class="form-group">
+                  <label for="balancer-backoff-max">Backoff-Maximalwert (ms)</label>
+                  <input type="number" id="balancer-backoff-max" name="balancer_backoff_max_ms"
+                         min="1" max="600000" value="<?= (int) $balancerBackoffMaxMs ?>">
+                  <p class="hint">Exponentielles Backoff zwischen Wiederholungsversuchen auf einen anderen Endpunkt, begrenzt auf diesen Maximalwert.</p>
+              </div>
+
+              <div class="form-group">
+                  <label>
+                      <input type="checkbox" name="balancer_backoff_jitter" <?= $balancerBackoffJitter ? 'checked' : '' ?>>
+                      Zufälligen Jitter zum Backoff hinzufügen
+                  </label>
+                  <p class="hint">Vermeidet synchronisierte Wiederholungsversuche mehrerer gleichzeitiger Anfragen ("Retry-Storm").</p>
+              </div>
+
+              <div class="form-group">
+                  <label for="balancer-weight-latency">Routing-Gewicht: Latenz (0–1)</label>
+                  <input type="number" id="balancer-weight-latency" name="balancer_weight_latency"
+                         min="0" max="1" step="0.05" value="<?= htmlspecialchars((string) $balancerWeightLatency) ?>">
+              </div>
+              <div class="form-group">
+                  <label for="balancer-weight-cost">Routing-Gewicht: Kosten (0–1)</label>
+                  <input type="number" id="balancer-weight-cost" name="balancer_weight_cost"
+                         min="0" max="1" step="0.05" value="<?= htmlspecialchars((string) $balancerWeightCost) ?>">
+              </div>
+              <div class="form-group">
+                  <label for="balancer-weight-capacity">Routing-Gewicht: Kapazität (0–1)</label>
+                  <input type="number" id="balancer-weight-capacity" name="balancer_weight_capacity"
+                         min="0" max="1" step="0.05" value="<?= htmlspecialchars((string) $balancerWeightCapacity) ?>">
+                  <p class="hint">Bestimmt, wie stark Latenz, relative Kosten (siehe Endpunkt-Einstellungen) und freie Kapazität die Endpunkt-Auswahl beeinflussen.</p>
+              </div>
+
+              <div class="form-group">
+                  <label for="balancer-fallback-chains">Konfigurierbare Fallback-Ketten (JSON)</label>
+                  <textarea id="balancer-fallback-chains" name="balancer_fallback_chains" rows="4"
+                            style="width:100%;font-family:monospace"><?= htmlspecialchars($balancerFallbackChainsJson) ?></textarea>
+                  <p class="hint">
+                      Ordnet einem angefragten Modell eine geordnete Liste von Ausweichmodellen zu, z. B.
+                      <code>{"big-model:70b": ["big-model:34b", "big-model:8b"]}</code>. Wird verwendet, bevor ein Endpunkt
+                      endgültig als nicht verfügbar gilt.
+                  </p>
+              </div>
+
+              <div class="action-row">
+                  <button type="submit" class="btn btn-primary">💾 Speichern</button>
+              </div>
            </form>
        </details>
     </div>
