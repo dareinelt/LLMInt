@@ -22,9 +22,15 @@ $newUserDefaultModel = trim(getSetting('new_user_default_model', ''));
 $visionModel = trim(getSetting('vision_model', ''));
 $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
 $intelligenceUpgradeMessage = getSetting('intelligence_upgrade_message', '');
+if ($intelligenceUpgradeMessage === '') {
+    $intelligenceUpgradeMessage = 'Es stehen Ressourcen bereit um die Aufgabe erneut mit größerer Intelligenz zu bearbeiten. Dies kann länger dauern als zuvor, kann jedoch genauere Antworten liefern. Fortfahren?';
+}
 $loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
 $loginBannerText    = getSetting('login_banner_text', '');
 $registrationEmailText = getSetting('registration_email_text', '');
+if ($registrationEmailText === '') {
+    $registrationEmailText = 'danke für Deine Registrierung bei {sitename}.';
+}
 $streamingEnabled = getSetting('streaming_enabled', '1') === '1';
 $balancerMaxConcurrent        = getBalancerMaxConcurrent();
 $balancerCircuitFailThreshold = getBalancerCircuitFailThreshold();
@@ -3809,7 +3815,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <p class="hint">
                         Dieser Text erscheint in der E-Mail, die neue Benutzer nach der Registrierung zur
                         Bestätigung ihrer E-Mail-Adresse erhalten. Platzhalter <code>{sitename}</code> wird durch
-                        den Namen der Anwendung ersetzt. Leer lassen, um den Standardtext zu verwenden:
+                        den Namen der Anwendung ersetzt, Platzhalter <code>{username}</code> wird durch den
+                        Benutzernamen ersetzt. Leer lassen, um den Standardtext zu verwenden:
                         <em>„danke für Deine Registrierung bei {sitename}."</em>
                     </p>
                 </div>
