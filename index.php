@@ -365,6 +365,20 @@ $csrfToken = $_SESSION['csrf_token'];
         }
         .message.assistant .bubble del { opacity: .7; }
 
+        .message.assistant .bubble li.clickable-question {
+            cursor: pointer;
+            border-radius: 6px;
+            padding: .1em .4em;
+            margin: .15em -.4em;
+            transition: background .15s ease, color .15s ease;
+        }
+        .message.assistant .bubble li.clickable-question:hover,
+        .message.assistant .bubble li.clickable-question:focus-visible {
+            background: rgba(108, 99, 255, .16);
+            color: var(--accent);
+            outline: none;
+        }
+
         /* ── LaTeX-ish math ($...$ / $$...$$) ───────────────────────── */
         .message.assistant .bubble .math-inline {
             font-family: 'Cambria Math', 'STIX Two Math', 'Latin Modern Math', Georgia, serif;
@@ -1763,6 +1777,43 @@ $csrfToken = $_SESSION['csrf_token'];
         return reinsertMath(html, mathStore);
     }
 
+    /* ── Make trailing "what next?" questions clickable ──── */
+
+    // If the assistant's answer ends with a list (e.g. "Wie soll es weitergehen?"
+    // with numbered options), let the user click an item to send it as their
+    // next message instead of having to retype it.
+    function makeAnswerListsClickable(containerEl) {
+        if (!containerEl) return;
+        const lists = containerEl.querySelectorAll(':scope > ol, :scope > ul');
+        if (!lists.length) return;
+        const lastList = lists[lists.length - 1];
+
+        lastList.querySelectorAll(':scope > li').forEach((li) => {
+            if (li.dataset.clickableBound === '1') return;
+            li.dataset.clickableBound = '1';
+            li.classList.add('clickable-question');
+            li.setAttribute('role', 'button');
+            li.setAttribute('tabindex', '0');
+
+            const activate = () => {
+                if (isStreaming) return;
+                const text = li.textContent.trim();
+                if (!text) return;
+                userInput.value = text;
+                autoResizeTextarea(userInput);
+                sendMessage();
+            };
+
+            li.addEventListener('click', activate);
+            li.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    activate();
+                }
+            });
+        });
+    }
+
     /* ── Render a message bubble ─────────────────────────── */
 
     function appendMessage(role, content, streaming = false) {
@@ -1790,6 +1841,7 @@ $csrfToken = $_SESSION['csrf_token'];
         bubble.className = 'bubble' + (streaming ? ' streaming' : '');
         if (role === 'assistant') {
             bubble.innerHTML = content ? renderMarkdown(content) : '';
+            if (content && !streaming) makeAnswerListsClickable(bubble);
         } else {
             bubble.textContent = content;
         }
@@ -2123,6 +2175,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
                 finalText = finalText || '(Leere Antwort)';
                 bubble.innerHTML = renderBubbleContent(finalThinking, finalText);
+                makeAnswerListsClickable(bubble);
                 setResponseDetailsForBubble(bubble, retryResponseDetails);
                 bubble.classList.remove('streaming');
 
@@ -2215,6 +2268,7 @@ $csrfToken = $_SESSION['csrf_token'];
             }
 
             bubble.innerHTML = renderBubbleContent(accumulatedThinking, accumulated || '(Leere Antwort)');
+            makeAnswerListsClickable(bubble);
             setResponseDetailsForBubble(bubble, responseDetails);
             bubble.classList.remove('streaming');
 
