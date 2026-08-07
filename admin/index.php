@@ -1457,6 +1457,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         input[type="url"],
         input[type="number"],
         input[type="password"],
+        input[type="email"],
         select {
             width: 100%;
             padding: 8px 12px;
