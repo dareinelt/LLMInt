@@ -894,6 +894,27 @@ $endpoints = $db->query(
     'SELECT * FROM endpoints ORDER BY sort_order ASC, id ASC'
 )->fetchAll();
 
+// Safe edit data for every endpoint (never expose ssh_password) — used both by
+// the "✏ Bearbeiten" button in the Endpunkte table and by clicking an endpoint
+// node in the Dashboard mindmap, so both open the identical edit overlay.
+$epEditDataMap = [];
+foreach ($endpoints as $ep) {
+    $epEditDataMap[(int) $ep['id']] = [
+        'id'                       => $ep['id'],
+        'alias'                    => $ep['alias'],
+        'base_url'                 => $ep['base_url'],
+        'timeout'                  => $ep['timeout'],
+        'default_model'            => $ep['default_model'],
+        'specialized_for_category' => $ep['specialized_for_category'] ?? '',
+        'supports_tool_calling'    => (int) ($ep['supports_tool_calling'] ?? 1),
+        'is_llamacpp'              => (int) ($ep['is_llamacpp'] ?? 0),
+        'is_active'                => $ep['is_active'],
+        'ssh_host'                 => $ep['ssh_host'] ?? '',
+        'ssh_port'                 => $ep['ssh_port'] ?? 22,
+        'ssh_user'                 => $ep['ssh_user'] ?? '',
+    ];
+}
+
 $users = $db->query(
     'SELECT id, username, email, email_verified, default_model, can_upload_documents, role, auth_source, created_at, last_login
        FROM users ORDER BY id'
@@ -2478,23 +2499,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         <?= $ep['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
                     </td>
                     <td>
-                        <?php
-                        // Build safe edit data — never expose ssh_password in inline JS
-                        $epEdit = [
-                            'id'                       => $ep['id'],
-                            'alias'                    => $ep['alias'],
-                            'base_url'                 => $ep['base_url'],
-                            'timeout'                  => $ep['timeout'],
-                            'default_model'            => $ep['default_model'],
-                            'specialized_for_category' => $ep['specialized_for_category'] ?? '',
-                            'supports_tool_calling'    => (int) ($ep['supports_tool_calling'] ?? 1),
-                            'is_llamacpp'              => (int) ($ep['is_llamacpp'] ?? 0),
-                            'is_active'                => $ep['is_active'],
-                            'ssh_host'                 => $ep['ssh_host'] ?? '',
-                            'ssh_port'                 => $ep['ssh_port'] ?? 22,
-                            'ssh_user'                 => $ep['ssh_user'] ?? '',
-                        ];
-                        ?>
+                        <?php $epEdit = $epEditDataMap[(int) $ep['id']]; ?>
                         <button type="button" class="btn btn-sm"
                                 onclick="startEdit(<?= htmlspecialchars(json_encode($epEdit), ENT_QUOTES) ?>)">
                             ✏ Bearbeiten
@@ -2516,7 +2521,10 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         <?php endif; ?>
 
         <!-- ── Add / Edit form ─────────────────────────────────────────────── -->
-        <div class="ep-form-section">
+        <!-- Placeholder marker: keeps this form's original position in the DOM
+             when it is temporarily moved into the endpoint edit overlay. -->
+        <div id="ep-form-section-anchor"></div>
+        <div class="ep-form-section" id="ep-form-section">
             <h3 id="ep-form-title">➕ Endpunkt hinzufügen</h3>
 
             <form method="POST" id="ep-form">
@@ -4069,6 +4077,26 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
+         Endpoint edit overlay (opened by clicking an endpoint node in the
+         Dashboard mindmap). Hosts the very same Add/Edit form used under
+         "Endpunkte" → "✏ Bearbeiten", so it offers exactly the same options.
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="endpoint-edit-overlay" style="display:none;position:fixed;inset:0;z-index:1000;
+         background:rgba(0,0,0,.55);backdrop-filter:blur(4px);
+         align-items:center;justify-content:center;overflow:auto;padding:24px">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+                    padding:28px 32px;max-width:640px;width:calc(100% - 32px);
+                    max-height:calc(100vh - 48px);overflow:auto;
+                    box-shadow:0 24px 60px rgba(0,0,0,.6);position:relative;margin:auto">
+            <button id="endpoint-edit-overlay-close"
+                    style="position:absolute;top:14px;right:16px;background:none;border:none;
+                           color:var(--text-muted);font-size:1.2rem;cursor:pointer;line-height:1"
+                    aria-label="Schließen">✕</button>
+            <div id="endpoint-edit-overlay-body"></div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
          User overlay
     ═══════════════════════════════════════════════════════════════════════ -->
     <div id="user-overlay" style="display:none;position:fixed;inset:0;z-index:1000;
@@ -4296,18 +4324,61 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const sshUser     = document.getElementById('ep-ssh-user');
     const sshPassword = document.getElementById('ep-ssh-password');
 
+    // Full edit data for every endpoint (id → fields), used to open the
+    // endpoint edit overlay from a Dashboard mindmap click.
+    window.EP_EDIT_DATA = <?= json_encode($epEditDataMap, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    const epFormSection          = document.getElementById('ep-form-section');
+    const epFormSectionAnchor    = document.getElementById('ep-form-section-anchor');
+    const endpointEditOverlay     = document.getElementById('endpoint-edit-overlay');
+    const endpointEditOverlayBody = document.getElementById('endpoint-edit-overlay-body');
+    const endpointEditOverlayClose = document.getElementById('endpoint-edit-overlay-close');
+
+    /** Reveal the (possibly relocated) add/edit form to the user. */
+    function revealForm() {
+        if (endpointEditOverlayBody && endpointEditOverlayBody.contains(epFormSection)) {
+            return; // already visible inside the overlay
+        }
+        if (endpointConfigPanel) { endpointConfigPanel.open = true; }
+        epFormSection.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    /** Move the add/edit form into the overlay and show it, pre-filled for `ep`. */
+    window.openEndpointEditOverlay = function (ep) {
+        if (!ep || !endpointEditOverlay || !endpointEditOverlayBody) return;
+        endpointEditOverlayBody.appendChild(epFormSection);
+        window.startEdit(ep);
+        endpointEditOverlay.style.display = 'flex';
+    };
+
+    /** Close the overlay and move the form back to its original place. */
+    function closeEndpointEditOverlay() {
+        if (!endpointEditOverlay) return;
+        endpointEditOverlay.style.display = 'none';
+        if (epFormSectionAnchor && epFormSectionAnchor.parentNode) {
+            epFormSectionAnchor.parentNode.insertBefore(epFormSection, epFormSectionAnchor.nextSibling);
+        }
+    }
+    if (endpointEditOverlayClose) endpointEditOverlayClose.addEventListener('click', closeEndpointEditOverlay);
+    if (endpointEditOverlay) {
+        endpointEditOverlay.addEventListener('click', function (e) {
+            if (e.target === endpointEditOverlay) closeEndpointEditOverlay();
+        });
+    }
+
     // Pre-fill the form when the page loaded with ?edit=<id>
     <?php if ($editEp): ?>
     document.getElementById('ep-form-title').textContent = '✏ Endpunkt bearbeiten';
     document.getElementById('ep-action').value = 'update_endpoint';
     document.getElementById('ep-id').value     = <?= (int) $editEp['id'] ?>;
     if (endpointConfigPanel) { endpointConfigPanel.open = true; }
-    document.querySelector('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
+    epFormSection.scrollIntoView({ behavior: 'smooth' });
     <?php endif; ?>
 
     /**
      * Populate the add/edit form with an existing endpoint's values.
-     * Called by the "Edit" button in each table row.
+     * Called by the "Edit" button in each table row, and when the endpoint
+     * edit overlay is opened from the Dashboard mindmap.
      */
     window.startEdit = function (ep) {
         formTitle.textContent  = '✏ Endpunkt bearbeiten';
@@ -4330,8 +4401,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         if (sshUser)     sshUser.value     = ep.ssh_user || '';
         if (sshPassword) sshPassword.value = '';   // never pre-fill password
         if (sshDetails && (ep.ssh_host || '').trim() !== '') sshDetails.open = true;
-        if (endpointConfigPanel) { endpointConfigPanel.open = true; }
-        document.querySelector('.ep-form-section').scrollIntoView({ behavior: 'smooth' });
+        revealForm();
     };
 
     /** Reset form back to "add" mode. */
@@ -4353,6 +4423,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         if (sshUser)     sshUser.value     = '';
         if (sshPassword) sshPassword.value = '';
         if (sshDetails)  sshDetails.open   = false;
+        if (endpointEditOverlayBody && endpointEditOverlayBody.contains(epFormSection)) {
+            closeEndpointEditOverlay();
+        }
     };
 
     /** Load available models from the URL currently typed in the form. */
@@ -5255,6 +5328,15 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const curEpH   = epHMap[ep.id] || EP_H;
             const isActive = ep.is_active === 1;
             const g        = mk('g', { transform: `translate(${COL3_X},${eY - curEpH / 2})` });
+
+            // Clicking an endpoint node opens the same edit overlay as the
+            // "✏ Bearbeiten" button under "Endpunkte".
+            if (window.EP_EDIT_DATA && window.EP_EDIT_DATA[ep.id]) {
+                g.style.cursor = 'pointer';
+                g.addEventListener('click', function () {
+                    window.openEndpointEditOverlay(window.EP_EDIT_DATA[ep.id]);
+                });
+            }
 
             g.appendChild(mk('rect', {
                 x: 0, y: 0, width: EP_W, height: curEpH,
