@@ -1714,7 +1714,10 @@ if (mt_rand(1, 20) === 1) {
 
 // When the user-selected model is also the routing decision model, reserve one
 // slot per endpoint exclusively for routing decisions so they are never delayed.
-$userSlotMax = ($routingDecisionModel !== '' && $model === $routingDecisionModel) ? 3 : 4;
+$balancerMaxConcurrentForChat = getBalancerMaxConcurrent();
+$userSlotMax = ($routingDecisionModel !== '' && $model === $routingDecisionModel)
+    ? max(1, $balancerMaxConcurrentForChat - 1)
+    : $balancerMaxConcurrentForChat;
 
 try {
     $slot = pickEndpointForModel($model, $userSlotMax);
@@ -1910,7 +1913,7 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
             $upgrade = getUpgradeModelSuggestionForRequestedModel($model, $detectedCategory);
             if (is_array($upgrade) && !empty($upgrade['model'])) {
                 $upgradeModel = (string) $upgrade['model'];
-                $newSlot = pickEndpointForModel($upgradeModel, 4);
+                $newSlot = pickEndpointForModel($upgradeModel, null);
                 if ($newSlot !== null) {
                     $model = $upgradeModel;
                     $payload['model'] = $upgradeModel;
