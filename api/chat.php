@@ -1542,6 +1542,78 @@ foreach ($payload['messages'] as $msg) {
 
 $model = $payload['model'];
 
+// Extract and validate the optional session ID for conversation persistence.
+$sessionId = '';
+if (isset($payload['session_id']) && is_string($payload['session_id'])) {
+    $rawSessionId = $payload['session_id'];
+    if (preg_match('/^[a-f0-9]{8,128}$/', $rawSessionId)) {
+        $sessionId = $rawSessionId;
+    }
+}
+
+// Resolve the currently logged-in user for session ownership.
+$sessionUserId = isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null;
+
+// ── Intelligence group prefix (e.g. "@@35b …") ───────────────────────────────
+// Logged-in users can address an intelligence group directly. The chosen group
+// overrides user defaults, the standard model and rule-based routing and stays
+// active for the rest of the chat session.
+$intelligenceGroup = null;
+
+if ($sessionUserId !== null) {
+    $requestedGroup = null;
+    if (isset($payload['intelligence_group']) && is_string($payload['intelligence_group'])) {
+        $requestedGroup = trim($payload['intelligence_group']);
+    }
+
+    // A prefix inside the message text takes precedence over the UI selection.
+    foreach ($payload['messages'] as $idx => $msg) {
+        if (($msg['role'] ?? '') !== 'user' || !is_string($msg['content'] ?? null)) {
+            continue;
+        }
+        [$token, $stripped] = extractIntelligenceGroupPrefix($msg['content']);
+        if ($token === '') {
+            continue;
+        }
+        $payload['messages'][$idx]['content'] = $stripped;
+        $requestedGroup = $token;
+    }
+
+    if ($requestedGroup !== null && $requestedGroup !== '') {
+        $groupModel = resolveIntelligenceGroupModel($requestedGroup);
+        if ($groupModel === null) {
+            $available = implode(', ', array_keys(listIntelligenceGroups()));
+            $errorText = 'Für die Intelligenzgruppe "' . $requestedGroup . '" ist kein Modell verfügbar.'
+                . ($available !== '' ? ' Verfügbar: ' . $available . '.' : '');
+            writeLog('warning', 'Unbekannte Intelligenzgruppe von Nutzer (' . getClientIp() . ') angefragt: ' . $requestedGroup . '.');
+            if (isset($payload['stream']) && $payload['stream'] === true) {
+                emitSseData(['error' => $errorText]);
+            } else {
+                http_response_code(400);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['error' => $errorText]);
+            }
+            exit;
+        }
+        $intelligenceGroup = [
+            'label' => normalizeIntelligenceGroupLabel($requestedGroup),
+            'model' => $groupModel,
+        ];
+        setSessionIntelligenceGroup($sessionId, $intelligenceGroup['label'], $groupModel, $sessionUserId);
+        writeLog('info', 'Intelligenzgruppe ' . $intelligenceGroup['label'] . ' von Nutzer (' . getClientIp() . ') gewählt (Modell: ' . $groupModel . ').');
+    } elseif ($requestedGroup === '') {
+        // Explicitly removed in the UI.
+        clearSessionIntelligenceGroup($sessionId);
+    } else {
+        $intelligenceGroup = getSessionIntelligenceGroup($sessionId);
+    }
+
+    if ($intelligenceGroup !== null) {
+        $model = $intelligenceGroup['model'];
+        $payload['model'] = $model;
+    }
+}
+
 // ── Prompt Security check ─────────────────────────────────────────────────────
 // Every chat request is evaluated before reaching the LLM pipeline.
 {
@@ -1587,7 +1659,7 @@ $model = $payload['model'];
 
 $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
 $detectedCategory = '';
-if ($routingDecisionModel !== '') {
+if ($routingDecisionModel !== '' && $intelligenceGroup === null) {
     // Extract the last user message text for classification.
     $lastUserText = '';
     foreach (array_reverse($payload['messages']) as $msg) {
@@ -1664,18 +1736,11 @@ if ($routingDecisionModel !== '') {
 }
 
 $intelligenceUpgrade = null;
-try {
-    $intelligenceUpgrade = getUpgradeModelSuggestionForRequestedModel($model, $detectedCategory);
-} catch (Throwable $e) {
-    $intelligenceUpgrade = null;
-}
-
-// Extract and validate the optional session ID for conversation persistence.
-$sessionId = '';
-if (isset($payload['session_id']) && is_string($payload['session_id'])) {
-    $rawSessionId = $payload['session_id'];
-    if (preg_match('/^[a-f0-9]{8,128}$/', $rawSessionId)) {
-        $sessionId = $rawSessionId;
+if ($intelligenceGroup === null) {
+    try {
+        $intelligenceUpgrade = getUpgradeModelSuggestionForRequestedModel($model, $detectedCategory);
+    } catch (Throwable $e) {
+        $intelligenceUpgrade = null;
     }
 }
 
@@ -1685,7 +1750,10 @@ if (isset($payload['session_id']) && is_string($payload['session_id'])) {
 // routed to the higher-intelligence endpoint.
 $upgradeAccepted = isset($payload['intelligence_upgrade_accepted']) && $payload['intelligence_upgrade_accepted'] === true;
 
-if ($upgradeAccepted && $sessionId !== '' && $model !== '') {
+if ($intelligenceGroup !== null) {
+    // An explicitly addressed intelligence group wins over any stored upgrade.
+    $upgradeAccepted = false;
+} elseif ($upgradeAccepted && $sessionId !== '' && $model !== '') {
     // Persist the accepted upgrade model so future requests in this session
     // (within 20 minutes) are automatically routed to it.
     setSessionUpgradeModel($sessionId, $model);
@@ -1700,8 +1768,6 @@ if ($upgradeAccepted && $sessionId !== '' && $model !== '') {
     }
 }
 
-// Resolve the currently logged-in user for session ownership.
-$sessionUserId = isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null;
 // Release the session write lock immediately. chat.php can run for many seconds
 // (waiting for the LLM response) and holding the lock blocks every other same-session
 // request – most critically the admin/load_stats.php polling endpoint.

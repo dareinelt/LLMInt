@@ -48,7 +48,7 @@ if ($action === 'load') {
     }
     try {
         $stmt = getDb()->prepare(
-            'SELECT session_id, title, model, messages
+            'SELECT session_id, title, model, messages, group_label
                FROM conversation_sessions
               WHERE session_id = ? AND user_id = ?'
         );
@@ -65,6 +65,7 @@ if ($action === 'load') {
             'title'      => $row['title'],
             'model'      => $row['model'],
             'messages'   => is_array($messages) ? $messages : [],
+            'intelligence_group' => (string) ($row['group_label'] ?? ''),
         ]);
     } catch (Throwable $e) {
         http_response_code(500);
