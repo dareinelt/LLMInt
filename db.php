@@ -1304,6 +1304,15 @@ function resolveUserModel(string $preferredModel): string
 }
 
 /**
+ * Whether users may address an intelligence group with the "@@" prefix.
+ * Configurable in the administration; enabled by default.
+ */
+function isIntelligenceGroupFeatureEnabled(): bool
+{
+    return getSetting('intelligence_group_enabled', '1') === '1';
+}
+
+/**
  * Format an intelligence score as a canonical group label, e.g. 35.0 → "35b".
  */
 function intelligenceGroupLabel(float $score): string

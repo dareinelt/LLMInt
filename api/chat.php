@@ -1560,7 +1560,7 @@ $sessionUserId = isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : nu
 // active for the rest of the chat session.
 $intelligenceGroup = null;
 
-if ($sessionUserId !== null) {
+if ($sessionUserId !== null && isIntelligenceGroupFeatureEnabled()) {
     $requestedGroup = null;
     if (isset($payload['intelligence_group']) && is_string($payload['intelligence_group'])) {
         $requestedGroup = trim($payload['intelligence_group']);

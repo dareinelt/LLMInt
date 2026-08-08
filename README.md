@@ -130,6 +130,7 @@ Angemeldete Benutzer können in der Chat-Eingabezeile mit dem Präfix `@@` eine 
 - Die gewählte Gruppe überschreibt Benutzer-Standardmodelle, das Standardmodell und die regelbasierte Modellauswahl.
 - Die Gruppe bleibt für den aktuellen Chat aktiv, bis sie entfernt oder ein neuer Chat gestartet wird.
 - Existiert zur angegebenen Gruppe kein Modell auf einem aktiven Endpunkt, wird die Anfrage mit einem Hinweis auf die verfügbaren Gruppen abgewiesen.
+- Das Feature lässt sich in der Administration unter **Anfragenhandling** mit der Option **Direkte Modellwahl über Intelligenzgruppen aktivieren** ein- und ausschalten (Standard: aktiviert). Ist es deaktiviert, wird das Präfix nicht ausgewertet und bleibt Teil der Nachricht.
 
 ## Lastverteilung
 

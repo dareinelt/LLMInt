@@ -43,8 +43,10 @@ if ($loggedIn && isset($_SESSION['admin_id'])) {
 }
 
 // Intelligence groups (e.g. "35b") that can be addressed with the "@@" prefix.
+// The feature can be switched off in the administration.
+$intelligenceGroupEnabled = isIntelligenceGroupFeatureEnabled();
 $intelligenceGroups = [];
-if ($loggedIn) {
+if ($loggedIn && $intelligenceGroupEnabled) {
     try {
         $intelligenceGroups = array_keys(listIntelligenceGroups());
     } catch (Throwable $_e) {
@@ -1307,6 +1309,8 @@ $csrfToken = $_SESSION['csrf_token'];
     const loggedIn = <?= $loggedIn ? 'true' : 'false' ?>;
 
     /* ── Intelligence groups (addressed with the "@@" prefix) ─── */
+    /* Whether the feature is enabled in the administration. */
+    const intelligenceGroupEnabled = <?= $intelligenceGroupEnabled ? 'true' : 'false' ?>;
     /* Available groups derived from the models of all active endpoints. */
     const intelligenceGroups = <?= json_encode($intelligenceGroups) ?>;
 
@@ -1354,6 +1358,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
     /** Turn a leading "@@<group>" in the input into a pill as soon as it is typed. */
     function applyGroupPrefixFromInput() {
+        if (!intelligenceGroupEnabled) return;
         const m = /^\s*@@(\d+(?:[.,]\d+)?\s*[bB]?)(\s+|$)/.exec(userInput.value);
         if (!m) return;
         const label = normalizeGroupToken(m[1]);
@@ -1452,7 +1457,7 @@ $csrfToken = $_SESSION['csrf_token'];
             sessionStorage.setItem('chat_session_id', sessionId);
 
             // Restore the intelligence group of the loaded chat.
-            activeGroup  = typeof data.intelligence_group === 'string' ? data.intelligence_group : '';
+            activeGroup  = (intelligenceGroupEnabled && typeof data.intelligence_group === 'string') ? data.intelligence_group : '';
             groupChanged = false;
             renderGroupPill();
 
@@ -2360,7 +2365,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
         // Only transmit the group when it changed – otherwise the server keeps
         // the group that is already stored for this chat session.
-        if (loggedIn && groupChanged) {
+        if (loggedIn && intelligenceGroupEnabled && groupChanged) {
             payload.intelligence_group = activeGroup;
             groupChanged = false;
         }
@@ -2432,7 +2437,7 @@ $csrfToken = $_SESSION['csrf_token'];
     });
 
     userInput.addEventListener('input', () => {
-        if (loggedIn) applyGroupPrefixFromInput();
+        if (loggedIn && intelligenceGroupEnabled) applyGroupPrefixFromInput();
         autoResizeTextarea(userInput);
     });
 
@@ -2454,7 +2459,7 @@ $csrfToken = $_SESSION['csrf_token'];
         fetch('api/chat_sessions.php?action=load&session_id=' + encodeURIComponent(sessionId))
             .then(res => res.ok ? res.json() : null)
             .then(data => {
-                if (data && typeof data.intelligence_group === 'string' && data.intelligence_group) {
+                if (intelligenceGroupEnabled && data && typeof data.intelligence_group === 'string' && data.intelligence_group) {
                     setActiveGroup(data.intelligence_group, false);
                 }
             })
