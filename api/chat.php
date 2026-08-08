@@ -1829,8 +1829,11 @@ try {
         }
         if ($allBusy) {
             $intelligenceLabel = $model;
-            if (preg_match('/(\d+(?:[.,]\d+)?)\s*b\b/i', $model, $ilm)) {
-                $intelligenceLabel = $ilm[0];
+            $intelligenceScore = modelIntelligenceScore($model);
+            if ($intelligenceScore !== null) {
+                $intelligenceLabel = (abs($intelligenceScore - round($intelligenceScore)) < 0.00001)
+                    ? ((string) ((int) round($intelligenceScore))) . 'B'
+                    : rtrim(rtrim(number_format($intelligenceScore, 2, '.', ''), '0'), '.') . 'B';
             }
             writeLog('warning', 'Die Endpunkte mit der Intelligenz ' . $intelligenceLabel . ' sind stark ausgelastet (mehr als zwei laufende Sessions je Endpunkt). Bitte erwägen Sie, mehr Endpunkte zur Verfügung zu stellen, um Verzögerungen zu vermeiden.');
         }

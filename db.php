@@ -1207,20 +1207,38 @@ function listUserConversations(int $userId): array
 
 /**
  * Returns null when no numeric "Xb" label is found.
+ *
+ * MoE model names additionally carry the number of *active* parameters as an
+ * "A<n>B" token (e.g. Qwen3.5-397B-A17B, Qwen3.5-35B-A3B, gemma-4-26B-A4B).
+ * Those active-parameter markers are ignored – only the total parameter count
+ * ("397b", "35b", "26b") counts as the model's intelligence. When a name
+ * carries nothing but an active-parameter token, that value is used as a
+ * fallback so the model still receives a score.
  */
 function modelIntelligenceScore(string $modelName): ?float
 {
-    if ($modelName === '' || !preg_match_all('/(\d+(?:[.,]\d+)?)\s*b\b/i', $modelName, $m)) {
+    if ($modelName === '' || !preg_match_all('/(?:\b(a))?(\d+(?:[.,]\d+)?)\s*b\b/i', $modelName, $m, PREG_SET_ORDER)) {
         return null;
     }
-    $best = null;
-    foreach ($m[1] as $raw) {
-        $n = (float) str_replace(',', '.', $raw);
-        if ($n > 0 && ($best === null || $n > $best)) {
+    $best     = null;
+    $fallback = null;
+    foreach ($m as $match) {
+        $n = (float) str_replace(',', '.', $match[2]);
+        if ($n <= 0) {
+            continue;
+        }
+        if (($match[1] ?? '') !== '') {
+            // Active-parameter marker (A17B, A3B, …) – only a last resort.
+            if ($fallback === null || $n > $fallback) {
+                $fallback = $n;
+            }
+            continue;
+        }
+        if ($best === null || $n > $best) {
             $best = $n;
         }
     }
-    return $best;
+    return $best ?? $fallback;
 }
 
 /**
