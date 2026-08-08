@@ -169,30 +169,12 @@ function hasActiveEndpointForModel(string $model): bool
 
 /**
  * Extracts a model "intelligence" value from common model names (e.g. 1b, 4b, 11b, 27b).
- * Returns null when no such marker can be found.
+ * MoE active-parameter markers (A17B, A3B, A4B, …) are ignored – only the total
+ * parameter count is used. Returns null when no such marker can be found.
  */
 function extractModelIntelligenceB(string $model): ?float
 {
-    if ($model === '') {
-        return null;
-    }
-
-    if (!preg_match_all('/(\d+(?:[.,]\d+)?)\s*b\b/i', $model, $matches) || empty($matches[1])) {
-        return null;
-    }
-
-    $best = null;
-    foreach ($matches[1] as $raw) {
-        $num = (float) str_replace(',', '.', $raw);
-        if ($num <= 0) {
-            continue;
-        }
-        if ($best === null || $num > $best) {
-            $best = $num;
-        }
-    }
-
-    return $best;
+    return modelIntelligenceScore($model);
 }
 
 /**

@@ -1273,25 +1273,14 @@ $colorIdx      = 0;
 
 /**
  * Extracts the intelligence label (e.g. "7b", "27b") from a model name.
+ * MoE active-parameter markers (A17B, A3B, A4B, …) are ignored.
  */
 function modelIntelligenceLabel(string $model): string
 {
     if ($model === '') {
         return '–';
     }
-    if (!preg_match_all('/(\d+(?:[.,]\d+)?)\s*b\b/i', $model, $matches) || empty($matches[1])) {
-        return '–';
-    }
-    $best = null;
-    foreach ($matches[1] as $raw) {
-        $num = (float) str_replace(',', '.', $raw);
-        if ($num <= 0) {
-            continue;
-        }
-        if ($best === null || $num > $best) {
-            $best = $num;
-        }
-    }
+    $best = modelIntelligenceScore($model);
     if ($best === null) {
         return '–';
     }
@@ -4969,14 +4958,21 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     function extractIntelligenceLabel(modelName) {
         if (!modelName) return '–';
-        const matches = [...String(modelName).matchAll(/(\d+(?:[.,]\d+)?)\s*b\b/gi)];
+        const matches = [...String(modelName).matchAll(/(?:\b(a))?(\d+(?:[.,]\d+)?)\s*b\b/gi)];
         if (matches.length === 0) return '–';
         let best = null;
+        let fallback = null;
         for (const m of matches) {
-            const v = parseFloat((m[1] || '').replace(',', '.'));
+            const v = parseFloat((m[2] || '').replace(',', '.'));
             if (!Number.isFinite(v) || v <= 0) continue;
+            if (m[1]) {
+                // MoE active-parameter marker (A17B, A3B, …) – only a fallback.
+                if (fallback === null || v > fallback) fallback = v;
+                continue;
+            }
             if (best === null || v > best) best = v;
         }
+        if (best === null) best = fallback;
         if (best === null) return '–';
         const rounded = Math.round(best);
         if (Math.abs(best - rounded) < 1e-6) return `${rounded}b`;
