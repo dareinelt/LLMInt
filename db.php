@@ -415,6 +415,8 @@ function ensureRuntimeSchema(PDO $pdo): void
             messages             MEDIUMTEXT   NOT NULL,
             upgrade_model        VARCHAR(255) NOT NULL DEFAULT '',
             upgrade_accepted_at  TIMESTAMP(3) NULL,
+            group_label          VARCHAR(32)  NOT NULL DEFAULT '',
+            group_model          VARCHAR(255) NOT NULL DEFAULT '',
             updated_at           TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
                                               ON UPDATE CURRENT_TIMESTAMP(3),
             PRIMARY KEY (session_id),
@@ -430,6 +432,8 @@ function ensureRuntimeSchema(PDO $pdo): void
         "ALTER TABLE conversation_sessions ADD KEY idx_conv_user (user_id)",
         "ALTER TABLE conversation_sessions ADD COLUMN upgrade_model VARCHAR(255) NOT NULL DEFAULT '' AFTER model",
         "ALTER TABLE conversation_sessions ADD COLUMN upgrade_accepted_at TIMESTAMP(3) NULL AFTER upgrade_model",
+        "ALTER TABLE conversation_sessions ADD COLUMN group_label VARCHAR(32) NOT NULL DEFAULT '' AFTER upgrade_accepted_at",
+        "ALTER TABLE conversation_sessions ADD COLUMN group_model VARCHAR(255) NOT NULL DEFAULT '' AFTER group_label",
     ] as $alter) {
         try { $pdo->exec($alter); } catch (Throwable $_e) { /* already exists */ }
     }
@@ -1297,4 +1301,186 @@ function resolveUserModel(string $preferredModel): string
 
     // No lower-intelligence model found – return the one with the lowest available score
     return array_key_last($scored) ?: '';
+}
+
+/**
+ * Whether users may address an intelligence group with the "@@" prefix.
+ * Configurable in the administration; enabled by default.
+ */
+function isIntelligenceGroupFeatureEnabled(): bool
+{
+    return getSetting('intelligence_group_enabled', '1') === '1';
+}
+
+/**
+ * Format an intelligence score as a canonical group label, e.g. 35.0 → "35b".
+ */
+function intelligenceGroupLabel(float $score): string
+{
+    $formatted = rtrim(rtrim(number_format($score, 2, '.', ''), '0'), '.');
+    return $formatted . 'b';
+}
+
+/**
+ * Normalize a user-supplied group token ("35B", "35b", "35") to its canonical
+ * label ("35b"). Returns '' when the token carries no usable number.
+ */
+function normalizeIntelligenceGroupLabel(string $raw): string
+{
+    $raw = trim($raw);
+    if (!preg_match('/^(\d+(?:[.,]\d+)?)\s*b?$/i', $raw, $m)) {
+        return '';
+    }
+    $value = (float) str_replace(',', '.', $m[1]);
+    if ($value <= 0) {
+        return '';
+    }
+    return intelligenceGroupLabel($value);
+}
+
+/**
+ * List the intelligence groups that are currently available, derived from the
+ * models of all active endpoints.
+ *
+ * @return array<string,string> Canonical label ("35b") → model name, sorted by
+ *                              intelligence descending.
+ */
+function listIntelligenceGroups(): array
+{
+    try {
+        $rows = getDb()->query(
+            "SELECT DISTINCT default_model FROM endpoints WHERE is_active = 1 AND default_model <> ''"
+        )->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {
+        return [];
+    }
+
+    $groups = [];
+    $scores = [];
+    foreach ($rows as $model) {
+        $model = (string) $model;
+        $score = modelIntelligenceScore($model);
+        if ($score === null) {
+            continue;
+        }
+        $label = intelligenceGroupLabel($score);
+        if (!isset($groups[$label])) {
+            $groups[$label] = $model;
+            $scores[$label] = $score;
+        }
+    }
+    arsort($scores);
+
+    $sorted = [];
+    foreach (array_keys($scores) as $label) {
+        $sorted[$label] = $groups[$label];
+    }
+    return $sorted;
+}
+
+/**
+ * Resolve a group token ("35b") to a model that is served by an active endpoint.
+ *
+ * @return string|null The model name, or null when no such group exists.
+ */
+function resolveIntelligenceGroupModel(string $rawLabel): ?string
+{
+    $label = normalizeIntelligenceGroupLabel($rawLabel);
+    if ($label === '') {
+        return null;
+    }
+    $groups = listIntelligenceGroups();
+    return $groups[$label] ?? null;
+}
+
+/**
+ * Split an optional "@@<group>" prefix off a chat message.
+ *
+ * @return array{0:string,1:string} [raw group token (may be ''), remaining text]
+ */
+function extractIntelligenceGroupPrefix(string $text): array
+{
+    if (!preg_match('/^\s*@@([0-9]+(?:[.,][0-9]+)?\s*[bB]?)(?:\s+|$)/', $text, $m)) {
+        return ['', $text];
+    }
+    return [trim($m[1]), (string) substr($text, strlen($m[0]))];
+}
+
+/**
+ * Persist the intelligence group that is active for a chat session.
+ * The row is created when it does not exist yet, so the group already applies
+ * to the very first message of a new chat.
+ */
+function setSessionIntelligenceGroup(string $sessionId, string $label, string $model, ?int $userId = null): void
+{
+    if ($sessionId === '') {
+        return;
+    }
+    try {
+        getDb()->prepare(
+            'INSERT INTO conversation_sessions (session_id, user_id, model, messages, group_label, group_model, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW(3))
+             ON DUPLICATE KEY UPDATE
+                group_label = VALUES(group_label),
+                group_model = VALUES(group_model)'
+        )->execute([$sessionId, $userId, $model, '[]', $label, $model]);
+    } catch (Throwable $e) {
+        // Best-effort – do not break the chat flow on a save failure.
+    }
+}
+
+/**
+ * Remove the intelligence group of a chat session.
+ */
+function clearSessionIntelligenceGroup(string $sessionId): void
+{
+    if ($sessionId === '') {
+        return;
+    }
+    try {
+        getDb()->prepare(
+            "UPDATE conversation_sessions SET group_label = '', group_model = '' WHERE session_id = ?"
+        )->execute([$sessionId]);
+    } catch (Throwable $e) {
+        // Best-effort
+    }
+}
+
+/**
+ * Return the intelligence group that is active for a chat session.
+ *
+ * @return array{label:string,model:string}|null
+ */
+function getSessionIntelligenceGroup(string $sessionId): ?array
+{
+    if ($sessionId === '') {
+        return null;
+    }
+    try {
+        $stmt = getDb()->prepare(
+            "SELECT group_label, group_model FROM conversation_sessions WHERE session_id = ? AND group_label <> ''"
+        );
+        $stmt->execute([$sessionId]);
+        $row = $stmt->fetch();
+    } catch (Throwable $e) {
+        return null;
+    }
+    if ($row === false) {
+        return null;
+    }
+    $label = (string) ($row['group_label'] ?? '');
+    $model = (string) ($row['group_model'] ?? '');
+    if ($label === '') {
+        return null;
+    }
+    // The stored model may have been removed from the endpoints meanwhile –
+    // resolve the label again in that case.
+    if ($model === '' || resolveIntelligenceGroupModel($label) !== $model) {
+        $resolved = resolveIntelligenceGroupModel($label);
+        if ($resolved === null) {
+            return null;
+        }
+        $model = $resolved;
+    }
+    return ['label' => $label, 'model' => $model];
 }

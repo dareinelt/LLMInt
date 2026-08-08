@@ -42,6 +42,18 @@ if ($loggedIn && isset($_SESSION['admin_id'])) {
     }
 }
 
+// Intelligence groups (e.g. "35b") that can be addressed with the "@@" prefix.
+// The feature can be switched off in the administration.
+$intelligenceGroupEnabled = isIntelligenceGroupFeatureEnabled();
+$intelligenceGroups = [];
+if ($loggedIn && $intelligenceGroupEnabled) {
+    try {
+        $intelligenceGroups = array_keys(listIntelligenceGroups());
+    } catch (Throwable $_e) {
+        $intelligenceGroups = [];
+    }
+}
+
 // Check if vision model is configured (upload only meaningful when it is).
 $visionModelConfigured = trim(getSetting('vision_model', '')) !== '';
 
@@ -596,6 +608,38 @@ $csrfToken = $_SESSION['csrf_token'];
         }
 
         #user-input::placeholder { color: var(--text-muted); }
+
+        /* ── Intelligence group pill (set via "@@35b" prefix) ──────── */
+        #group-pill {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+            align-self: center;
+            background: rgba(108,99,255,.15);
+            color: var(--accent);
+            border: 1px solid rgba(108,99,255,.45);
+            border-radius: 999px;
+            padding: 2px 6px 2px 10px;
+            font-size: .78rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        #group-pill.visible { display: inline-flex; }
+
+        #group-pill button {
+            border: none;
+            background: transparent;
+            color: inherit;
+            cursor: pointer;
+            font-size: .8rem;
+            line-height: 1;
+            padding: 2px 4px;
+            border-radius: 999px;
+        }
+
+        #group-pill button:hover { background: rgba(108,99,255,.25); }
 
         #clear-btn {
             width: 32px;
@@ -1179,6 +1223,10 @@ $csrfToken = $_SESSION['csrf_token'];
 
         <!-- Main input container -->
         <div id="input-box">
+            <span id="group-pill" title="Angesprochene Intelligenzgruppe">
+                <span id="group-pill-label"></span>
+                <button type="button" id="group-pill-remove" title="Intelligenzgruppe entfernen" aria-label="Intelligenzgruppe entfernen">×</button>
+            </span>
             <textarea id="user-input" rows="1"
                       placeholder="Nachricht schreiben … (Enter = Senden, Shift+Enter = Zeilenumbruch)"></textarea>
             <button id="clear-btn" title="Verlauf löschen">🗑</button>
@@ -1217,6 +1265,9 @@ $csrfToken = $_SESSION['csrf_token'];
     const systemToggle    = document.getElementById('system-toggle');
     const systemPromptWrap = document.getElementById('system-prompt-wrap');
     const systemPromptTA  = document.getElementById('system-prompt');
+    const groupPill       = document.getElementById('group-pill');
+    const groupPillLabel  = document.getElementById('group-pill-label');
+    const groupPillRemove = document.getElementById('group-pill-remove');
 
     /* ── Welcome screen ──────────────────────────────────── */
 
@@ -1256,6 +1307,75 @@ $csrfToken = $_SESSION['csrf_token'];
 
     /* Whether the current user is logged in (set by PHP) */
     const loggedIn = <?= $loggedIn ? 'true' : 'false' ?>;
+
+    /* ── Intelligence groups (addressed with the "@@" prefix) ─── */
+    /* Whether the feature is enabled in the administration. */
+    const intelligenceGroupEnabled = <?= $intelligenceGroupEnabled ? 'true' : 'false' ?>;
+    /* Available groups derived from the models of all active endpoints. */
+    const intelligenceGroups = <?= json_encode($intelligenceGroups) ?>;
+
+    /* Group that is active for this chat (e.g. "35b"), '' when none. */
+    let activeGroup = '';
+    /* Whether the group changed and has to be transmitted with the next request. */
+    let groupChanged = false;
+
+    /** Normalize a typed token ("35", "35B") to an available group label ("35b").
+     *  Returns '' when no such group exists. */
+    function normalizeGroupToken(raw) {
+        const m = /^(\d+(?:[.,]\d+)?)\s*b?$/i.exec(String(raw).trim());
+        if (!m) return '';
+        const value = parseFloat(m[1].replace(',', '.'));
+        if (!(value > 0)) return '';
+        const label = (Math.round(value * 100) / 100) + 'b';
+        return intelligenceGroups.includes(label) ? label : '';
+    }
+
+    function renderGroupPill() {
+        if (!groupPill) return;
+        if (activeGroup) {
+            groupPillLabel.textContent = '🧠 ' + activeGroup;
+            groupPill.classList.add('visible');
+        } else {
+            groupPill.classList.remove('visible');
+        }
+    }
+
+    /** Activate a group and show it as a pill. */
+    function setActiveGroup(label, markChanged) {
+        if (activeGroup === label && !markChanged) return;
+        activeGroup = label;
+        if (markChanged) groupChanged = true;
+        renderGroupPill();
+    }
+
+    /** Remove the active group (× on the pill or a new chat). */
+    function removeActiveGroup(markChanged) {
+        if (!activeGroup && !markChanged) { renderGroupPill(); return; }
+        activeGroup = '';
+        if (markChanged) groupChanged = true;
+        renderGroupPill();
+    }
+
+    /** Turn a leading "@@<group>" in the input into a pill as soon as it is typed. */
+    function applyGroupPrefixFromInput() {
+        if (!intelligenceGroupEnabled) return;
+        const m = /^\s*@@(\d+(?:[.,]\d+)?\s*[bB]?)(\s+|$)/.exec(userInput.value);
+        if (!m) return;
+        const label = normalizeGroupToken(m[1]);
+        if (!label) return;
+        userInput.value = userInput.value.slice(m[0].length);
+        setActiveGroup(label, true);
+        setStatus('Intelligenzgruppe ' + label + ' aktiv.', 'info');
+        autoResizeTextarea(userInput);
+    }
+
+    if (groupPillRemove) {
+        groupPillRemove.addEventListener('click', () => {
+            removeActiveGroup(true);
+            setStatus('Intelligenzgruppe entfernt.', 'info');
+            userInput.focus();
+        });
+    }
 
     /* ── Sidebar session management ──────────────────────── */
 
@@ -1336,6 +1456,11 @@ $csrfToken = $_SESSION['csrf_token'];
             sessionId = sid;
             sessionStorage.setItem('chat_session_id', sessionId);
 
+            // Restore the intelligence group of the loaded chat.
+            activeGroup  = (intelligenceGroupEnabled && typeof data.intelligence_group === 'string') ? data.intelligence_group : '';
+            groupChanged = false;
+            renderGroupPill();
+
             // Rebuild the visible chat from stored messages.
             clearUpgradePrompt();
             chatArea.innerHTML = '';
@@ -1389,6 +1514,7 @@ $csrfToken = $_SESSION['csrf_token'];
         history = [];
         chatArea.innerHTML = '';
         clearUpgradePrompt();
+        removeActiveGroup(false);
         sessionId = generateSessionId();
         sessionStorage.setItem('chat_session_id', sessionId);
         showWelcome();
@@ -2237,6 +2363,13 @@ $csrfToken = $_SESSION['csrf_token'];
             temperature: 0.7,
         };
 
+        // Only transmit the group when it changed – otherwise the server keeps
+        // the group that is already stored for this chat session.
+        if (loggedIn && intelligenceGroupEnabled && groupChanged) {
+            payload.intelligence_group = activeGroup;
+            groupChanged = false;
+        }
+
         try {
             let result = await executeStreamingRequest(payload, bubble);
             let accumulated = result.accumulated;
@@ -2303,7 +2436,10 @@ $csrfToken = $_SESSION['csrf_token'];
         }
     });
 
-    userInput.addEventListener('input', () => autoResizeTextarea(userInput));
+    userInput.addEventListener('input', () => {
+        if (loggedIn && intelligenceGroupEnabled) applyGroupPrefixFromInput();
+        autoResizeTextarea(userInput);
+    });
 
     clearBtn.addEventListener('click', startNewChat);
 
@@ -2319,6 +2455,15 @@ $csrfToken = $_SESSION['csrf_token'];
     /* ── Load session list on startup (logged-in users) ─── */
     if (loggedIn) {
         refreshSessionList();
+        // Restore the intelligence group of the current chat session.
+        fetch('api/chat_sessions.php?action=load&session_id=' + encodeURIComponent(sessionId))
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+                if (intelligenceGroupEnabled && data && typeof data.intelligence_group === 'string' && data.intelligence_group) {
+                    setActiveGroup(data.intelligence_group, false);
+                }
+            })
+            .catch(() => { /* ignore */ });
     }
 })();
 </script>

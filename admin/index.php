@@ -32,6 +32,7 @@ if ($registrationEmailText === '') {
     $registrationEmailText = 'danke für Deine Registrierung bei {sitename}.';
 }
 $streamingEnabled = getSetting('streaming_enabled', '1') === '1';
+$intelligenceGroupEnabled = isIntelligenceGroupFeatureEnabled();
 $balancerMaxConcurrent        = getBalancerMaxConcurrent();
 $balancerCircuitFailThreshold = getBalancerCircuitFailThreshold();
 $balancerCircuitCooldownSecs  = getBalancerCircuitCooldownSeconds();
@@ -335,6 +336,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $flashOk = $streamingEnabled
                 ? 'Streaming aktiviert. Antworten werden live im Chat angezeigt.'
                 : 'Streaming deaktiviert. Antworten erscheinen erst vollständig nach Fertigstellung.';
+
+        // ── Save intelligence group setting ───────────────────────────────────
+        } elseif ($action === 'save_intelligence_group_settings') {
+            $intelligenceGroupEnabled = isset($_POST['intelligence_group_enabled']);
+            setSetting('intelligence_group_enabled', $intelligenceGroupEnabled ? '1' : '0');
+            $flashOk = $intelligenceGroupEnabled
+                ? 'Direkte Modellwahl aktiviert. Benutzer können Intelligenzgruppen mit "@@" ansprechen.'
+                : 'Direkte Modellwahl deaktiviert. Das "@@"-Präfix wird nicht mehr ausgewertet.';
 
         // ── Save system messages ──────────────────────────────────────────────
         } elseif ($action === 'save_system_messages') {
@@ -2787,6 +2796,31 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                        erzeugt wird (der blinkende Cursor wird dabei fortlaufend durch den generierten Text ersetzt).
                        Wenn deaktiviert, bleibt der blinkende Cursor sichtbar und die Antwort erscheint erst vollständig,
                        sobald sie fertig generiert wurde.
+                   </p>
+               </div>
+
+               <div class="action-row">
+                   <button type="submit" class="btn btn-primary">💾 Speichern</button>
+               </div>
+           </form>
+
+           <hr style="border:none;border-top:1px solid var(--border);margin:20px 0">
+
+           <form method="POST">
+               <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+               <input type="hidden" name="action" value="save_intelligence_group_settings">
+
+               <div class="form-group">
+                   <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                       <input type="checkbox" name="intelligence_group_enabled"
+                              <?= $intelligenceGroupEnabled ? 'checked' : '' ?>>
+                       Direkte Modellwahl über Intelligenzgruppen aktivieren
+                   </label>
+                   <p class="hint">
+                       Wenn aktiviert, können angemeldete Benutzer in der Chat-Eingabezeile mit dem Präfix
+                       <code>@@35b</code> eine Intelligenzgruppe direkt ansprechen. Die Auswahl überschreibt
+                       Benutzer- und Standardmodelle sowie die regelbasierte Modellauswahl und bleibt im Chat aktiv.
+                       Wenn deaktiviert, wird das Präfix nicht ausgewertet und bleibt Teil der Nachricht.
                    </p>
                </div>
 
