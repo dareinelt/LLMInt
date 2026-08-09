@@ -1586,6 +1586,48 @@ $csrfToken = $_SESSION['csrf_token'];
         } catch (_) { /* ignore */ }
     }
 
+    /** Rebuild the visible chat + in-memory history from a loaded session
+     *  payload. Shared by loadSession() (sidebar click) and the page-load
+     *  restore, so both keep sessionId and history in sync and never let a
+     *  stale/empty history silently overwrite a stored conversation. */
+    function applyLoadedSession(sid, data) {
+        sessionId = sid;
+        sessionStorage.setItem('chat_session_id', sessionId);
+
+        // Restore the intelligence group of the loaded chat.
+        activeGroup  = (intelligenceGroupEnabled && typeof data.intelligence_group === 'string') ? data.intelligence_group : '';
+        groupChanged = false;
+        renderGroupPill();
+
+        // Rebuild the visible chat from stored messages.
+        clearUpgradePrompt();
+        chatArea.innerHTML = '';
+        history = [];
+
+        const msgs = data.messages || [];
+        for (const msg of msgs) {
+            if (msg.role === 'user' || msg.role === 'assistant') {
+                const content = typeof msg.content === 'string' ? msg.content : '';
+                const bubble = appendMessage(msg.role, content);
+                if (msg.role === 'assistant' && Array.isArray(msg.sources)) {
+                    setSourcePillsForBubble(bubble, msg.sources);
+                }
+                history.push({ role: msg.role, content });
+            }
+        }
+
+        if (history.length === 0) {
+            showWelcome();
+        } else {
+            scrollToBottom();
+        }
+
+        // Highlight active item in sidebar.
+        document.querySelectorAll('.session-item').forEach(el => {
+            el.classList.toggle('active', el.dataset.sessionId === sessionId);
+        });
+    }
+
     /** Switch to a different conversation from the sidebar. */
     async function loadSession(sid) {
         if (isStreaming) return;
@@ -1596,46 +1638,28 @@ $csrfToken = $_SESSION['csrf_token'];
             const data = await res.json();
             if (data.error) { setStatus(data.error, 'error'); return; }
 
-            sessionId = sid;
-            sessionStorage.setItem('chat_session_id', sessionId);
-
-            // Restore the intelligence group of the loaded chat.
-            activeGroup  = (intelligenceGroupEnabled && typeof data.intelligence_group === 'string') ? data.intelligence_group : '';
-            groupChanged = false;
-            renderGroupPill();
-
-            // Rebuild the visible chat from stored messages.
-            clearUpgradePrompt();
-            chatArea.innerHTML = '';
-            history = [];
-
-            const msgs = data.messages || [];
-            for (const msg of msgs) {
-                if (msg.role === 'user' || msg.role === 'assistant') {
-                    const content = typeof msg.content === 'string' ? msg.content : '';
-                    const bubble = appendMessage(msg.role, content);
-                    if (msg.role === 'assistant' && Array.isArray(msg.sources)) {
-                        setSourcePillsForBubble(bubble, msg.sources);
-                    }
-                    history.push({ role: msg.role, content });
-                }
-            }
-
-            if (history.length === 0) {
-                showWelcome();
-            } else {
-                scrollToBottom();
-            }
-
-            // Highlight active item in sidebar.
-            document.querySelectorAll('.session-item').forEach(el => {
-                el.classList.toggle('active', el.dataset.sessionId === sessionId);
-            });
-
+            applyLoadedSession(sid, data);
             setStatus('Chat geladen.', 'ok');
         } catch (_) {
             setStatus('Fehler beim Laden des Chats.', 'error');
         }
+    }
+
+    /** Restore the chat tied to the session ID already stored in
+     *  sessionStorage (e.g. after a page reload or a full-page navigation
+     *  such as login). Without this, `history` would start out empty while
+     *  `sessionId` still points at an existing conversation – sending a new
+     *  message would then silently overwrite that stored conversation under
+     *  its old title instead of starting a fresh, separate chat. */
+    async function restoreCurrentSession() {
+        if (!loggedIn || !sessionId) return;
+        try {
+            const res = await fetch('api/chat_sessions.php?action=load&session_id=' + encodeURIComponent(sessionId));
+            if (!res.ok) return; // Unknown/new session id – nothing to restore, start empty.
+            const data = await res.json();
+            if (data.error) return;
+            applyLoadedSession(sessionId, data);
+        } catch (_) { /* ignore – fall back to the empty welcome screen */ }
     }
 
     /** Delete a session from the server and refresh the list. */
@@ -1657,6 +1681,10 @@ $csrfToken = $_SESSION['csrf_token'];
 
     /** Start a brand-new empty chat. */
     function startNewChat() {
+        // Block while a response is still streaming: switching sessionId/history
+        // out from under an in-flight request would let its late completion
+        // handler write its reply into this new, unrelated chat.
+        if (isStreaming) return;
         history = [];
         chatArea.innerHTML = '';
         clearUpgradePrompt();
@@ -2736,15 +2764,11 @@ $csrfToken = $_SESSION['csrf_token'];
     /* ── Load session list on startup (logged-in users) ─── */
     if (loggedIn) {
         refreshSessionList();
-        // Restore the intelligence group of the current chat session.
-        fetch('api/chat_sessions.php?action=load&session_id=' + encodeURIComponent(sessionId))
-            .then(res => res.ok ? res.json() : null)
-            .then(data => {
-                if (intelligenceGroupEnabled && data && typeof data.intelligence_group === 'string' && data.intelligence_group) {
-                    setActiveGroup(data.intelligence_group, false);
-                }
-            })
-            .catch(() => { /* ignore */ });
+        // Restore the conversation tied to the current session ID (e.g. after
+        // a page reload or a full-page navigation such as login) so a stale
+        // sessionId never gets silently overwritten by a shorter, unrelated
+        // history. This also restores the active intelligence group.
+        restoreCurrentSession();
     }
 })();
 </script>
