@@ -1501,8 +1501,10 @@ $csrfToken = $_SESSION['csrf_token'];
     /* Images attached to the next outgoing message: { dataUrl, mimeType, name } */
     let pendingImages = [];
 
-    const MAX_ATTACH_IMAGES   = 4;
-    const MAX_ATTACH_FILE_MB  = 10;
+    const MAX_ATTACH_IMAGES     = 4;
+    const MAX_ATTACH_FILE_MB    = 10;
+    const MAX_ATTACH_DIMENSION  = 1536; // px, longest side after downscale
+    const ATTACH_JPEG_QUALITY   = 0.82;
 
     /* ── Welcome screen ──────────────────────────────────── */
 
@@ -2270,6 +2272,38 @@ $csrfToken = $_SESSION['csrf_token'];
         });
     }
 
+    /* Downscales a data URL image via <canvas> so it stays within the
+     * model's context window. Animated GIFs are left untouched (canvas
+     * would flatten them to a single frame). Returns { dataUrl, mimeType }. */
+    function downscaleImageDataUrl(dataUrl, mimeType, maxDim) {
+        return new Promise((resolve) => {
+            if (mimeType === 'image/gif') {
+                resolve({ dataUrl, mimeType });
+                return;
+            }
+            const img = new Image();
+            img.onload = () => {
+                const { naturalWidth: width, naturalHeight: height } = img;
+                if (!width || !height || (width <= maxDim && height <= maxDim)) {
+                    resolve({ dataUrl, mimeType });
+                    return;
+                }
+                const scale = maxDim / Math.max(width, height);
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(width * scale));
+                canvas.height = Math.max(1, Math.round(height * scale));
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve({
+                    dataUrl: canvas.toDataURL('image/jpeg', ATTACH_JPEG_QUALITY),
+                    mimeType: 'image/jpeg',
+                });
+            };
+            img.onerror = () => resolve({ dataUrl, mimeType });
+            img.src = dataUrl;
+        });
+    }
+
     if (attachImageBtn && attachImageInput) {
         attachImageBtn.addEventListener('click', () => attachImageInput.click());
 
@@ -2291,8 +2325,9 @@ $csrfToken = $_SESSION['csrf_token'];
                     continue;
                 }
                 try {
-                    const dataUrl = await readFileAsDataUrl(file);
-                    pendingImages.push({ dataUrl, mimeType: file.type, name: file.name });
+                    const rawDataUrl = await readFileAsDataUrl(file);
+                    const { dataUrl, mimeType } = await downscaleImageDataUrl(rawDataUrl, file.type, MAX_ATTACH_DIMENSION);
+                    pendingImages.push({ dataUrl, mimeType, name: file.name });
                 } catch (_) {
                     setStatus(`Bild "${file.name}" konnte nicht gelesen werden.`, 'error');
                 }
