@@ -25,6 +25,10 @@ $intelligenceUpgradeMessage = getSetting('intelligence_upgrade_message', '');
 if ($intelligenceUpgradeMessage === '') {
     $intelligenceUpgradeMessage = 'Es stehen Ressourcen bereit um die Aufgabe erneut mit größerer Intelligenz zu bearbeiten. Dies kann länger dauern als zuvor, kann jedoch genauere Antworten liefern. Fortfahren?';
 }
+$globalSystemPrompt = getSetting('global_system_prompt', '');
+if ($globalSystemPrompt === '') {
+    $globalSystemPrompt = GLOBAL_SYSTEM_PROMPT_DEFAULT;
+}
 $loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
 $loginBannerText    = getSetting('login_banner_text', '');
 $registrationEmailText = getSetting('registration_email_text', '');
@@ -344,6 +348,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $flashOk = $intelligenceGroupEnabled
                 ? 'Direkte Modellwahl aktiviert. Benutzer können Intelligenzgruppen mit "@@" ansprechen.'
                 : 'Direkte Modellwahl deaktiviert. Das "@@"-Präfix wird nicht mehr ausgewertet.';
+
+        // ── Save global system prompt ─────────────────────────────────────────
+        } elseif ($action === 'save_global_system_prompt') {
+            $newGlobalSystemPrompt = trim($_POST['global_system_prompt'] ?? '');
+            $globalSystemPrompt = $newGlobalSystemPrompt === '' ? GLOBAL_SYSTEM_PROMPT_DEFAULT : $newGlobalSystemPrompt;
+            setSetting('global_system_prompt', $newGlobalSystemPrompt);
+            $flashOk = 'Globaler Systemprompt gespeichert.';
 
         // ── Save system messages ──────────────────────────────────────────────
         } elseif ($action === 'save_system_messages') {
@@ -1484,17 +1495,18 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         #config-searxng-card { order: 4; }
         #config-endpoints-card { order: 5; }
         #config-request-handling-card { order: 6; }
-        #config-balancer-card { order: 7; }
-        #config-sd-card { order: 8; }
-        #config-comfy-card { order: 9; }
-        #config-routing-card { order: 10; }
-        #config-embedding-card { order: 11; }
-        #config-hybrid-search-card { order: 12; }
-        #config-reranker-card { order: 13; }
-        #embedding-stats-card { order: 14; }
-        #config-system-messages-card { order: 15; }
-        #log-config-card { order: 16; }
-        #log-viewer-card { order: 17; }
+        #config-global-system-prompt-card { order: 7; }
+        #config-balancer-card { order: 8; }
+        #config-sd-card { order: 9; }
+        #config-comfy-card { order: 10; }
+        #config-routing-card { order: 11; }
+        #config-embedding-card { order: 12; }
+        #config-hybrid-search-card { order: 13; }
+        #config-reranker-card { order: 14; }
+        #embedding-stats-card { order: 15; }
+        #config-system-messages-card { order: 16; }
+        #log-config-card { order: 17; }
+        #log-viewer-card { order: 18; }
 
         /* ── User row hover ──────────────────────────────────────── */
         .user-row:hover td { background: rgba(108,99,255,.06); }
@@ -1898,6 +1910,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <a href="#config-searxng-card">🔎 Websuche</a>
     <a href="#config-endpoints-card">🔗 Endpunkte</a>
     <a href="#config-request-handling-card">📨 Anfragenhandling</a>
+    <a href="#config-global-system-prompt-card">🧠 Systemprompt</a>
     <a href="#config-balancer-card">⚖️ Balancer &amp; Routing</a>
     <a href="#config-sd-card">🎨 AUTOMATIC1111</a>
     <a href="#config-comfy-card">🖼️ ComfyUI</a>
@@ -2858,6 +2871,37 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                        Dieses Vision-fähige Modell analysiert hochgeladene Dokumente (Bilder) und extrahiert deren Inhalt.
                        Wird in jeder Anfrage als Datenquelle per Tool-Aufruf <code>query_documents</code> bereitgestellt.
                        Leer lassen, um den Dokument-Upload zu deaktivieren.
+                   </p>
+               </div>
+
+               <div class="action-row">
+                   <button type="submit" class="btn btn-primary">💾 Speichern</button>
+               </div>
+           </form>
+       </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Globaler Systemprompt
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-global-system-prompt-card">
+       <details class="config-panel" id="config-global-system-prompt" open>
+           <summary>🧠 Systemprompt</summary>
+
+           <form method="POST">
+               <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+               <input type="hidden" name="action" value="save_global_system_prompt">
+
+               <div class="form-group">
+                   <label for="global-system-prompt">Applikationsweiter Systemprompt</label>
+                   <textarea id="global-system-prompt" name="global_system_prompt"
+                             rows="16" style="width:100%;resize:vertical;font-family:monospace;font-size:.85rem"
+                   ><?= htmlspecialchars($globalSystemPrompt) ?></textarea>
+                   <p class="hint">
+                       Dieser Systemprompt wird jeder Anfrage an das Sprachmodell serverseitig vorangestellt –
+                       unabhängig vom gewählten Modell oder Endpunkt. Er ist für Benutzer nicht sichtbar, wird
+                       niemals im Chatverlauf gespeichert und nicht in API-Antworten zurückgegeben.
+                       Leer lassen, um den Standardtext zu verwenden.
                    </p>
                </div>
 
@@ -6258,7 +6302,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     const sectionIds = [
         'dashboard-card', 'config-smtp-card', 'config-ldap-card', 'config-searxng-card',
-        'config-endpoints-card', 'config-request-handling-card',
+        'config-endpoints-card', 'config-request-handling-card', 'config-global-system-prompt-card',
         'config-sd-card', 'config-comfy-card', 'config-system-messages-card',
         'config-embedding-card', 'config-hybrid-search-card', 'config-reranker-card', 'embedding-stats-card',
         'log-config-card', 'log-viewer-card', 'users-card', 'password-card'
