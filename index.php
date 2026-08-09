@@ -301,6 +301,51 @@ $csrfToken = $_SESSION['csrf_token'];
             background: color-mix(in srgb, var(--error) 10%, transparent);
         }
 
+        /* Quellen-Pills unterhalb einer Antwort, die per Websuche recherchiert
+           wurde: kleines Favicon plus verlinkter Seitentitel. */
+        .source-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .source-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            max-width: 220px;
+            padding: 3px 10px 3px 6px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--surface);
+            color: var(--text-muted);
+            font-size: .76rem;
+            text-decoration: none;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: color .15s ease, border-color .15s ease;
+        }
+
+        .source-pill:hover {
+            color: var(--text);
+            border-color: var(--accent);
+        }
+
+        .source-pill img {
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            flex: 0 0 auto;
+        }
+
+        .source-pill span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
         /* System message */
         .message.system-msg .bubble {
             color: var(--text-muted);
@@ -1521,7 +1566,10 @@ $csrfToken = $_SESSION['csrf_token'];
             for (const msg of msgs) {
                 if (msg.role === 'user' || msg.role === 'assistant') {
                     const content = typeof msg.content === 'string' ? msg.content : '';
-                    appendMessage(msg.role, content);
+                    const bubble = appendMessage(msg.role, content);
+                    if (msg.role === 'assistant' && Array.isArray(msg.sources)) {
+                        setSourcePillsForBubble(bubble, msg.sources);
+                    }
                     history.push({ role: msg.role, content });
                 }
             }
@@ -2026,6 +2074,12 @@ $csrfToken = $_SESSION['csrf_token'];
         messageContent.appendChild(bubble);
 
         if (role === 'assistant') {
+            const sourcePills = document.createElement('div');
+            sourcePills.className = 'source-pills';
+            sourcePills.style.display = 'none';
+            bubble._sourcePillsEl = sourcePills;
+            messageContent.appendChild(sourcePills);
+
             const detailsWrap = document.createElement('details');
             detailsWrap.className = 'response-details';
 
@@ -2269,7 +2323,50 @@ $csrfToken = $_SESSION['csrf_token'];
             'style="background: conic-gradient(' + color + ' ' + angle + 'deg, transparent ' + angle + 'deg)"></span>';
     }
 
+    /**
+     * Returns a favicon <img> URL for a source's domain via Google's public
+     * favicon service, so pills show a recognizable site icon without the
+     * server having to fetch and cache favicons itself.
+     */
+    function faviconUrlForSource(url) {
+        try {
+            const host = new URL(url).hostname;
+            return 'https://www.google.com/s2/favicons?sz=32&domain=' + encodeURIComponent(host);
+        } catch {
+            return '';
+        }
+    }
+
+    /**
+     * Renders the "used sources" pills (favicon + linked title) under an
+     * assistant bubble. Accepts the plain sources array as stored both in
+     * response_details.search_sources (live/streamed answer) and on a
+     * persisted assistant message (msg.sources, restored on chat reload).
+     */
+    function setSourcePillsForBubble(bubble, sources) {
+        if (!bubble || !bubble._sourcePillsEl) {
+            return;
+        }
+        const list = Array.isArray(sources) ? sources : [];
+        const el = bubble._sourcePillsEl;
+        if (list.length === 0) {
+            el.innerHTML = '';
+            el.style.display = 'none';
+            return;
+        }
+        el.innerHTML = list.map((source) => {
+            const url = typeof source?.url === 'string' ? source.url : '';
+            if (!url) return '';
+            const title = typeof source?.title === 'string' && source.title.trim() ? source.title.trim() : url;
+            const favicon = faviconUrlForSource(url);
+            const img = favicon ? `<img src="${escapeHtmlContent(favicon)}" alt="" loading="lazy">` : '';
+            return `<a class="source-pill" href="${escapeHtmlContent(url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtmlContent(url)}">${img}<span>${escapeHtmlContent(title)}</span></a>`;
+        }).join('');
+        el.style.display = 'flex';
+    }
+
     function setResponseDetailsForBubble(bubble, responseDetails) {
+        setSourcePillsForBubble(bubble, responseDetails && responseDetails.search_sources);
         if (!bubble || !bubble._responseDetailsBodyEl) {
             return;
         }
