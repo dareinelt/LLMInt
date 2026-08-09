@@ -50,7 +50,11 @@ try {
                 AS today_completion_tokens,
             COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
                          THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0)
-                AS today_tokens
+                AS today_tokens,
+            COALESCE(ROUND(AVG(CASE WHEN DATE(t.started_at) = CURDATE()
+                                    AND t.tokens_per_second IS NOT NULL
+                                    THEN t.tokens_per_second END), 1), 0)
+                AS today_avg_tokens_per_second
         FROM endpoints e
         LEFT JOIN tasks t ON t.endpoint_id = e.id
         GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active, e.ssh_host, e.ssh_user
@@ -65,6 +69,7 @@ try {
         $r['today_prompt_tokens']     = (int) $r['today_prompt_tokens'];
         $r['today_completion_tokens'] = (int) $r['today_completion_tokens'];
         $r['today_tokens']            = (int) $r['today_tokens'];
+        $r['today_avg_tokens_per_second'] = (float) $r['today_avg_tokens_per_second'];
         $r['ssh_configured']          = ($r['ssh_host'] ?? '') !== '' && ($r['ssh_user'] ?? '') !== '';
         // Don't expose credentials in the response
         unset($r['ssh_host'], $r['ssh_port'], $r['ssh_user'], $r['ssh_password']);

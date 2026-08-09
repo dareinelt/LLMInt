@@ -285,6 +285,10 @@ function getUpgradeModelSuggestionForRequestedModel(string $requestedModel, stri
  * @param float|null $latencyMs    Observed request latency in milliseconds,
  *                                 used to update the endpoint's rolling
  *                                 average latency for latency-based routing.
+ * @param float|null $tokensPerSecond Token generation speed (tokens/sec),
+ *                                    measured from the first streamed token
+ *                                    to completion. NULL when not measurable
+ *                                    (e.g. non-streaming requests).
  */
 function completeTask(
     int    $taskId,
@@ -292,7 +296,8 @@ function completeTask(
     ?int   $promptTokens     = null,
     ?int   $completionTokens = null,
     ?int   $totalTokens      = null,
-    ?float $latencyMs        = null
+    ?float $latencyMs        = null,
+    ?float $tokensPerSecond  = null
 ): void {
     $db = getDb();
     $db->prepare('
@@ -301,9 +306,10 @@ function completeTask(
                finished_at       = NOW(3),
                prompt_tokens     = ?,
                completion_tokens = ?,
-               total_tokens      = ?
+               total_tokens      = ?,
+               tokens_per_second = ?
          WHERE id = ?
-    ')->execute([$status, $promptTokens, $completionTokens, $totalTokens, $taskId]);
+    ')->execute([$status, $promptTokens, $completionTokens, $totalTokens, $tokensPerSecond, $taskId]);
 
     try {
         $epStmt = $db->prepare('SELECT endpoint_id FROM tasks WHERE id = ?');

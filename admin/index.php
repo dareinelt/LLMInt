@@ -994,7 +994,10 @@ try {
             COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
                          THEN COALESCE(t.completion_tokens, 0) ELSE 0 END), 0) AS today_completion_tokens,
             COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE()
-                         THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0)      AS today_tokens
+                         THEN COALESCE(t.total_tokens, 0) ELSE 0 END), 0)      AS today_tokens,
+            COALESCE(ROUND(AVG(CASE WHEN DATE(t.started_at) = CURDATE()
+                                    AND t.tokens_per_second IS NOT NULL
+                                    THEN t.tokens_per_second END), 1), 0) AS today_avg_tokens_per_second
         FROM endpoints e
         LEFT JOIN tasks t ON t.endpoint_id = e.id
         GROUP BY e.id, e.alias, e.base_url, e.default_model, e.is_active, e.ssh_host, e.ssh_user,
@@ -4876,6 +4879,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'today_prompt_tokens'     => (int) $s['today_prompt_tokens'],
                 'today_completion_tokens' => (int) $s['today_completion_tokens'],
                 'today_tokens'            => (int) $s['today_tokens'],
+                'today_avg_tokens_per_second' => (float) $s['today_avg_tokens_per_second'],
                 'ssh_configured' => (bool) ($s['ssh_configured'] ?? false),
                 'sys_stats'      => $s['sys_stats'] ?? null,
             ];
@@ -5172,8 +5176,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const CLIENT_GAP = 40;
         const ROOT_W = 112, ROOT_H = 82;
         const MOD_W  = 178, MOD_H  = 64;
-        const EP_W        = 218, EP_H      = 152;
-        const EP_H_SYSSTAT = 210;  // extended height when SSH system stats are shown
+        const EP_W        = 218, EP_H      = 170;
+        const EP_H_SYSSTAT = 228;  // extended height when SSH system stats are shown
         const H_GAP  = 60;
         const V_GAP  = 14;
         const SRXNG_W = EP_W, SRXNG_H = 110;
@@ -5516,10 +5520,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             txt(g, `⬡  Total Token: ${formatNum(ep.today_tokens)}`, {
                 x: 12, y: 124, fill: '#a78bfa', 'font-size': 11, 'font-family': 'sans-serif',
             });
+            const speedLabel = ep.today_avg_tokens_per_second > 0
+                ? `${ep.today_avg_tokens_per_second.toFixed(1)} Tok/s`
+                : '–';
+            txt(g, `⚡  Ø Geschwindigkeit: ${speedLabel}`, {
+                x: 12, y: 142, fill: '#fbbf24', 'font-size': 11, 'font-family': 'sans-serif',
+            });
 
             // Slot utilisation bar (max 4 slots)
             const maxSlots  = 4;
-            const barX      = 12, barY = 136, barW = EP_W - 24, barH = 5;
+            const barX      = 12, barY = 154, barW = EP_W - 24, barH = 5;
             g.appendChild(mk('rect', { x: barX, y: barY, width: barW, height: barH, rx: 2.5, fill: 'rgba(255,255,255,0.07)' }));
             if (ep.running > 0) {
                 const fillW = Math.round(barW * Math.min(1, ep.running / maxSlots));
@@ -5528,14 +5538,14 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
             // ── SSH system stats (RAM, CPU load, CPU temp) ────────────────────
             if (ep.sys_stats || ep.ssh_configured) {
-                g.appendChild(mk('line', { x1: 10, y1: 150, x2: EP_W - 10, y2: 150, stroke: 'rgba(255,255,255,0.06)', 'stroke-width': 1 }));
+                g.appendChild(mk('line', { x1: 10, y1: 168, x2: EP_W - 10, y2: 168, stroke: 'rgba(255,255,255,0.06)', 'stroke-width': 1 }));
                 const ss = ep.sys_stats || {};
                 const ssOk = ss.ok === true;
 
                 if (!ssOk && !ss.ram_total) {
                     // SSH configured but no successful fetch yet
                     txt(g, '🔑  SSH: Warte auf Daten …', {
-                        x: 12, y: 168, fill: '#6b7280', 'font-size': 10, 'font-family': 'sans-serif',
+                        x: 12, y: 186, fill: '#6b7280', 'font-size': 10, 'font-family': 'sans-serif',
                     });
                 } else {
                     // RAM
@@ -5547,14 +5557,14 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         ramLabel = `${used.toFixed(1)} / ${total.toFixed(1)} GB  (${pct}%)`;
                     }
                     txt(g, `🧠  RAM: ${ramLabel}`, {
-                        x: 12, y: 168, fill: '#60a5fa', 'font-size': 10.5, 'font-family': 'sans-serif',
+                        x: 12, y: 186, fill: '#60a5fa', 'font-size': 10.5, 'font-family': 'sans-serif',
                     });
 
                     // CPU load
                     const load1 = ss.cpu_load_1m != null ? Number(ss.cpu_load_1m).toFixed(2) : '–';
                     const load5 = ss.cpu_load_5m != null ? Number(ss.cpu_load_5m).toFixed(2) : '–';
                     txt(g, `📊  CPU-Last: ${load1}  (5 min: ${load5})`, {
-                        x: 12, y: 186, fill: '#34d399', 'font-size': 10.5, 'font-family': 'sans-serif',
+                        x: 12, y: 204, fill: '#34d399', 'font-size': 10.5, 'font-family': 'sans-serif',
                     });
 
                     // CPU temperature
@@ -5563,7 +5573,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                                     : ss.cpu_temp != null && ss.cpu_temp >= 65 ? '#f59e0b'
                                     : '#fb923c';
                     txt(g, `🌡  Temp: ${tempLabel}`, {
-                        x: 12, y: 204, fill: tempColor, 'font-size': 10.5, 'font-family': 'sans-serif',
+                        x: 12, y: 222, fill: tempColor, 'font-size': 10.5, 'font-family': 'sans-serif',
                     });
                 }
             }

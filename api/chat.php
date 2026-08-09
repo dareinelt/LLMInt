@@ -1249,7 +1249,8 @@ function streamChatCompletionRequest(
     float $requestStart,
     bool &$firstTokenLogged,
     bool &$streamStartedLogged,
-    bool &$clientAborted
+    bool &$clientAborted,
+    ?float &$firstTokenElapsedMs = null
 ): array {
     $payload['stream'] = true;
     $payload['stream_options'] = ['include_usage' => true];
@@ -1313,7 +1314,7 @@ function streamChatCompletionRequest(
     $processLine = function (string $line) use (
         &$content, &$reasoning, &$pendingContent, &$pendingReasoning, &$toolCalls,
         &$usage, &$finishReason, &$id, &$created, &$model, &$sawToolCall,
-        &$firstTokenLogged, $requestStart
+        &$firstTokenLogged, &$firstTokenElapsedMs, $requestStart
     ): void {
         if (!preg_match('/^data:\s?(.*)$/', $line, $m)) {
             return;
@@ -1367,6 +1368,7 @@ function streamChatCompletionRequest(
         }
         if (isset($delta['content']) && is_string($delta['content']) && $delta['content'] !== '') {
             if (!$firstTokenLogged) {
+                $firstTokenElapsedMs = (microtime(true) - $requestStart) * 1000;
                 writeLog('info', 'Erste Antworttokens nach ' . elapsedMilliseconds($requestStart) . ' ms erzeugt.');
                 $firstTokenLogged = true;
             }
@@ -1548,12 +1550,42 @@ function logToolResult(string $toolName, mixed $toolResult): void
     }
 }
 
-function logResponseFinished(float $requestStart, ?int $promptTokens, ?int $completionTokens): void
-{
+function logResponseFinished(
+    float $requestStart,
+    ?int $promptTokens,
+    ?int $completionTokens,
+    ?float $tokensPerSecond = null
+): void {
     writeLog('info', 'Antwortgenerierung abgeschlossen (Gesamtdauer: ' . elapsedMilliseconds($requestStart) . ' ms).');
     if ($promptTokens !== null && $completionTokens !== null) {
         writeLog('info', 'Promptgröße: ' . $promptTokens . ' Token, Antwortgröße: ' . $completionTokens . ' Token.');
     }
+    if ($tokensPerSecond !== null) {
+        writeLog('info', 'Generierungsgeschwindigkeit: ' . number_format($tokensPerSecond, 1) . ' Token/s.');
+    }
+}
+
+/**
+ * Computes the token generation speed (tokens/sec) from the time of the
+ * first streamed token to the end of the response, based on the number of
+ * completion tokens produced. Returns null when the inputs don't allow a
+ * meaningful measurement (no completion tokens, no first-token timestamp,
+ * or a non-positive generation duration).
+ */
+function computeTokensPerSecond(
+    float $requestStart,
+    ?float $firstTokenElapsedMs,
+    ?int $completionTokens
+): ?float {
+    if ($firstTokenElapsedMs === null || $completionTokens === null || $completionTokens <= 0) {
+        return null;
+    }
+    $totalElapsedMs = (microtime(true) - $requestStart) * 1000;
+    $generationMs   = $totalElapsedMs - $firstTokenElapsedMs;
+    if ($generationMs <= 0) {
+        return null;
+    }
+    return $completionTokens / ($generationMs / 1000);
 }
 
 $raw     = isset($GLOBALS['LLMINT_REQUEST_BODY_OVERRIDE']) && is_string($GLOBALS['LLMINT_REQUEST_BODY_OVERRIDE'])
@@ -2255,6 +2287,7 @@ if ($useTools) {
     $toolStreamLive        = $clientRequestedStream;
     $liveStreamed          = false;
     $toolFirstTokenLogged  = false;
+    $toolFirstTokenElapsedMs = null;
     $toolStreamStartLogged = false;
     $toolClientAborted     = false;
     if ($toolStreamLive) {
@@ -2286,7 +2319,8 @@ if ($useTools) {
                 $requestStart,
                 $toolFirstTokenLogged,
                 $toolStreamStartLogged,
-                $toolClientAborted
+                $toolClientAborted,
+                $toolFirstTokenElapsedMs
             );
             if ($streamResult['forwarded']) {
                 $liveStreamed = true;
@@ -2482,8 +2516,9 @@ if ($useTools) {
     }
 
     $taskFinished = true;
-    completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total'], (microtime(true) - $requestStart) * 1000);
-    logResponseFinished($requestStart, $usage['prompt'], $usage['completion']);
+    $toolTokensPerSecond = computeTokensPerSecond($requestStart, $toolFirstTokenElapsedMs, $usage['completion']);
+    completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total'], (microtime(true) - $requestStart) * 1000, $toolTokensPerSecond);
+    logResponseFinished($requestStart, $usage['prompt'], $usage['completion'], $toolTokensPerSecond);
 
     // Persist the conversation so it survives future endpoint failures.
     if ($sessionId !== '') {
@@ -2533,6 +2568,7 @@ if ($stream) {
     $streamCurlErr    = '';
     $streamHttpCode   = 0;
     $firstTokenLogged = false;
+    $firstTokenElapsedMs = null;
     $streamStartedLogged = false;
     $clientAborted = false;
 
@@ -2542,6 +2578,7 @@ if ($stream) {
         $accumulatedText = '';
         $dataWritten     = false;
         $firstTokenLogged = false;
+        $firstTokenElapsedMs = null;
         $streamStartedLogged = false;
         $clientAborted = false;
 
@@ -2557,7 +2594,7 @@ if ($stream) {
         writeLog('info', 'Prompt an Modell ' . $model . ' weitergeleitet.');
 
         curl_setopt($chStream, CURLOPT_WRITEFUNCTION,
-            static function ($ch, $data) use (&$tailBuffer, &$lineBuffer, &$accumulatedText, &$dataWritten, &$firstTokenLogged, &$streamStartedLogged, &$clientAborted, $requestStart): int {
+            static function ($ch, $data) use (&$tailBuffer, &$lineBuffer, &$accumulatedText, &$dataWritten, &$firstTokenLogged, &$firstTokenElapsedMs, &$streamStartedLogged, &$clientAborted, $requestStart): int {
                 if (!$dataWritten) {
                     // Emit SSE headers on first data chunk (deferred so we can
                     // still switch the endpoint if the connection was refused).
@@ -2604,6 +2641,7 @@ if ($stream) {
                     if (is_array($dobj) && isset($dobj['choices'][0]['delta']['content'])) {
                         $deltaContent = (string) $dobj['choices'][0]['delta']['content'];
                         if ($deltaContent !== '' && !$firstTokenLogged) {
+                            $firstTokenElapsedMs = (microtime(true) - $requestStart) * 1000;
                             writeLog('info', 'Erste Antworttokens nach ' . elapsedMilliseconds($requestStart) . ' ms erzeugt.');
                             $firstTokenLogged = true;
                         }
@@ -2680,9 +2718,12 @@ if ($stream) {
     $taskFinished = true;
     $streamStatus = ($streamCurlErr === '' && ($streamHttpCode === 0 || $streamHttpCode === 200))
         ? 'done' : 'error';
-    completeTask($taskId, $streamStatus, $promptTokens, $completionTokens, $totalTokens, (microtime(true) - $requestStart) * 1000);
+    $streamTokensPerSecond = $streamStatus === 'done'
+        ? computeTokensPerSecond($requestStart, $firstTokenElapsedMs, $completionTokens)
+        : null;
+    completeTask($taskId, $streamStatus, $promptTokens, $completionTokens, $totalTokens, (microtime(true) - $requestStart) * 1000, $streamTokensPerSecond);
     if ($streamStatus === 'done') {
-        logResponseFinished($requestStart, $promptTokens, $completionTokens);
+        logResponseFinished($requestStart, $promptTokens, $completionTokens, $streamTokensPerSecond);
     }
 
     // Persist conversation on success.
