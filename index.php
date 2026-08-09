@@ -125,6 +125,16 @@ $csrfToken = $_SESSION['csrf_token'];
             font-size: 1rem;
             font-weight: 600;
             letter-spacing: .01em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        header h1 .brand-logo {
+            width: 24px;
+            height: 24px;
+            object-fit: contain;
+            flex-shrink: 0;
         }
 
         header .admin-link {
@@ -162,6 +172,7 @@ $csrfToken = $_SESSION['csrf_token'];
         }
 
         .welcome-logo { font-size: 2.8rem; margin-bottom: 8px; }
+        .welcome-logo img { width: 96px; height: 96px; object-fit: contain; }
 
         #welcome h2 { font-size: 1.6rem; font-weight: 600; }
 
@@ -1208,7 +1219,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
 <!-- ── Header ──────────────────────────────────────────────── -->
 <header>
-    <h1>🤖 KHWF KI</h1>
+    <h1><img class="brand-logo" src="assets/img/ai-mascot.png" alt="KHWF KI"> KHWF KI</h1>
     <div style="display:flex;align-items:center;gap:8px">
 <?php if ($loggedIn): ?>
         <span style="font-size:.8rem;color:var(--text-muted)">👤 <?= $loggedUser ?></span>
@@ -1370,7 +1381,7 @@ $csrfToken = $_SESSION['csrf_token'];
     function showWelcome() {
         chatArea.innerHTML =
             '<div id="welcome">' +
-            '<div class="welcome-logo">🤖</div>' +
+            '<div class="welcome-logo"><img src="assets/img/ai-mascot.png" alt="KHWF KI"></div>' +
             '<h2>Wie kann ich helfen?</h2>' +
             '<p>Stelle eine Frage – ich helfe dir gerne weiter.</p>' +
             '</div>';
