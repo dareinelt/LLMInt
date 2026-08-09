@@ -821,6 +821,21 @@ $csrfToken = $_SESSION['csrf_token'];
         #attach-image-btn:hover { background: var(--surface-alt); color: var(--text); }
         #attach-image-btn.has-images { color: var(--accent); }
 
+        #attach-detail-select {
+            display: none;
+            height: 32px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--surface-alt);
+            color: var(--text);
+            font-size: .75rem;
+            padding: 0 6px;
+            flex-shrink: 0;
+            cursor: pointer;
+        }
+
+        #attach-detail-select.visible { display: inline-block; }
+
         /* ── Attached-image preview strip (shown above the input box) ─ */
         #attach-preview {
             display: none;
@@ -1454,6 +1469,11 @@ $csrfToken = $_SESSION['csrf_token'];
             <textarea id="user-input" rows="1"
                       placeholder="Nachricht schreiben … (Enter = Senden, Shift+Enter = Zeilenumbruch)"></textarea>
             <input type="file" id="attach-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none">
+            <select id="attach-detail-select" title="Bild-Detailgrad (Vision-API)" aria-label="Bild-Detailgrad">
+                <option value="auto">Detail: Auto</option>
+                <option value="low">Detail: Niedrig</option>
+                <option value="high">Detail: Hoch</option>
+            </select>
             <button id="attach-image-btn" title="Bild anhängen (Vision-fähiges Modell erforderlich)">🖼</button>
             <button id="clear-btn" title="Verlauf löschen">🗑</button>
             <button id="send-btn" title="Senden">↑</button>
@@ -1497,6 +1517,7 @@ $csrfToken = $_SESSION['csrf_token'];
     const attachImageBtn   = document.getElementById('attach-image-btn');
     const attachImageInput = document.getElementById('attach-image-input');
     const attachPreview    = document.getElementById('attach-preview');
+    const attachDetailSelect = document.getElementById('attach-detail-select');
 
     /* Images attached to the next outgoing message: { dataUrl, mimeType, name } */
     let pendingImages = [];
@@ -2238,6 +2259,9 @@ $csrfToken = $_SESSION['csrf_token'];
         attachPreview.innerHTML = '';
         attachPreview.classList.toggle('visible', pendingImages.length > 0);
         attachImageBtn.classList.toggle('has-images', pendingImages.length > 0);
+        if (attachDetailSelect) {
+            attachDetailSelect.classList.toggle('visible', pendingImages.length > 0);
+        }
 
         pendingImages.forEach((img, index) => {
             const thumb = document.createElement('div');
@@ -2888,7 +2912,12 @@ $csrfToken = $_SESSION['csrf_token'];
         // array (image_url + text) when images were attached via the 🖼 button.
         let userContent = text;
         if (pendingImages.length > 0) {
-            userContent = pendingImages.map(img => ({ type: 'image_url', image_url: { url: img.dataUrl } }));
+            const detail = attachDetailSelect ? attachDetailSelect.value : 'auto';
+            userContent = pendingImages.map(img => {
+                const image_url = { url: img.dataUrl };
+                if (detail === 'low' || detail === 'high') image_url.detail = detail;
+                return { type: 'image_url', image_url };
+            });
             if (text) userContent.push({ type: 'text', text });
         }
 
