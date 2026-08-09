@@ -105,6 +105,7 @@ $db->exec("
         prompt_tokens     INT UNSIGNED    NULL,
         completion_tokens INT UNSIGNED    NULL,
         total_tokens      INT UNSIGNED    NULL,
+        tokens_per_second DECIMAL(8,2)    NULL,
         started_at        TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
         finished_at       TIMESTAMP(3)    NULL,
         PRIMARY KEY (id),
@@ -112,6 +113,13 @@ $db->exec("
         KEY idx_model_started   (model, started_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
+
+// Migration for existing installations that predate the tokens_per_second column.
+try {
+    $db->exec("ALTER TABLE tasks ADD COLUMN tokens_per_second DECIMAL(8,2) NULL AFTER total_tokens");
+} catch (Throwable $_e) {
+    // column already exists
+}
 
 // Search logs: records every SearXNG web-search executed during a chat request.
 $db->exec("
