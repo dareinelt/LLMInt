@@ -1363,6 +1363,16 @@ function streamChatCompletionRequest(
             mergeToolCallDeltas($toolCalls, $delta['tool_calls']);
         }
         if (isset($delta['reasoning_content']) && is_string($delta['reasoning_content']) && $delta['reasoning_content'] !== '') {
+            // Reasoning ("thinking") tokens are the first tokens a reasoning model
+            // decodes and often make up the bulk of the generation time. They must
+            // start the first-token timer too, otherwise the tokens/sec metric is
+            // computed over only the final answer segment and comes out wildly
+            // inflated.
+            if (!$firstTokenLogged) {
+                $firstTokenElapsedMs = (microtime(true) - $requestStart) * 1000;
+                writeLog('info', 'Erste Antworttokens nach ' . elapsedMilliseconds($requestStart) . ' ms erzeugt.');
+                $firstTokenLogged = true;
+            }
             $reasoning .= $delta['reasoning_content'];
             $pendingReasoning .= $delta['reasoning_content'];
         }
@@ -2637,14 +2647,25 @@ if ($stream) {
                     if ($djson === '' || $djson === '[DONE]') {
                         continue;
                     }
-                    $dobj = json_decode($djson, true);
-                    if (is_array($dobj) && isset($dobj['choices'][0]['delta']['content'])) {
-                        $deltaContent = (string) $dobj['choices'][0]['delta']['content'];
-                        if ($deltaContent !== '' && !$firstTokenLogged) {
-                            $firstTokenElapsedMs = (microtime(true) - $requestStart) * 1000;
-                            writeLog('info', 'Erste Antworttokens nach ' . elapsedMilliseconds($requestStart) . ' ms erzeugt.');
-                            $firstTokenLogged = true;
-                        }
+                    $dobj  = json_decode($djson, true);
+                    $delta = is_array($dobj) ? ($dobj['choices'][0]['delta'] ?? null) : null;
+                    if (!is_array($delta)) {
+                        continue;
+                    }
+                    // Reasoning ("thinking") tokens are decoded before the visible
+                    // answer content and often make up the bulk of the generation
+                    // time. The first-token timer must start on whichever kind of
+                    // delta arrives first, otherwise the tokens/sec metric is
+                    // computed over only the final answer segment and comes out
+                    // wildly inflated.
+                    $reasoningDelta = isset($delta['reasoning_content']) ? (string) $delta['reasoning_content'] : '';
+                    $deltaContent   = isset($delta['content']) ? (string) $delta['content'] : '';
+                    if (!$firstTokenLogged && ($reasoningDelta !== '' || $deltaContent !== '')) {
+                        $firstTokenElapsedMs = (microtime(true) - $requestStart) * 1000;
+                        writeLog('info', 'Erste Antworttokens nach ' . elapsedMilliseconds($requestStart) . ' ms erzeugt.');
+                        $firstTokenLogged = true;
+                    }
+                    if ($deltaContent !== '') {
                         $accumulatedText .= $deltaContent;
                     }
                 }
