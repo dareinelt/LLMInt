@@ -1016,6 +1016,37 @@ function normalizeAssistantContent(mixed $content): string
     return implode("\n", $parts);
 }
 
+/**
+ * Returns true when a single message's "content" value contains at least one
+ * OpenAI-style "image_url" content part (i.e. an attached image).
+ */
+function messageContentHasImage(mixed $content): bool
+{
+    if (!is_array($content)) {
+        return false;
+    }
+    foreach ($content as $part) {
+        if (is_array($part) && ($part['type'] ?? '') === 'image_url') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Returns true when any message in the request contains an attached image.
+ * Used to route the request to a vision-capable endpoint only when needed.
+ */
+function payloadMessagesHaveImage(array $messages): bool
+{
+    foreach ($messages as $message) {
+        if (is_array($message) && messageContentHasImage($message['content'] ?? null)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function ensureSseHeaders(): void
 {
     static $headersSent = false;
@@ -1677,6 +1708,10 @@ foreach ($payload['messages'] as $msg) {
 
 $model = $payload['model'];
 
+// Whether this request attaches at least one image – only vision-capable
+// endpoints may be selected for it (see admin endpoint config "Vision-fähig").
+$requiresVision = payloadMessagesHaveImage($payload['messages']);
+
 // Extract and validate the optional session ID for conversation persistence.
 $sessionId = '';
 if (isset($payload['session_id']) && is_string($payload['session_id'])) {
@@ -1755,7 +1790,7 @@ if ($sessionUserId !== null && isIntelligenceGroupFeatureEnabled()) {
     $psLastUserText = '';
     foreach (array_reverse($payload['messages']) as $psMsg) {
         if (($psMsg['role'] ?? '') === 'user') {
-            $psLastUserText = is_string($psMsg['content']) ? $psMsg['content'] : '';
+            $psLastUserText = is_string($psMsg['content']) ? $psMsg['content'] : normalizeAssistantContent($psMsg['content'] ?? '');
             break;
         }
     }
@@ -1799,7 +1834,7 @@ if ($routingDecisionModel !== '' && $intelligenceGroup === null) {
     $lastUserText = '';
     foreach (array_reverse($payload['messages']) as $msg) {
         if (($msg['role'] ?? '') === 'user') {
-            $lastUserText = is_string($msg['content']) ? $msg['content'] : '';
+            $lastUserText = is_string($msg['content']) ? $msg['content'] : normalizeAssistantContent($msg['content'] ?? '');
             break;
         }
     }
@@ -1921,7 +1956,7 @@ $userSlotMax = ($routingDecisionModel !== '' && $model === $routingDecisionModel
     : $balancerMaxConcurrentForChat;
 
 try {
-    $slot = pickEndpointForModel($model, $userSlotMax);
+    $slot = pickEndpointForModel($model, $userSlotMax, false, $requiresVision);
 } catch (Throwable $e) {
     http_response_code(500);
     header('Content-Type: application/json; charset=utf-8');
@@ -1929,9 +1964,12 @@ try {
     exit;
 }
 
+$noVisionEndpointMessage = 'Kein Vision-fähiger Endpunkt für dieses Modell verfügbar. '
+    . 'Bitte ein Vision-fähiges Modell wählen oder im Admin-Bereich einen Endpunkt als "Vision-fähig" markieren.';
+
 if ($slot === null) {
     try {
-        $hasMatchingEndpoint = hasActiveEndpointForModel($model);
+        $hasMatchingEndpoint = hasActiveEndpointForModel($model, $requiresVision);
     } catch (Throwable $e) {
         http_response_code(500);
         header('Content-Type: application/json; charset=utf-8');
@@ -1942,7 +1980,7 @@ if ($slot === null) {
     if (!$hasMatchingEndpoint) {
         http_response_code(503);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['error' => 'Kein passender Endpunkt verfügbar.']);
+        echo json_encode(['error' => $requiresVision ? $noVisionEndpointMessage : 'Kein passender Endpunkt verfügbar.']);
         exit;
     }
 
@@ -1965,19 +2003,20 @@ if ($slot === null) {
         usleep(500000);
 
         try {
-            if (!hasActiveEndpointForModel($model)) {
+            if (!hasActiveEndpointForModel($model, $requiresVision)) {
+                $noEndpointMessage = $requiresVision ? $noVisionEndpointMessage : 'Kein passender Endpunkt mehr verfügbar.';
                 if (isset($payload['stream']) && $payload['stream'] === true) {
-                    emitSseData(['error' => 'Kein passender Endpunkt mehr verfügbar.']);
+                    emitSseData(['error' => $noEndpointMessage]);
                 } else {
                     http_response_code(503);
                     header('Content-Type: application/json; charset=utf-8');
-                    echo json_encode(['error' => 'Kein passender Endpunkt mehr verfügbar.']);
+                    echo json_encode(['error' => $noEndpointMessage]);
                 }
                 writeLog('warning', 'Für Modell ' . $model . ' ist kein aktiver Modellendpunkt mehr verfügbar.');
                 exit;
             }
 
-            $slot = pickEndpointForModel($model, $userSlotMax);
+            $slot = pickEndpointForModel($model, $userSlotMax, false, $requiresVision);
         } catch (Throwable $e) {
             if (isset($payload['stream']) && $payload['stream'] === true) {
                 emitSseData(['error' => 'Interner Fehler beim Endpunkt-Routing.']);
@@ -2065,7 +2104,7 @@ $forwardPayload = [];
  * is available or the retry budget is exhausted.
  */
 $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
-    &$model, $userSlotMax,
+    &$model, $userSlotMax, $requiresVision,
     &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries, &$responseDetails,
     &$upgradeFailoverTried, &$intelligenceUpgrade, &$forwardPayload, &$payload, $detectedCategory
 ): bool {
@@ -2086,7 +2125,7 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     } catch (Throwable $e) {}
 
     try {
-        $newSlot = pickEndpointForModel($model, $userSlotMax);
+        $newSlot = pickEndpointForModel($model, $userSlotMax, false, $requiresVision);
     } catch (Throwable $e) {
         return false;
     }
@@ -2096,7 +2135,7 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     if ($newSlot === null) {
         try {
             foreach (getFallbackChain($model) as $fallbackModel) {
-                $newSlot = pickEndpointForModel($fallbackModel, $userSlotMax);
+                $newSlot = pickEndpointForModel($fallbackModel, $userSlotMax, false, $requiresVision);
                 if ($newSlot !== null) {
                     $model = $fallbackModel;
                     $payload['model'] = $fallbackModel;
@@ -2117,7 +2156,7 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
             $upgrade = getUpgradeModelSuggestionForRequestedModel($model, $detectedCategory);
             if (is_array($upgrade) && !empty($upgrade['model'])) {
                 $upgradeModel = (string) $upgrade['model'];
-                $newSlot = pickEndpointForModel($upgradeModel, null);
+                $newSlot = pickEndpointForModel($upgradeModel, null, false, $requiresVision);
                 if ($newSlot !== null) {
                     $model = $upgradeModel;
                     $payload['model'] = $upgradeModel;
