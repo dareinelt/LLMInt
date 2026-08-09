@@ -605,9 +605,44 @@ $csrfToken = $_SESSION['csrf_token'];
         .bubble .thinking-thought span:nth-child(3) { animation-delay: .4s; }
 
         .bubble .thinking-face {
-            font-size: 1.7rem;
-            line-height: 1;
+            position: relative;
+            width: 34px;
+            height: 34px;
         }
+
+        .bubble .thinking-face img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            opacity: 0;
+            transition: opacity .7s ease;
+        }
+
+        /* Live/streaming: robots A/B/C cycle in sequence, cross-faded via a JS-driven data-step attribute */
+        .bubble .thinking-face.live .tf-a { opacity: 1; }
+        .bubble .thinking-face.live[data-step="1"] .tf-a { opacity: 0; }
+        .bubble .thinking-face.live[data-step="1"] .tf-b { opacity: 1; }
+        .bubble .thinking-face.live[data-step="2"] .tf-b { opacity: 0; }
+
+        /* Robot C additionally spins once clockwise while it fades in and back out */
+        .bubble .thinking-face.live[data-step="2"] .tf-c {
+            animation: thinkingSpinFade 1.3s ease-in-out;
+        }
+
+        @keyframes thinkingSpinFade {
+            0%   { opacity: 0; transform: rotate(0deg); }
+            20%  { opacity: 1; transform: rotate(72deg); }
+            55%  { opacity: 1; transform: rotate(360deg); }
+            100% { opacity: 0; transform: rotate(360deg); }
+        }
+
+        /* Done: replace the alternating pair with the static welcome/header mascot */
+        .bubble .thinking-bubble.done .thinking-face .tf-a,
+        .bubble .thinking-bubble.done .thinking-face .tf-b,
+        .bubble .thinking-bubble.done .thinking-face .tf-c { opacity: 0; }
+        .bubble .thinking-bubble.done .thinking-face .tf-done { opacity: 1; }
 
         .bubble .thinking-content {
             flex: 1;
@@ -2139,11 +2174,31 @@ $csrfToken = $_SESSION['csrf_token'];
         }
     }
 
-    const THINKING_ROBOT_HTML =
-        '<div class="thinking-robot" aria-hidden="true">' +
+    function thinkingRobotHtml(live) {
+        return '<div class="thinking-robot" aria-hidden="true">' +
             '<div class="thinking-thought"><span></span><span></span><span></span></div>' +
-            '<div class="thinking-face">🤖</div>' +
+            '<div class="thinking-face' + (live ? ' live' : '') + '">' +
+                '<img class="tf-a" src="assets/img/thinking-robot-a.png" alt="">' +
+                '<img class="tf-b" src="assets/img/thinking-robot-b.png" alt="">' +
+                '<img class="tf-c" src="assets/img/thinking-robot-c.png" alt="">' +
+                '<img class="tf-done" src="assets/img/ai-mascot.png" alt="">' +
+            '</div>' +
         '</div>';
+    }
+
+    // While a bubble is still thinking, the three robot images cross-fade into each
+    // other in sequence every ~1.3s. A single global interval advances a
+    // "data-step" counter (0 → 1 → 2 → 0 …) on every currently live ".thinking-face"
+    // in the DOM (querySelectorAll re-scans the live document each tick, so
+    // finished/removed bubbles never leak timers).
+    setInterval(function () {
+        document.querySelectorAll('.thinking-face.live').forEach(function (el) {
+            const next = (parseInt(el.dataset.step || '0', 10) + 1) % 3;
+            el.dataset.step = String(next);
+        });
+    }, 1300);
+
+    const THINKING_ROBOT_HTML = thinkingRobotHtml(false);
 
     function thinkingLineHtml(line) {
         return inlineMarkdown(escapeHtmlContent(line));
@@ -2182,7 +2237,7 @@ $csrfToken = $_SESSION['csrf_token'];
             if (!thinkEl) {
                 thinkEl = document.createElement('div');
                 thinkEl.className = 'thinking-bubble';
-                thinkEl.innerHTML = THINKING_ROBOT_HTML + '<div class="thinking-content"></div>';
+                thinkEl.innerHTML = thinkingRobotHtml(true) + '<div class="thinking-content"></div>';
                 thinkEl._linesDone = 0;
                 thinkEl._currentLineEl = null;
                 bubble.insertBefore(thinkEl, answerEl);
