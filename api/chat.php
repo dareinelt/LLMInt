@@ -1124,24 +1124,77 @@ function buildResponseDetails(array $endpoint): array
 }
 
 /**
+ * Rough token estimate for a single OpenAI-style "image_url" content part,
+ * used by estimateTokenCount() below.
+ *
+ * Vision-capable models tokenize an attached image based on its resolution
+ * and the requested "detail" level (tiling), NOT on the length of the raw
+ * base64 encoding that carries the pixel data over the wire. A modest
+ * 1536px image can easily base64-encode to several hundred KB / a few
+ * million characters, so counting it as literal text (chars / 4) would
+ * inflate the estimate by two to three orders of magnitude – which is
+ * exactly what produced absurd "Kontextlimit erreicht" reports for small
+ * images. We therefore use small fixed budgets modeled after the
+ * low/high-detail token costs used by common OpenAI-compatible vision
+ * APIs, completely independent of the base64 payload size.
+ */
+function estimateImageTokenCount(mixed $imageUrlPart): int
+{
+    $detail = 'auto';
+    if (is_array($imageUrlPart) && is_string($imageUrlPart['detail'] ?? null)) {
+        $detail = $imageUrlPart['detail'];
+    }
+    // "low" detail images are always tokenized as a small fixed-size tile.
+    if ($detail === 'low') {
+        return 85;
+    }
+    // "auto"/"high" may be tiled up to ~1536px; use a conservative fixed
+    // upper-bound estimate rather than scanning/decoding the image.
+    return 1105;
+}
+
+/**
  * Rough token estimate for a chat messages array, used to pre-flight-check
  * an outgoing request against the configured context limits before it is
  * actually dispatched to the model (real usage is only known afterwards).
- * Uses the common ~4 characters-per-token rule of thumb plus a small
- * per-message overhead for role/format tokens.
+ * Uses the common ~4 characters-per-token rule of thumb for plain text,
+ * plus a small per-message overhead for role/format tokens.
+ *
+ * Attached images (content-part type "image_url") are deliberately
+ * excluded from the character count and instead budgeted via
+ * estimateImageTokenCount() — see that function's docblock for why the
+ * base64 image data must never be treated as literal text here.
  */
 function estimateTokenCount(array $messages): int
 {
     $chars = 0;
+    $imageTokens = 0;
     foreach ($messages as $message) {
         if (!is_array($message)) {
             continue;
         }
         $content = $message['content'] ?? '';
-        $chars += is_string($content) ? strlen($content) : strlen(json_encode($content));
+        if (is_string($content)) {
+            $chars += strlen($content);
+        } elseif (is_array($content)) {
+            foreach ($content as $part) {
+                if (is_array($part) && ($part['type'] ?? '') === 'image_url') {
+                    $imageTokens += estimateImageTokenCount($part['image_url'] ?? null);
+                    continue;
+                }
+                if (is_array($part) && ($part['type'] ?? '') === 'text' && is_string($part['text'] ?? null)) {
+                    $chars += strlen($part['text']);
+                    continue;
+                }
+                // Unknown/other structured part: fall back to counting it as
+                // text, but only its own (typically small) encoding, never a
+                // base64 image payload (already handled above).
+                $chars += strlen(json_encode($part));
+            }
+        }
         $chars += strlen((string) ($message['role'] ?? ''));
     }
-    return (int) ceil($chars / 4) + count($messages) * 4;
+    return (int) ceil($chars / 4) + $imageTokens + count($messages) * 4;
 }
 
 /**
