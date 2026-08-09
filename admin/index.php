@@ -130,6 +130,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
             $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
+            $supportsVision      = isset($_POST['ep_supports_vision']) ? 1 : 0;
             $costWeight          = max(0.0001, min(1000, (float) ($_POST['ep_cost_weight'] ?? 1.0)));
             $capacityWeight      = max(0.0001, min(1000, (float) ($_POST['ep_capacity_weight'] ?? 1.0)));
 
@@ -150,12 +151,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db->prepare(
                     'INSERT INTO endpoints (alias, base_url, timeout, max_context, context_limit_per_slot,
                                             default_model, specialized_for_category,
-                                            supports_tool_calling, is_llamacpp, is_active, sort_order,
+                                            supports_tool_calling, is_llamacpp, supports_vision, is_active, sort_order,
                                             ssh_host, ssh_port, ssh_user, ssh_password, cost_weight, capacity_weight)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
                 )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
                             $newModel, $specializedFor,
-                            $supportsToolCalling, $isLlamacpp, $isActive, $maxOrder + 1,
+                            $supportsToolCalling, $isLlamacpp, $supportsVision, $isActive, $maxOrder + 1,
                             $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null,
                             $costWeight, $capacityWeight]);
                 $endpointLabel = $newAlias !== '' ? $newAlias : rtrim($newUrl, '/');
@@ -180,6 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
             $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
+            $supportsVision      = isset($_POST['ep_supports_vision']) ? 1 : 0;
             $costWeight          = max(0.0001, min(1000, (float) ($_POST['ep_cost_weight'] ?? 1.0)));
             $capacityWeight      = max(0.0001, min(1000, (float) ($_POST['ep_capacity_weight'] ?? 1.0)));
 
@@ -206,24 +208,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, max_context = ?, context_limit_per_slot = ?,
                                 default_model = ?,
-                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, is_active = ?,
+                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, supports_vision = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?, cost_weight = ?, capacity_weight = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
                                 $newModel, $specializedFor,
-                                $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser,
+                                $supportsToolCalling, $isLlamacpp, $supportsVision, $isActive, $sshHost, $sshPort, $sshUser,
                                 $costWeight, $capacityWeight, $epId]);
                 } else {
                     $db->prepare(
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, max_context = ?, context_limit_per_slot = ?,
                                 default_model = ?,
-                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, is_active = ?,
+                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, supports_vision = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?, cost_weight = ?, capacity_weight = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
                                 $newModel, $specializedFor,
-                                $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword,
+                                $supportsToolCalling, $isLlamacpp, $supportsVision, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword,
                                 $costWeight, $capacityWeight, $epId]);
                 }
                 if (is_array($previousEndpoint) && (int) ($previousEndpoint['is_active'] ?? 0) === 1 && $isActive !== 1) {
@@ -947,6 +949,7 @@ foreach ($endpoints as $ep) {
         'specialized_for_category' => $ep['specialized_for_category'] ?? '',
         'supports_tool_calling'    => (int) ($ep['supports_tool_calling'] ?? 1),
         'is_llamacpp'              => (int) ($ep['is_llamacpp'] ?? 0),
+        'supports_vision'          => (int) ($ep['supports_vision'] ?? 0),
         'is_active'                => $ep['is_active'],
         'ssh_host'                 => $ep['ssh_host'] ?? '',
         'ssh_port'                 => $ep['ssh_port'] ?? 22,
@@ -2682,6 +2685,19 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         llama.cpp Anfragen mit <code>tools</code> ab.
                         Beispiel-Startbefehl:
                         <code>./llama-server -m /pfad/zum/modell.gguf --host 0.0.0.0 --port 8080 --jinja</code>
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label class="inline">
+                        <input type="checkbox" id="ep-supports-vision" name="ep_supports_vision"
+                               <?= ($editEp && (int) ($editEp['supports_vision'] ?? 0)) ? 'checked' : '' ?>>
+                        Vision-fähig (Bilder als Eingabe akzeptieren)
+                    </label>
+                    <p class="hint">
+                        Aktivieren, wenn das von diesem Endpunkt bediente Modell Bild-Eingaben
+                        (OpenAI-kompatible <code>image_url</code>-Inhalte) versteht. Nutzer können dann
+                        im Chat Bilder anhängen, die als Base64 an dieses Modell übergeben werden.
                     </p>
                 </div>
 
@@ -4433,6 +4449,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const activeCheck  = document.getElementById('ep-active');
     const toolCallingCheck = document.getElementById('ep-supports-tool-calling');
     const llamacppCheck    = document.getElementById('ep-is-llamacpp');
+    const visionCheck      = document.getElementById('ep-supports-vision');
     const loadBtn      = document.getElementById('ep-load-btn');
     const endpointConfigPanel = document.getElementById('config-endpoints');
     const specializedSelect = document.getElementById('ep-specialized-for');
@@ -4512,6 +4529,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         activeCheck.checked    = ep.is_active == 1;
         if (toolCallingCheck) toolCallingCheck.checked = ep.supports_tool_calling != 0;
         if (llamacppCheck) llamacppCheck.checked = ep.is_llamacpp == 1;
+        if (visionCheck) visionCheck.checked = ep.supports_vision == 1;
         // Clear datalist options from a previous load-models call.
         modelList.innerHTML    = '';
         // Specialization
@@ -4539,6 +4557,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         activeCheck.checked   = true;
         if (toolCallingCheck) toolCallingCheck.checked = true;
         if (llamacppCheck) llamacppCheck.checked = false;
+        if (visionCheck) visionCheck.checked = false;
         modelList.innerHTML   = '';
         if (specializedSelect) specializedSelect.value = '';
         if (sshHost)     sshHost.value     = '';

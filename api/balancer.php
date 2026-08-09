@@ -48,11 +48,18 @@ require_once __DIR__ . '/../lib/balancer_engine.php';
  * @param bool     $requireToolCalling When true, only endpoints whose model
  *                                    supports OpenAI-style tool calling are
  *                                    considered (model-capability routing).
+ * @param bool     $requireVision     When true, only endpoints marked as
+ *                                    vision-capable (accepting "image_url"
+ *                                    content parts) are considered.
  *
  * @throws PDOException on database errors
  */
-function pickEndpointForModel(string $model, ?int $maxConcurrent = null, bool $requireToolCalling = false): ?array
-{
+function pickEndpointForModel(
+    string $model,
+    ?int $maxConcurrent = null,
+    bool $requireToolCalling = false,
+    bool $requireVision = false
+): ?array {
     cleanupOrphanedTasks('tasks');
 
     $maxConcurrent = $maxConcurrent !== null && $maxConcurrent > 0
@@ -62,13 +69,14 @@ function pickEndpointForModel(string $model, ?int $maxConcurrent = null, bool $r
     $db = getDb();
     $circuitWhere = balancerCircuitWhereClause();
     $toolCallingWhere = $requireToolCalling ? 'AND e.supports_tool_calling = 1' : '';
+    $visionWhere = $requireVision ? 'AND e.supports_vision = 1' : '';
 
     $db->beginTransaction();
     try {
         // Step 1: gather scored candidates (read-committed snapshot).
         $stmt = $db->prepare("
             SELECT e.id, e.alias, e.base_url, e.timeout, e.default_model,
-                   e.supports_tool_calling, e.is_llamacpp,
+                   e.supports_tool_calling, e.is_llamacpp, e.supports_vision,
                    e.circuit_state, e.cooldown_until,
                    e.avg_latency_ms, e.cost_weight, e.capacity_weight,
                    e.max_context, e.context_limit_per_slot,
@@ -88,6 +96,7 @@ function pickEndpointForModel(string $model, ?int $maxConcurrent = null, bool $r
               AND COALESCE(r.running_count, 0) < ?
               AND {$circuitWhere}
               {$toolCallingWhere}
+              {$visionWhere}
             ORDER BY
                 (COALESCE(r.running_count, 0) / GREATEST(e.capacity_weight, 0.0001)) ASC,
                 COALESCE(e.avg_latency_ms, 999999) * ? ASC,
@@ -154,15 +163,19 @@ function pickEndpointForModel(string $model, ?int $maxConcurrent = null, bool $r
 
 /**
  * Returns true when at least one active endpoint exists for the model.
+ *
+ * @param bool $requireVision When true, only vision-capable endpoints count.
  */
-function hasActiveEndpointForModel(string $model): bool
+function hasActiveEndpointForModel(string $model, bool $requireVision = false): bool
 {
-    $stmt = getDb()->prepare('
+    $visionWhere = $requireVision ? 'AND supports_vision = 1' : '';
+    $stmt = getDb()->prepare("
         SELECT COUNT(*)
           FROM endpoints
          WHERE is_active = 1
            AND default_model = ?
-    ');
+           {$visionWhere}
+    ");
     $stmt->execute([$model]);
 
     return (int) $stmt->fetchColumn() > 0;

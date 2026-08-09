@@ -802,6 +802,84 @@ $csrfToken = $_SESSION['csrf_token'];
 
         #clear-btn:hover { background: var(--surface-alt); color: var(--text); }
 
+        #attach-image-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: .95rem;
+            transition: background .15s, color .15s;
+        }
+
+        #attach-image-btn:hover { background: var(--surface-alt); color: var(--text); }
+        #attach-image-btn.has-images { color: var(--accent); }
+
+        /* ── Attached-image preview strip (shown above the input box) ─ */
+        #attach-preview {
+            display: none;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 0 2px 8px;
+        }
+
+        #attach-preview.visible { display: flex; }
+
+        .attach-thumb {
+            position: relative;
+            width: 56px;
+            height: 56px;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
+        .attach-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .attach-thumb-remove {
+            position: absolute;
+            top: 1px;
+            right: 1px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(0,0,0,.65);
+            color: #fff;
+            font-size: .65rem;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* ── Images attached to a sent user message ────────────────── */
+        .msg-images {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 6px;
+        }
+
+        .msg-images img {
+            max-width: 160px;
+            max-height: 160px;
+            border-radius: 8px;
+            display: block;
+        }
+
         #send-btn {
             width: 36px;
             height: 36px;
@@ -1364,6 +1442,9 @@ $csrfToken = $_SESSION['csrf_token'];
                       placeholder="Du bist ein hilfreicher Assistent …"></textarea>
         </div>
 
+        <!-- Attached-image preview strip -->
+        <div id="attach-preview"></div>
+
         <!-- Main input container -->
         <div id="input-box">
             <span id="group-pill" title="Angesprochene Intelligenzgruppe">
@@ -1372,6 +1453,8 @@ $csrfToken = $_SESSION['csrf_token'];
             </span>
             <textarea id="user-input" rows="1"
                       placeholder="Nachricht schreiben … (Enter = Senden, Shift+Enter = Zeilenumbruch)"></textarea>
+            <input type="file" id="attach-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none">
+            <button id="attach-image-btn" title="Bild anhängen (Vision-fähiges Modell erforderlich)">🖼</button>
             <button id="clear-btn" title="Verlauf löschen">🗑</button>
             <button id="send-btn" title="Senden">↑</button>
         </div>
@@ -1411,6 +1494,15 @@ $csrfToken = $_SESSION['csrf_token'];
     const groupPill       = document.getElementById('group-pill');
     const groupPillLabel  = document.getElementById('group-pill-label');
     const groupPillRemove = document.getElementById('group-pill-remove');
+    const attachImageBtn   = document.getElementById('attach-image-btn');
+    const attachImageInput = document.getElementById('attach-image-input');
+    const attachPreview    = document.getElementById('attach-preview');
+
+    /* Images attached to the next outgoing message: { dataUrl, mimeType, name } */
+    let pendingImages = [];
+
+    const MAX_ATTACH_IMAGES   = 4;
+    const MAX_ATTACH_FILE_MB  = 10;
 
     /* ── Welcome screen ──────────────────────────────────── */
 
@@ -1607,7 +1699,7 @@ $csrfToken = $_SESSION['csrf_token'];
         const msgs = data.messages || [];
         for (const msg of msgs) {
             if (msg.role === 'user' || msg.role === 'assistant') {
-                const content = typeof msg.content === 'string' ? msg.content : '';
+                const content = msg.content;
                 const bubble = appendMessage(msg.role, content);
                 if (msg.role === 'assistant' && Array.isArray(msg.sources)) {
                     setSourcePillsForBubble(bubble, msg.sources);
@@ -1689,6 +1781,8 @@ $csrfToken = $_SESSION['csrf_token'];
         chatArea.innerHTML = '';
         clearUpgradePrompt();
         removeActiveGroup(false);
+        pendingImages = [];
+        if (typeof renderAttachPreview === 'function') renderAttachPreview();
         sessionId = generateSessionId();
         sessionStorage.setItem('chat_session_id', sessionId);
         showWelcome();
@@ -2114,6 +2208,100 @@ $csrfToken = $_SESSION['csrf_token'];
         });
     }
 
+    /* ── Message content helpers (text / image parts) ────── */
+
+    /** Splits an OpenAI-style message content (string or content-parts array)
+     *  into its plain text and the list of attached image data URLs. */
+    function extractMessageParts(content) {
+        if (typeof content === 'string') return { text: content, images: [] };
+        if (Array.isArray(content)) {
+            let text = '';
+            const images = [];
+            for (const part of content) {
+                if (!part || typeof part !== 'object') continue;
+                if (part.type === 'text' && typeof part.text === 'string') {
+                    text += (text ? '\n' : '') + part.text;
+                } else if (part.type === 'image_url' && part.image_url && typeof part.image_url.url === 'string') {
+                    images.push(part.image_url.url);
+                }
+            }
+            return { text, images };
+        }
+        return { text: '', images: [] };
+    }
+
+    /* ── Attach-image button (next to "Chatverlauf löschen") ─────── */
+
+    function renderAttachPreview() {
+        attachPreview.innerHTML = '';
+        attachPreview.classList.toggle('visible', pendingImages.length > 0);
+        attachImageBtn.classList.toggle('has-images', pendingImages.length > 0);
+
+        pendingImages.forEach((img, index) => {
+            const thumb = document.createElement('div');
+            thumb.className = 'attach-thumb';
+
+            const imgEl = document.createElement('img');
+            imgEl.src = img.dataUrl;
+            imgEl.alt = img.name;
+            thumb.appendChild(imgEl);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'attach-thumb-remove';
+            removeBtn.title = 'Bild entfernen';
+            removeBtn.textContent = '×';
+            removeBtn.addEventListener('click', () => {
+                pendingImages.splice(index, 1);
+                renderAttachPreview();
+            });
+            thumb.appendChild(removeBtn);
+
+            attachPreview.appendChild(thumb);
+        });
+    }
+
+    function readFileAsDataUrl(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(file);
+        });
+    }
+
+    if (attachImageBtn && attachImageInput) {
+        attachImageBtn.addEventListener('click', () => attachImageInput.click());
+
+        attachImageInput.addEventListener('change', async () => {
+            const files = Array.from(attachImageInput.files || []);
+            attachImageInput.value = ''; // allow re-selecting the same file
+
+            for (const file of files) {
+                if (pendingImages.length >= MAX_ATTACH_IMAGES) {
+                    setStatus(`Maximal ${MAX_ATTACH_IMAGES} Bilder pro Nachricht.`, 'error');
+                    break;
+                }
+                if (!file.type.startsWith('image/')) {
+                    setStatus('Nur Bilddateien können angehängt werden.', 'error');
+                    continue;
+                }
+                if (file.size > MAX_ATTACH_FILE_MB * 1024 * 1024) {
+                    setStatus(`Bild "${file.name}" ist zu groß (max. ${MAX_ATTACH_FILE_MB} MB).`, 'error');
+                    continue;
+                }
+                try {
+                    const dataUrl = await readFileAsDataUrl(file);
+                    pendingImages.push({ dataUrl, mimeType: file.type, name: file.name });
+                } catch (_) {
+                    setStatus(`Bild "${file.name}" konnte nicht gelesen werden.`, 'error');
+                }
+            }
+
+            renderAttachPreview();
+        });
+    }
+
     /* ── Render a message bubble ─────────────────────────── */
 
     function appendMessage(role, content, streaming = false) {
@@ -2143,7 +2331,22 @@ $csrfToken = $_SESSION['csrf_token'];
             bubble.innerHTML = content ? renderMarkdown(content) : '';
             if (content && !streaming) makeAnswerListsClickable(bubble);
         } else {
-            bubble.textContent = content;
+            const { text, images } = extractMessageParts(content);
+            if (images.length) {
+                const imagesWrap = document.createElement('div');
+                imagesWrap.className = 'msg-images';
+                images.forEach(src => {
+                    const imgEl = document.createElement('img');
+                    imgEl.src = src;
+                    imagesWrap.appendChild(imgEl);
+                });
+                bubble.appendChild(imagesWrap);
+            }
+            if (text) {
+                const textEl = document.createElement('div');
+                textEl.textContent = text;
+                bubble.appendChild(textEl);
+            }
         }
 
         messageContent.appendChild(bubble);
@@ -2640,17 +2843,27 @@ $csrfToken = $_SESSION['csrf_token'];
         const text  = userInput.value.trim();
         const model = defaultModel;
 
-        if (!text)  { userInput.focus(); return; }
+        if (!text && pendingImages.length === 0) { userInput.focus(); return; }
         if (!model) { setStatus('Kein Standardmodell konfiguriert. Bitte im Admin-Bereich ein Modell festlegen.', 'error'); return; }
         if (isStreaming) return;
 
         clearUpgradePrompt();
 
+        // Build the outgoing content: plain text, or an OpenAI-style content-parts
+        // array (image_url + text) when images were attached via the 🖼 button.
+        let userContent = text;
+        if (pendingImages.length > 0) {
+            userContent = pendingImages.map(img => ({ type: 'image_url', image_url: { url: img.dataUrl } }));
+            if (text) userContent.push({ type: 'text', text });
+        }
+
         // Add user message to UI + history.
-        appendMessage('user', text);
-        history.push({ role: 'user', content: text });
+        appendMessage('user', userContent);
+        history.push({ role: 'user', content: userContent });
         userInput.value = '';
         autoResizeTextarea(userInput);
+        pendingImages = [];
+        renderAttachPreview();
 
         // Build message array (optionally prepend system prompt).
         const messages = [];

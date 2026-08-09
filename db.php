@@ -108,6 +108,13 @@ function ensureRuntimeSchema(PDO $pdo): void
         $pdo->exec("ALTER TABLE endpoints ADD COLUMN is_llamacpp TINYINT(1) NOT NULL DEFAULT 0 AFTER supports_tool_calling");
     } catch (Throwable $_e) { /* column already exists */ }
 
+    // Vision flag: whether the model served by this endpoint accepts image
+    // inputs (OpenAI-style "image_url" content parts). Defaults to 0
+    // (not supported) since most chat models are text-only.
+    try {
+        $pdo->exec("ALTER TABLE endpoints ADD COLUMN supports_vision TINYINT(1) NOT NULL DEFAULT 0 AFTER is_llamacpp");
+    } catch (Throwable $_e) { /* column already exists */ }
+
     // SSH credentials for system-metric polling (RAM, CPU load, CPU temp via lm-sensors).
     foreach ([
         "ALTER TABLE endpoints ADD COLUMN ssh_host     VARCHAR(255) NOT NULL DEFAULT '' AFTER is_active",
