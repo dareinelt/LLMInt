@@ -626,9 +626,10 @@ $csrfToken = $_SESSION['csrf_token'];
         .bubble .thinking-face.live[data-step="1"] .tf-b { opacity: 1; }
         .bubble .thinking-face.live[data-step="2"] .tf-b { opacity: 0; }
 
-        /* Robot C additionally spins once clockwise while it fades in and back out */
+        /* Robot C additionally spins once clockwise while it fades in and back out.
+           C stays visible 3x as long as A/B, so its animation runs 3x as long too. */
         .bubble .thinking-face.live[data-step="2"] .tf-c {
-            animation: thinkingSpinFade 1.3s ease-in-out;
+            animation: thinkingSpinFade 3.9s ease-in-out;
         }
 
         @keyframes thinkingSpinFade {
@@ -2187,16 +2188,22 @@ $csrfToken = $_SESSION['csrf_token'];
     }
 
     // While a bubble is still thinking, the three robot images cross-fade into each
-    // other in sequence every ~1.3s. A single global interval advances a
-    // "data-step" counter (0 → 1 → 2 → 0 …) on every currently live ".thinking-face"
-    // in the DOM (querySelectorAll re-scans the live document each tick, so
-    // finished/removed bubbles never leak timers).
-    setInterval(function () {
+    // other in sequence. A single global recursive timer advances a "data-step"
+    // counter (0 → 1 → 2 → 0 …) on every currently live ".thinking-face" in the
+    // DOM (querySelectorAll re-scans the live document each tick, so finished/
+    // removed bubbles never leak timers). Robot C (step 2) stays on screen 3x as
+    // long as A/B (steps 0/1) before cycling back.
+    const THINKING_STEP_MS = 1300;
+    let thinkingStep = 0;
+    (function tickThinkingRobot() {
         document.querySelectorAll('.thinking-face.live').forEach(function (el) {
-            const next = (parseInt(el.dataset.step || '0', 10) + 1) % 3;
-            el.dataset.step = String(next);
+            el.dataset.step = String(thinkingStep);
         });
-    }, 1300);
+        // Robot C (step 2) dwells 3x as long as A/B before cycling back to A.
+        const dwell = thinkingStep === 2 ? THINKING_STEP_MS * 3 : THINKING_STEP_MS;
+        thinkingStep = (thinkingStep + 1) % 3;
+        setTimeout(tickThinkingRobot, dwell);
+    })();
 
     const THINKING_ROBOT_HTML = thinkingRobotHtml(false);
 
