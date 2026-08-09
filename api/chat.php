@@ -2048,10 +2048,21 @@ if ($openAiToolMode === 'disabled') {
 }
 $stream = $clientRequestedStream && !$useTools;
 
+// Prepend the application-wide system prompt (configured in the admin area)
+// to a dedicated copy of the conversation used only for the upstream LLM
+// call. $payload['messages'] itself stays untouched so it can still be
+// persisted via saveConversationSession() and returned to the client without
+// ever exposing this prompt to the user.
+$llmMessages = $payload['messages'];
+$globalSystemPrompt = getGlobalSystemPrompt();
+if ($globalSystemPrompt !== '') {
+    array_unshift($llmMessages, ['role' => 'system', 'content' => $globalSystemPrompt]);
+}
+
 // Forward only the fields LM Studio expects.
 $forwardPayload = [
     'model'       => $model,
-    'messages'    => $payload['messages'],
+    'messages'    => $llmMessages,
     'stream'      => $stream,
     'temperature' => $payload['temperature'] ?? 0.7,
     'max_tokens'  => $payload['max_tokens']  ?? -1,
@@ -2076,7 +2087,7 @@ if (!empty($endpoint['is_llamacpp'])) {
 $url = $baseUrl . '/chat/completions';
 
 if ($useTools) {
-    $messages = $payload['messages'];
+    $messages = $llmMessages;
     $usage = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     $finalData = null;
     $searchQueryUsed = '';
