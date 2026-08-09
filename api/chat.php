@@ -1066,6 +1066,73 @@ function buildResponseDetails(array $endpoint): array
     ];
 }
 
+/**
+ * Rough token estimate for a chat messages array, used to pre-flight-check
+ * an outgoing request against the configured context limits before it is
+ * actually dispatched to the model (real usage is only known afterwards).
+ * Uses the common ~4 characters-per-token rule of thumb plus a small
+ * per-message overhead for role/format tokens.
+ */
+function estimateTokenCount(array $messages): int
+{
+    $chars = 0;
+    foreach ($messages as $message) {
+        if (!is_array($message)) {
+            continue;
+        }
+        $content = $message['content'] ?? '';
+        $chars += is_string($content) ? strlen($content) : strlen(json_encode($content));
+        $chars += strlen((string) ($message['role'] ?? ''));
+    }
+    return (int) ceil($chars / 4) + count($messages) * 4;
+}
+
+/**
+ * Resolves the effective context limit(s) for an endpoint: the endpoint's
+ * total context window and the (optionally smaller) per-user-slot cap. Both
+ * are 0 when not configured (= kein Limit hinterlegt).
+ *
+ * @return array{endpoint_max:int,slot_limit:int,effective:int}
+ */
+function resolveContextLimits(array $endpoint): array
+{
+    $endpointMax = max(0, (int) ($endpoint['max_context'] ?? 0));
+    $slotLimit   = max(0, (int) ($endpoint['context_limit_per_slot'] ?? 0));
+
+    if ($slotLimit > 0 && $endpointMax > 0) {
+        $effective = min($slotLimit, $endpointMax);
+    } elseif ($slotLimit > 0) {
+        $effective = $slotLimit;
+    } else {
+        $effective = $endpointMax;
+    }
+
+    return ['endpoint_max' => $endpointMax, 'slot_limit' => $slotLimit, 'effective' => $effective];
+}
+
+/**
+ * Adds the context-usage figures (for the shrinking-circle indicators in the
+ * chat UI) and, if the model was cut off because the context window ran out
+ * (finish_reason "length"), a flag the frontend uses to show a clean notice
+ * instead of silently truncating the answer.
+ */
+function addContextUsageToResponseDetails(array &$responseDetails, array $endpoint, int $totalTokens, ?string $finishReason): void
+{
+    $limits = resolveContextLimits($endpoint);
+
+    if ($limits['endpoint_max'] > 0) {
+        $responseDetails['endpoint_context_used'] = $totalTokens;
+        $responseDetails['endpoint_context_max']  = $limits['endpoint_max'];
+    }
+    if ($limits['slot_limit'] > 0) {
+        $responseDetails['session_context_used']  = $totalTokens;
+        $responseDetails['session_context_limit'] = $limits['slot_limit'];
+    }
+    if ($finishReason === 'length' && $limits['effective'] > 0 && $totalTokens >= $limits['effective']) {
+        $responseDetails['context_limit_reached'] = true;
+    }
+}
+
 function emitResponseDetailsSse(?array $responseDetails): void
 {
     if ($responseDetails === null) {
@@ -2070,6 +2137,13 @@ $forwardPayload = [
     'stop'        => $payload['stop'] ?? null,
 ];
 
+// Ask the upstream to include token usage in the final SSE chunk when
+// streaming, so prompt/completion/total token counts are available for the
+// context-usage indicators even on the raw passthrough streaming path.
+if ($stream) {
+    $forwardPayload['stream_options'] = ['include_usage' => true];
+}
+
 // Direct llama.cpp instances receive an explicit high reasoning effort and a
 // payload without LM-Studio-specific placeholder values: llama.cpp expects
 // "stop" to be absent instead of null and "max_tokens" to be absent instead
@@ -2085,6 +2159,36 @@ if (!empty($endpoint['is_llamacpp'])) {
 }
 
 $url = $baseUrl . '/chat/completions';
+
+// ── Kontextlimit-Vorabprüfung ──────────────────────────────────────────────
+// Bevor die Anfrage überhaupt an das Modell geschickt wird: eine grobe
+// Token-Schätzung des ausgehenden Prompts gegen die konfigurierten Limits
+// (Endpunkt-Kontext bzw. Kontextlimit je Userslot) prüfen. So bricht die
+// Antwort im Chat nicht einfach kommentarlos ab, sondern der User bekommt
+// sofort eine saubere Fehlermeldung statt eines (evtl. abgeschnittenen)
+// Modellaufrufs, der ohnehin scheitern würde.
+$contextLimits = resolveContextLimits($endpoint);
+if ($contextLimits['effective'] > 0) {
+    $estimatedPromptTokens = estimateTokenCount($llmMessages);
+    if ($estimatedPromptTokens >= $contextLimits['effective']) {
+        $limitLabel = ($contextLimits['slot_limit'] > 0 && $contextLimits['slot_limit'] <= $contextLimits['endpoint_max'])
+            || $contextLimits['endpoint_max'] === 0
+            ? 'Session-Kontext' : 'Endpunkt-Kontext';
+        $contextErrorMsg = 'Kontextlimit erreicht (' . $limitLabel . ': ca. ' . $estimatedPromptTokens .
+            ' von ' . $contextLimits['effective'] . ' Token). Bitte kürzen Sie die Unterhaltung oder starten Sie einen neuen Chat.';
+        writeLog('warning', 'Anfrage abgelehnt: ' . $contextErrorMsg);
+        $taskFinished = true;
+        completeTask($taskId, 'error');
+        if ($clientRequestedStream) {
+            emitSseData(['error' => $contextErrorMsg]);
+        } else {
+            http_response_code(413);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['error' => $contextErrorMsg]);
+        }
+        exit;
+    }
+}
 
 if ($useTools) {
     $messages = $llmMessages;
@@ -2373,6 +2477,7 @@ if ($useTools) {
         if ($searchQueryUsed !== '') {
             $responseDetails['search_query'] = $searchQueryUsed;
         }
+        addContextUsageToResponseDetails($responseDetails, $endpoint, $usage['total'], $finalData['choices'][0]['finish_reason'] ?? null);
         $finalData['response_details'] = $responseDetails;
     }
 
@@ -2551,13 +2656,22 @@ if ($stream) {
     $promptTokens     = null;
     $completionTokens = null;
     $totalTokens      = null;
+    $streamFinishReason = null;
     if (preg_match_all('/^data:\s*(\{.+\})$/m', $tailBuffer, $matches)) {
         foreach (array_reverse($matches[1]) as $rawEvt) {
             $obj = json_decode($rawEvt, true);
-            if (is_array($obj) && isset($obj['usage']['total_tokens'])) {
+            if (!is_array($obj)) {
+                continue;
+            }
+            if ($streamFinishReason === null && isset($obj['choices'][0]['finish_reason']) && $obj['choices'][0]['finish_reason'] !== null) {
+                $streamFinishReason = (string) $obj['choices'][0]['finish_reason'];
+            }
+            if ($totalTokens === null && isset($obj['usage']['total_tokens'])) {
                 $promptTokens     = isset($obj['usage']['prompt_tokens'])     ? (int) $obj['usage']['prompt_tokens']     : null;
                 $completionTokens = isset($obj['usage']['completion_tokens']) ? (int) $obj['usage']['completion_tokens'] : null;
                 $totalTokens      = (int) $obj['usage']['total_tokens'];
+            }
+            if ($totalTokens !== null && $streamFinishReason !== null) {
                 break;
             }
         }
@@ -2582,6 +2696,9 @@ if ($stream) {
     if ($streamStatus === 'done' && ($dataWritten || headers_sent())) {
         if (!isOpenAiStrictMode()) {
             $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
+            if ($totalTokens !== null) {
+                addContextUsageToResponseDetails($responseDetails, $endpoint, $totalTokens, $streamFinishReason);
+            }
             emitIntelligenceUpgradeSse($intelligenceUpgrade);
             emitResponseDetailsSse($responseDetails);
         }
@@ -2688,11 +2805,17 @@ if ($sessionId !== '' && is_array($data)) {
 // Forward the raw LM Studio response.
 if (is_array($data) && !isOpenAiStrictMode() && $intelligenceUpgrade !== null) {
     $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
+    if ($totalTokens !== null) {
+        addContextUsageToResponseDetails($responseDetails, $endpoint, $totalTokens, $data['choices'][0]['finish_reason'] ?? null);
+    }
     $data['intelligence_upgrade'] = buildIntelligenceUpgradePayload($intelligenceUpgrade);
     $data['response_details'] = $responseDetails;
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } elseif (is_array($data) && !isOpenAiStrictMode()) {
     $responseDetails['elapsed_seconds'] = max(1, (int) round(microtime(true) - $requestStart));
+    if ($totalTokens !== null) {
+        addContextUsageToResponseDetails($responseDetails, $endpoint, $totalTokens, $data['choices'][0]['finish_reason'] ?? null);
+    }
     $data['response_details'] = $responseDetails;
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } elseif (is_array($data)) {

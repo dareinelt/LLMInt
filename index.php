@@ -239,6 +239,38 @@ $csrfToken = $_SESSION['csrf_token'];
         .response-details > summary {
             cursor: pointer;
             user-select: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .context-usage-summary {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Small, deliberately unobtrusive context-usage indicators. Each is a
+           ring that visually "closes" (the colored arc grows clockwise) as
+           the endpoint's / session's context fills up. */
+        .context-usage-circle {
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            flex: 0 0 auto;
+            opacity: .55;
+            vertical-align: middle;
+            box-shadow: 0 0 0 1px var(--border) inset;
+            transition: opacity .2s ease;
+        }
+
+        .response-details > summary:hover .context-usage-circle {
+            opacity: .9;
+        }
+
+        .context-usage-circle.context-usage-critical {
+            opacity: .85;
         }
 
         .response-details-body {
@@ -248,6 +280,25 @@ $csrfToken = $_SESSION['csrf_token'];
             border-radius: 8px;
             background: var(--surface);
             color: var(--text);
+        }
+
+        .response-details-body .context-usage-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 4px;
+            font-size: .78rem;
+            color: var(--text-muted);
+        }
+
+        .context-limit-notice {
+            margin-top: 6px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--error);
+            color: var(--error);
+            font-size: .82rem;
+            background: color-mix(in srgb, var(--error) 10%, transparent);
         }
 
         /* System message */
@@ -1979,13 +2030,19 @@ $csrfToken = $_SESSION['csrf_token'];
             detailsWrap.className = 'response-details';
 
             const summary = document.createElement('summary');
-            summary.textContent = 'Details zur Antwort';
+            const summaryLabel = document.createElement('span');
+            summaryLabel.textContent = 'Details zur Antwort';
+            const summaryCircles = document.createElement('span');
+            summaryCircles.className = 'context-usage-summary';
+            summary.appendChild(summaryLabel);
+            summary.appendChild(summaryCircles);
 
             const body = document.createElement('div');
             body.className = 'response-details-body';
             body.innerHTML = 'Antwort bearbeitet durch: <strong>Unbekannt</strong>';
 
             bubble._responseDetailsBodyEl = body;
+            bubble._responseDetailsSummaryCirclesEl = summaryCircles;
 
             detailsWrap.appendChild(summary);
             detailsWrap.appendChild(body);
@@ -2192,6 +2249,26 @@ $csrfToken = $_SESSION['csrf_token'];
         return { accumulated, accumulatedThinking, upgradeSuggestion, responseDetails };
     }
 
+    /**
+     * Builds the small "closing circle" indicator for a context-usage value:
+     * an unobtrusive dot whose colored arc grows clockwise as more of the
+     * limit is consumed, fully closing when the limit is reached. Returns
+     * null when no limit is configured for this endpoint/session.
+     */
+    function buildContextCircleHtml(labelPrefix, used, max) {
+        if (typeof max !== 'number' || max <= 0 || typeof used !== 'number') {
+            return null;
+        }
+        const pct = Math.max(0, Math.min(100, Math.round((used / max) * 100)));
+        const angle = (pct / 100) * 360;
+        const critical = pct >= 90;
+        const color = critical ? 'var(--error)' : 'var(--text-muted)';
+        const title = `${labelPrefix} ${used} von ${max} Token`;
+        return '<span class="context-usage-circle' + (critical ? ' context-usage-critical' : '') + '" ' +
+            'title="' + escapeHtmlContent(title) + '" ' +
+            'style="background: conic-gradient(' + color + ' ' + angle + 'deg, transparent ' + angle + 'deg)"></span>';
+    }
+
     function setResponseDetailsForBubble(bubble, responseDetails) {
         if (!bubble || !bubble._responseDetailsBodyEl) {
             return;
@@ -2214,7 +2291,41 @@ $csrfToken = $_SESSION['csrf_token'];
         } else {
             html = `Antwort bearbeitet durch: <strong>${escapeHtmlContent(alias)}</strong>`;
         }
+
+        const endpointCircle = buildContextCircleHtml('Endpunkt-Kontext',
+            responseDetails?.endpoint_context_used, responseDetails?.endpoint_context_max);
+        const sessionCircle = buildContextCircleHtml('Session-Kontext',
+            responseDetails?.session_context_used, responseDetails?.session_context_limit);
+
+        if (endpointCircle) {
+            html += `<div class="context-usage-row">${endpointCircle} Endpunkt-Kontext: ${responseDetails.endpoint_context_used} / ${responseDetails.endpoint_context_max} Token</div>`;
+        }
+        if (sessionCircle) {
+            html += `<div class="context-usage-row">${sessionCircle} Session-Kontext: ${responseDetails.session_context_used} / ${responseDetails.session_context_limit} Token</div>`;
+        }
+
         bubble._responseDetailsBodyEl.innerHTML = html;
+
+        if (bubble._responseDetailsSummaryCirclesEl) {
+            bubble._responseDetailsSummaryCirclesEl.innerHTML = [endpointCircle, sessionCircle].filter(Boolean).join('');
+        }
+
+        // Context limit exhausted: don't let the answer just silently trail
+        // off – show a clear, dedicated notice right under the message.
+        const detailsWrap = bubble._responseDetailsBodyEl.parentElement;
+        if (detailsWrap && detailsWrap.parentElement) {
+            let notice = detailsWrap.parentElement.querySelector(':scope > .context-limit-notice');
+            if (responseDetails && responseDetails.context_limit_reached) {
+                if (!notice) {
+                    notice = document.createElement('div');
+                    notice.className = 'context-limit-notice';
+                    detailsWrap.parentElement.insertBefore(notice, detailsWrap);
+                }
+                notice.textContent = '⚠ Der Kontext ist vollständig ausgeschöpft – die Antwort wurde deshalb an dieser Stelle beendet. Bitte kürzen Sie die Unterhaltung oder starten Sie einen neuen Chat.';
+            } else if (notice) {
+                notice.remove();
+            }
+        }
     }
 
     function showUpgradePrompt(upgrade, requestMessages, historyAssistantIndex, responseDetails) {
