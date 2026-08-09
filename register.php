@@ -97,37 +97,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     $siteName = getSetting('smtp_from_name', 'LLMInt');
 
-                    $registrationEmailText = getSetting('registration_email_text', '');
-                    if ($registrationEmailText === '') {
-                        $registrationEmailText = 'danke für Deine Registrierung bei {sitename}.';
-                    }
-                    $registrationEmailText = str_replace(
-                        ['{sitename}', '{username}'],
-                        [$siteName, $username],
-                        $registrationEmailText
-                    );
+                    // Fully customizable registration e-mail: admins configure both
+                    // subject and body in the admin area, using {sitename}, {username},
+                    // {email} and {verify_url} placeholders.
+                    $templateVars = [
+                        'sitename'   => $siteName,
+                        'username'   => $username,
+                        'email'      => $email,
+                        'verify_url' => $verifyUrl,
+                    ];
 
-                    $textBody = "Hallo {$username},\r\n\r\n"
-                        . "{$registrationEmailText}\r\n\r\n"
-                        . "Bitte klicke auf den folgenden Link, um Deine E-Mail-Adresse zu bestätigen:\r\n"
-                        . "{$verifyUrl}\r\n\r\n"
-                        . "Der Link ist 24 Stunden gültig.\r\n\r\n"
-                        . "Falls Du diese Registrierung nicht vorgenommen hast, ignoriere bitte diese E-Mail.\r\n\r\n"
-                        . "Viele Grüße,\r\nDein {$siteName}-Team";
+                    $emailSubject = renderRegistrationEmailTemplate(getRegistrationEmailSubject(), $templateVars);
+                    $emailBody    = renderRegistrationEmailTemplate(getRegistrationEmailBody(), $templateVars);
 
-                    $htmlBody = '<p>Hallo <strong>' . htmlspecialchars($username) . '</strong>,</p>'
-                        . '<p>' . nl2br(htmlspecialchars($registrationEmailText)) . '</p>'
-                        . '<p>Bitte bestätige Deine E-Mail-Adresse durch Klick auf den Button:</p>'
-                        . '<p><a href="' . htmlspecialchars($verifyUrl) . '" '
+                    $textBody = str_replace("\n", "\r\n", $emailBody);
+
+                    // Build the HTML version from the same rendered template, turning
+                    // the verification link into a clickable button/anchor.
+                    $htmlBody   = nl2br(htmlspecialchars($emailBody));
+                    $escapedUrl = htmlspecialchars($verifyUrl);
+                    $linkHtml   = '<a href="' . $escapedUrl . '" '
                         . 'style="display:inline-block;padding:10px 20px;background:#6c63ff;color:#fff;'
-                        . 'text-decoration:none;border-radius:8px;font-weight:600;">E-Mail bestätigen</a></p>'
-                        . '<p>Oder kopiere diesen Link in deinen Browser:<br>'
-                        . '<a href="' . htmlspecialchars($verifyUrl) . '">' . htmlspecialchars($verifyUrl) . '</a></p>'
-                        . '<p>Der Link ist 24 Stunden gültig.</p>'
-                        . '<p>Viele Grüße,<br>Dein ' . htmlspecialchars($siteName) . '-Team</p>';
+                        . 'text-decoration:none;border-radius:8px;font-weight:600;">' . $escapedUrl . '</a>';
+                    $htmlBody   = str_replace($escapedUrl, $linkHtml, $htmlBody);
+                    $htmlBody   = '<p>' . $htmlBody . '</p>';
 
                     try {
-                        sendMail($email, $username, "Bitte bestätige deine E-Mail-Adresse", $textBody, $htmlBody);
+                        sendMail($email, $username, $emailSubject, $textBody, $htmlBody);
                         $success = 'Registrierung erfolgreich! Bitte prüfe dein Postfach und bestätige deine E-Mail-Adresse.';
                     } catch (Throwable $e) {
                         // Registration succeeded; e-mail failed – inform user
