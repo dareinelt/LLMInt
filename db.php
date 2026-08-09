@@ -763,6 +763,86 @@ function getGlobalSystemPrompt(): string
 }
 
 /**
+ * Default subject line for the registration confirmation e-mail.
+ */
+const REGISTRATION_EMAIL_SUBJECT_DEFAULT = 'Bitte bestätige deine E-Mail-Adresse';
+
+/**
+ * Default body template for the registration confirmation e-mail.
+ * Supports the placeholders {sitename}, {username}, {email} and {verify_url},
+ * which are substituted in renderRegistrationEmailTemplate().
+ */
+const REGISTRATION_EMAIL_BODY_DEFAULT = <<<'TEXT'
+Hallo {username},
+
+vielen Dank für Deine Registrierung bei {sitename}.
+
+Bitte klicke auf den folgenden Link, um Deine E-Mail-Adresse zu bestätigen:
+{verify_url}
+
+Der Link ist 24 Stunden gültig.
+
+Falls Du diese Registrierung nicht vorgenommen hast, ignoriere bitte diese E-Mail.
+
+Viele Grüße,
+Dein {sitename}-Team
+TEXT;
+
+/**
+ * Return the configured subject for the registration confirmation e-mail,
+ * falling back to the built-in default as long as no admin has saved a
+ * custom value.
+ */
+function getRegistrationEmailSubject(): string
+{
+    $value = trim(getSetting('registration_email_subject', ''));
+    return $value !== '' ? $value : REGISTRATION_EMAIL_SUBJECT_DEFAULT;
+}
+
+/**
+ * Return the configured body template for the registration confirmation
+ * e-mail. Falls back to a template built from the legacy
+ * "registration_email_text" (greeting-only) setting for installations that
+ * customized it before the full template became editable, and finally to
+ * the built-in default template.
+ */
+function getRegistrationEmailBody(): string
+{
+    $value = getSetting('registration_email_body', '');
+    if (trim($value) !== '') {
+        return $value;
+    }
+
+    $legacyText = trim(getSetting('registration_email_text', ''));
+    if ($legacyText !== '') {
+        return "Hallo {username},\n\n{$legacyText}\n\n"
+            . "Bitte klicke auf den folgenden Link, um Deine E-Mail-Adresse zu bestätigen:\n{verify_url}\n\n"
+            . "Der Link ist 24 Stunden gültig.\n\n"
+            . "Falls Du diese Registrierung nicht vorgenommen hast, ignoriere bitte diese E-Mail.\n\n"
+            . "Viele Grüße,\nDein {sitename}-Team";
+    }
+
+    return REGISTRATION_EMAIL_BODY_DEFAULT;
+}
+
+/**
+ * Substitute {key} placeholders in a registration e-mail subject/body
+ * template with the given values.
+ *
+ * @param array<string,string> $vars
+ */
+function renderRegistrationEmailTemplate(string $template, array $vars): string
+{
+    $search  = [];
+    $replace = [];
+    foreach ($vars as $key => $val) {
+        $search[]  = '{' . $key . '}';
+        $replace[] = $val;
+    }
+    return str_replace($search, $replace, $template);
+}
+
+/**
  * Return the role ('user' | 'admin') of the currently logged-in user,
  * or null if nobody is logged in / the user no longer exists.
  *

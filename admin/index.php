@@ -31,10 +31,8 @@ if ($globalSystemPrompt === '') {
 }
 $loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
 $loginBannerText    = getSetting('login_banner_text', '');
-$registrationEmailText = getSetting('registration_email_text', '');
-if ($registrationEmailText === '') {
-    $registrationEmailText = 'danke für Deine Registrierung bei {sitename}.';
-}
+$registrationEmailSubject = getRegistrationEmailSubject();
+$registrationEmailBody    = getRegistrationEmailBody();
 $streamingEnabled = getSetting('streaming_enabled', '1') === '1';
 $intelligenceGroupEnabled = isIntelligenceGroupFeatureEnabled();
 $balancerMaxConcurrent        = getBalancerMaxConcurrent();
@@ -379,9 +377,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $loginBannerText    = trim($_POST['login_banner_text'] ?? '');
             setSetting('login_banner_enabled', $loginBannerEnabled ? '1' : '0');
             setSetting('login_banner_text', $loginBannerText);
-            $newRegistrationEmailText = trim($_POST['registration_email_text'] ?? '');
-            $registrationEmailText = $newRegistrationEmailText;
-            setSetting('registration_email_text', $newRegistrationEmailText);
+            $newRegistrationEmailSubject = trim($_POST['registration_email_subject'] ?? '');
+            $newRegistrationEmailBody    = trim($_POST['registration_email_body'] ?? '');
+            $registrationEmailSubject = $newRegistrationEmailSubject !== ''
+                ? $newRegistrationEmailSubject : REGISTRATION_EMAIL_SUBJECT_DEFAULT;
+            $registrationEmailBody = $newRegistrationEmailBody !== ''
+                ? $newRegistrationEmailBody : REGISTRATION_EMAIL_BODY_DEFAULT;
+            setSetting('registration_email_subject', $newRegistrationEmailSubject);
+            setSetting('registration_email_body', $newRegistrationEmailBody);
             $flashOk = 'Systemmeldungen gespeichert.';
 
         // ── Save vision model ─────────────────────────────────────────────────
@@ -3916,17 +3919,28 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
                 <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">✉️ Registrierungs-E-Mail</h3>
                 <div class="form-group">
-                    <label for="registration-email-text">Begrüßungstext in der Bestätigungs-E-Mail</label>
-                    <textarea id="registration-email-text" name="registration_email_text"
-                              rows="3" style="width:100%;resize:vertical;font-family:inherit"
-                    ><?= htmlspecialchars($registrationEmailText) ?></textarea>
+                    <label for="registration-email-subject">Betreff der Bestätigungs-E-Mail</label>
+                    <input type="text" id="registration-email-subject" name="registration_email_subject"
+                           style="width:100%;font-family:inherit"
+                           value="<?= htmlspecialchars($registrationEmailSubject) ?>">
+                </div>
+                <div class="form-group">
+                    <label for="registration-email-body">Inhalt der Bestätigungs-E-Mail</label>
+                    <textarea id="registration-email-body" name="registration_email_body"
+                              rows="10" style="width:100%;resize:vertical;font-family:inherit"
+                    ><?= htmlspecialchars($registrationEmailBody) ?></textarea>
                     <p class="hint">
-                        Dieser Text erscheint in der E-Mail, die neue Benutzer nach der Registrierung zur
-                        Bestätigung ihrer E-Mail-Adresse erhalten. Platzhalter <code>{sitename}</code> wird durch
-                        den Namen der Anwendung ersetzt, Platzhalter <code>{username}</code> wird durch den
-                        Benutzernamen ersetzt. Leer lassen, um den Standardtext zu verwenden:
-                        <em>„danke für Deine Registrierung bei {sitename}."</em>
+                        Betreff und Inhalt der E-Mail, die neue Benutzer nach der Registrierung zur Bestätigung
+                        ihrer E-Mail-Adresse erhalten, können hier vollständig frei gestaltet werden. Folgende
+                        Platzhalter stehen zur Verfügung und werden beim Versand automatisch ersetzt:
                     </p>
+                    <ul class="hint" style="margin:4px 0 8px 20px;padding:0">
+                        <li><code>{sitename}</code> – Name der Anwendung</li>
+                        <li><code>{username}</code> – Benutzername des neuen Benutzers</li>
+                        <li><code>{email}</code> – E-Mail-Adresse des neuen Benutzers</li>
+                        <li><code>{verify_url}</code> – Bestätigungslink (wird in der HTML-Ansicht automatisch verlinkt)</li>
+                    </ul>
+                    <p class="hint">Beide Felder leer lassen, um den Standardtext zu verwenden.</p>
                 </div>
             </form>
         </details>
