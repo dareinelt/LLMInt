@@ -821,6 +821,21 @@ $csrfToken = $_SESSION['csrf_token'];
         #attach-image-btn:hover { background: var(--surface-alt); color: var(--text); }
         #attach-image-btn.has-images { color: var(--accent); }
 
+        #attach-detail-select {
+            display: none;
+            height: 32px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--surface-alt);
+            color: var(--text);
+            font-size: .75rem;
+            padding: 0 6px;
+            flex-shrink: 0;
+            cursor: pointer;
+        }
+
+        #attach-detail-select.visible { display: inline-block; }
+
         /* ── Attached-image preview strip (shown above the input box) ─ */
         #attach-preview {
             display: none;
@@ -1454,6 +1469,11 @@ $csrfToken = $_SESSION['csrf_token'];
             <textarea id="user-input" rows="1"
                       placeholder="Nachricht schreiben … (Enter = Senden, Shift+Enter = Zeilenumbruch)"></textarea>
             <input type="file" id="attach-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none">
+            <select id="attach-detail-select" title="Bild-Detailgrad (Vision-API)" aria-label="Bild-Detailgrad">
+                <option value="auto">Detail: Auto</option>
+                <option value="low">Detail: Niedrig</option>
+                <option value="high">Detail: Hoch</option>
+            </select>
             <button id="attach-image-btn" title="Bild anhängen (Vision-fähiges Modell erforderlich)">🖼</button>
             <button id="clear-btn" title="Verlauf löschen">🗑</button>
             <button id="send-btn" title="Senden">↑</button>
@@ -1497,12 +1517,15 @@ $csrfToken = $_SESSION['csrf_token'];
     const attachImageBtn   = document.getElementById('attach-image-btn');
     const attachImageInput = document.getElementById('attach-image-input');
     const attachPreview    = document.getElementById('attach-preview');
+    const attachDetailSelect = document.getElementById('attach-detail-select');
 
     /* Images attached to the next outgoing message: { dataUrl, mimeType, name } */
     let pendingImages = [];
 
-    const MAX_ATTACH_IMAGES   = 4;
-    const MAX_ATTACH_FILE_MB  = 10;
+    const MAX_ATTACH_IMAGES     = 4;
+    const MAX_ATTACH_FILE_MB    = 10;
+    const MAX_ATTACH_DIMENSION  = 1536; // px, longest side after downscale
+    const ATTACH_JPEG_QUALITY   = 0.82;
 
     /* ── Welcome screen ──────────────────────────────────── */
 
@@ -2236,6 +2259,9 @@ $csrfToken = $_SESSION['csrf_token'];
         attachPreview.innerHTML = '';
         attachPreview.classList.toggle('visible', pendingImages.length > 0);
         attachImageBtn.classList.toggle('has-images', pendingImages.length > 0);
+        if (attachDetailSelect) {
+            attachDetailSelect.classList.toggle('visible', pendingImages.length > 0);
+        }
 
         pendingImages.forEach((img, index) => {
             const thumb = document.createElement('div');
@@ -2270,6 +2296,38 @@ $csrfToken = $_SESSION['csrf_token'];
         });
     }
 
+    /* Downscales a data URL image via <canvas> so it stays within the
+     * model's context window. Animated GIFs are left untouched (canvas
+     * would flatten them to a single frame). Returns { dataUrl, mimeType }. */
+    function downscaleImageDataUrl(dataUrl, mimeType, maxDim) {
+        return new Promise((resolve) => {
+            if (mimeType === 'image/gif') {
+                resolve({ dataUrl, mimeType });
+                return;
+            }
+            const img = new Image();
+            img.onload = () => {
+                const { naturalWidth: width, naturalHeight: height } = img;
+                if (!width || !height || (width <= maxDim && height <= maxDim)) {
+                    resolve({ dataUrl, mimeType });
+                    return;
+                }
+                const scale = maxDim / Math.max(width, height);
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(width * scale));
+                canvas.height = Math.max(1, Math.round(height * scale));
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve({
+                    dataUrl: canvas.toDataURL('image/jpeg', ATTACH_JPEG_QUALITY),
+                    mimeType: 'image/jpeg',
+                });
+            };
+            img.onerror = () => resolve({ dataUrl, mimeType });
+            img.src = dataUrl;
+        });
+    }
+
     if (attachImageBtn && attachImageInput) {
         attachImageBtn.addEventListener('click', () => attachImageInput.click());
 
@@ -2291,8 +2349,9 @@ $csrfToken = $_SESSION['csrf_token'];
                     continue;
                 }
                 try {
-                    const dataUrl = await readFileAsDataUrl(file);
-                    pendingImages.push({ dataUrl, mimeType: file.type, name: file.name });
+                    const rawDataUrl = await readFileAsDataUrl(file);
+                    const { dataUrl, mimeType } = await downscaleImageDataUrl(rawDataUrl, file.type, MAX_ATTACH_DIMENSION);
+                    pendingImages.push({ dataUrl, mimeType, name: file.name });
                 } catch (_) {
                     setStatus(`Bild "${file.name}" konnte nicht gelesen werden.`, 'error');
                 }
@@ -2853,7 +2912,12 @@ $csrfToken = $_SESSION['csrf_token'];
         // array (image_url + text) when images were attached via the 🖼 button.
         let userContent = text;
         if (pendingImages.length > 0) {
-            userContent = pendingImages.map(img => ({ type: 'image_url', image_url: { url: img.dataUrl } }));
+            const detail = attachDetailSelect ? attachDetailSelect.value : 'auto';
+            userContent = pendingImages.map(img => {
+                const image_url = { url: img.dataUrl };
+                if (detail === 'low' || detail === 'high') image_url.detail = detail;
+                return { type: 'image_url', image_url };
+            });
             if (text) userContent.push({ type: 'text', text });
         }
 
