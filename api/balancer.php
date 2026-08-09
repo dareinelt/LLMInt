@@ -71,6 +71,7 @@ function pickEndpointForModel(string $model, ?int $maxConcurrent = null, bool $r
                    e.supports_tool_calling, e.is_llamacpp,
                    e.circuit_state, e.cooldown_until,
                    e.avg_latency_ms, e.cost_weight, e.capacity_weight,
+                   e.max_context, e.context_limit_per_slot,
                    COALESCE(r.running_count, 0) AS running_count,
                    r.last_task_at
             FROM endpoints e
