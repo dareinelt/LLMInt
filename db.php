@@ -69,6 +69,8 @@ function ensureRuntimeSchema(PDO $pdo): void
             alias         VARCHAR(120) NOT NULL DEFAULT '',
             base_url      VARCHAR(500) NOT NULL,
             timeout       INT          NOT NULL DEFAULT 120,
+            max_context   INT UNSIGNED NOT NULL DEFAULT 0,
+            context_limit_per_slot INT UNSIGNED NOT NULL DEFAULT 0,
             default_model VARCHAR(255) NOT NULL DEFAULT '',
             is_active     TINYINT(1)   NOT NULL DEFAULT 1,
             sort_order    INT          NOT NULL DEFAULT 0,
@@ -114,6 +116,17 @@ function ensureRuntimeSchema(PDO $pdo): void
         "ALTER TABLE endpoints ADD COLUMN ssh_password TEXT NULL AFTER ssh_user",
     ] as $sshAlter) {
         try { $pdo->exec($sshAlter); } catch (Throwable $_e) { /* column already exists */ }
+    }
+
+    // Context-window limits: the endpoint's total context size (e.g. the
+    // model's n_ctx) and an optional per-user-slot cap so a single session
+    // cannot consume the whole endpoint context on its own. 0 = unbegrenzt
+    // (kein Limit konfiguriert).
+    foreach ([
+        "ALTER TABLE endpoints ADD COLUMN max_context INT UNSIGNED NOT NULL DEFAULT 0 AFTER timeout",
+        "ALTER TABLE endpoints ADD COLUMN context_limit_per_slot INT UNSIGNED NOT NULL DEFAULT 0 AFTER max_context",
+    ] as $contextAlter) {
+        try { $pdo->exec($contextAlter); } catch (Throwable $_e) { /* column already exists */ }
     }
 
     // Cache table for SSH-polled system metrics (one row per endpoint).

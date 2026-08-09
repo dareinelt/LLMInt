@@ -121,6 +121,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newAlias            = trim($_POST['ep_alias'] ?? '');
             $newUrl              = trim($_POST['ep_base_url'] ?? '');
             $newTimeout          = (int) ($_POST['ep_timeout'] ?? 120);
+            $newMaxContext       = max(0, min(10000000, (int) ($_POST['ep_max_context'] ?? 0)));
+            $newContextLimitSlot = max(0, min(10000000, (int) ($_POST['ep_context_limit_per_slot'] ?? 0)));
             $newModel            = trim($_POST['ep_default_model'] ?? '');
             $isActive            = isset($_POST['ep_is_active']) ? 1 : 0;
             $sshHost             = trim($_POST['ep_ssh_host'] ?? '');
@@ -141,16 +143,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashError = 'Bitte eine gültige URL eingeben.';
             } elseif ($newTimeout < 1 || $newTimeout > 600) {
                 $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
+            } elseif ($newMaxContext > 0 && $newContextLimitSlot > $newMaxContext) {
+                $flashError = 'Das Kontextlimit je Userslot darf den maximalen Endpunkt-Kontext nicht überschreiten.';
             } else {
                 $maxOrder = (int) $db->query(
                     'SELECT COALESCE(MAX(sort_order), -1) FROM endpoints'
                 )->fetchColumn();
                 $db->prepare(
-                    'INSERT INTO endpoints (alias, base_url, timeout, default_model, specialized_for_category,
+                    'INSERT INTO endpoints (alias, base_url, timeout, max_context, context_limit_per_slot,
+                                            default_model, specialized_for_category,
                                             supports_tool_calling, is_llamacpp, is_active, sort_order,
                                             ssh_host, ssh_port, ssh_user, ssh_password, cost_weight, capacity_weight)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
+                            $newModel, $specializedFor,
                             $supportsToolCalling, $isLlamacpp, $isActive, $maxOrder + 1,
                             $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null,
                             $costWeight, $capacityWeight]);
@@ -165,6 +171,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newAlias            = trim($_POST['ep_alias'] ?? '');
             $newUrl              = trim($_POST['ep_base_url'] ?? '');
             $newTimeout          = (int) ($_POST['ep_timeout'] ?? 120);
+            $newMaxContext       = max(0, min(10000000, (int) ($_POST['ep_max_context'] ?? 0)));
+            $newContextLimitSlot = max(0, min(10000000, (int) ($_POST['ep_context_limit_per_slot'] ?? 0)));
             $newModel            = trim($_POST['ep_default_model'] ?? '');
             $isActive            = isset($_POST['ep_is_active']) ? 1 : 0;
             $sshHost             = trim($_POST['ep_ssh_host'] ?? '');
@@ -187,6 +195,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashError = 'Bitte eine gültige URL eingeben.';
             } elseif ($newTimeout < 1 || $newTimeout > 600) {
                 $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
+            } elseif ($newMaxContext > 0 && $newContextLimitSlot > $newMaxContext) {
+                $flashError = 'Das Kontextlimit je Userslot darf den maximalen Endpunkt-Kontext nicht überschreiten.';
             } else {
                 $previousEndpoint = $db->prepare('SELECT alias, base_url, is_active FROM endpoints WHERE id = ? LIMIT 1');
                 $previousEndpoint->execute([$epId]);
@@ -196,21 +206,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($sshPassword === '' || $sshPassword === null) {
                     $db->prepare(
                         'UPDATE endpoints
-                            SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
+                            SET alias = ?, base_url = ?, timeout = ?, max_context = ?, context_limit_per_slot = ?,
+                                default_model = ?,
                                 specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?, cost_weight = ?, capacity_weight = ?
                           WHERE id = ?'
-                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
+                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
+                                $newModel, $specializedFor,
                                 $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser,
                                 $costWeight, $capacityWeight, $epId]);
                 } else {
                     $db->prepare(
                         'UPDATE endpoints
-                            SET alias = ?, base_url = ?, timeout = ?, default_model = ?,
+                            SET alias = ?, base_url = ?, timeout = ?, max_context = ?, context_limit_per_slot = ?,
+                                default_model = ?,
                                 specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?, cost_weight = ?, capacity_weight = ?
                           WHERE id = ?'
-                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newModel, $specializedFor,
+                    )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
+                                $newModel, $specializedFor,
                                 $supportsToolCalling, $isLlamacpp, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword,
                                 $costWeight, $capacityWeight, $epId]);
                 }
@@ -924,6 +938,8 @@ foreach ($endpoints as $ep) {
         'alias'                    => $ep['alias'],
         'base_url'                 => $ep['base_url'],
         'timeout'                  => $ep['timeout'],
+        'max_context'              => (int) ($ep['max_context'] ?? 0),
+        'context_limit_per_slot'   => (int) ($ep['context_limit_per_slot'] ?? 0),
         'default_model'            => $ep['default_model'],
         'specialized_for_category' => $ep['specialized_for_category'] ?? '',
         'supports_tool_calling'    => (int) ($ep['supports_tool_calling'] ?? 1),
@@ -2565,6 +2581,23 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                                min="1" max="600" required
                                value="<?= $editEp ? (int) $editEp['timeout'] : 120 ?>">
                         <p class="hint">1 – 600 s</p>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ep-max-context">Maximaler Kontext (Token)</label>
+                        <input type="number" id="ep-max-context" name="ep_max_context"
+                               min="0" max="10000000" step="1"
+                               value="<?= $editEp ? (int) ($editEp['max_context'] ?? 0) : 0 ?>">
+                        <p class="hint">Kontextgröße (n_ctx) des Endpunkts in Token. 0 = kein Limit hinterlegt.</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="ep-context-limit-per-slot">Kontextlimit je Userslot (Token)</label>
+                        <input type="number" id="ep-context-limit-per-slot" name="ep_context_limit_per_slot"
+                               min="0" max="10000000" step="1"
+                               value="<?= $editEp ? (int) ($editEp['context_limit_per_slot'] ?? 0) : 0 ?>">
+                        <p class="hint">Maximaler Kontext, den eine einzelne Chat-Session belegen darf. 0 = kein separates Limit (nur der Endpunkt-Kontext gilt).</p>
                     </div>
                 </div>
 
@@ -4376,6 +4409,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const aliasInput   = document.getElementById('ep-alias');
     const urlInput     = document.getElementById('ep-url');
     const timeoutInput = document.getElementById('ep-timeout');
+    const maxContextInput = document.getElementById('ep-max-context');
+    const contextLimitPerSlotInput = document.getElementById('ep-context-limit-per-slot');
     const modelInput   = document.getElementById('ep-model-input');
     const modelList    = document.getElementById('ep-model-list');
     const activeCheck  = document.getElementById('ep-active');
@@ -4454,6 +4489,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         aliasInput.value       = ep.alias || '';
         urlInput.value         = ep.base_url;
         timeoutInput.value     = ep.timeout;
+        if (maxContextInput) maxContextInput.value = ep.max_context || 0;
+        if (contextLimitPerSlotInput) contextLimitPerSlotInput.value = ep.context_limit_per_slot || 0;
         modelInput.value       = ep.default_model || '';
         activeCheck.checked    = ep.is_active == 1;
         if (toolCallingCheck) toolCallingCheck.checked = ep.supports_tool_calling != 0;
@@ -4479,6 +4516,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         aliasInput.value      = '';
         urlInput.value        = '';
         timeoutInput.value    = '120';
+        if (maxContextInput) maxContextInput.value = '0';
+        if (contextLimitPerSlotInput) contextLimitPerSlotInput.value = '0';
         modelInput.value      = '';
         activeCheck.checked   = true;
         if (toolCallingCheck) toolCallingCheck.checked = true;
