@@ -123,18 +123,44 @@ function startSearchLog(string $query): int
     }
 }
 
-function completeSearchLog(int $id, string $status): void
+function completeSearchLog(int $id, string $status, ?array $results = null): void
 {
     if ($id <= 0) {
         return;
     }
     try {
+        $resultsJson = $results !== null
+            ? json_encode($results, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            : null;
         getDb()->prepare(
-            'UPDATE search_logs SET status = ?, finished_at = NOW(3) WHERE id = ?'
-        )->execute([$status, $id]);
+            'UPDATE search_logs SET status = ?, results = ?, finished_at = NOW(3) WHERE id = ?'
+        )->execute([$status, $resultsJson, $id]);
     } catch (Throwable $e) {
         // Best-effort
     }
+}
+
+/**
+ * Extracts the compact {title, url} source list of a search_web tool result
+ * for use as "used sources" pills in the UI and for logging. Duplicate URLs
+ * (e.g. the same page returned to multiple queries in one response) are
+ * removed while keeping first-seen order.
+ */
+function extractSearchSources(array $searchResult): array
+{
+    $sources = [];
+    foreach ($searchResult['results'] ?? [] as $result) {
+        if (!is_array($result)) {
+            continue;
+        }
+        $url = trim((string) ($result['url'] ?? ''));
+        if ($url === '') {
+            continue;
+        }
+        $title = trim((string) ($result['title'] ?? ''));
+        $sources[$url] = ['title' => $title !== '' ? $title : $url, 'url' => $url];
+    }
+    return array_values($sources);
 }
 
 function createSearchToolDefinition(): array
@@ -2237,6 +2263,10 @@ if ($useTools) {
     $usage = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     $finalData = null;
     $searchQueryUsed = '';
+    // {url => ['title' => ..., 'url' => ...]} of every source seen so far in
+    // this response, across all search_web calls, deduplicated by URL and
+    // kept for the "used sources" pills as well as the persisted history.
+    $searchSources = [];
 
     // When an intelligence upgrade re-runs a query that already used search_web,
     // the caller may supply the original search query so we can pre-fetch fresh
@@ -2250,7 +2280,10 @@ if ($useTools) {
         $searchStartedAt = microtime(true);
         try {
             $searchResult = runSearxngSearch($searxngBaseUrl, substr($forceSearchQuery, 0, 400), min($timeout, 15));
-            completeSearchLog($searchLogId, 'done');
+            foreach (extractSearchSources($searchResult) as $source) {
+                $searchSources[$source['url']] = $source;
+            }
+            completeSearchLog($searchLogId, 'done', $searchResult['results'] ?? []);
             $searchQueryUsed = $forceSearchQuery;
             $searchElapsedMs = elapsedMilliseconds($searchStartedAt);
             writeLog('info', 'Websuche erfolgreich abgeschlossen.');
@@ -2450,7 +2483,10 @@ if ($useTools) {
                     $searchStartedAt = microtime(true);
                     try {
                         $toolResult = runSearxngSearch($searxngBaseUrl, substr($query, 0, 400), min($timeout, 15));
-                        completeSearchLog($searchLogId, 'done');
+                        foreach (extractSearchSources($toolResult) as $source) {
+                            $searchSources[$source['url']] = $source;
+                        }
+                        completeSearchLog($searchLogId, 'done', $toolResult['results'] ?? []);
                         $searchQueryUsed = $query;
                         $searchElapsedMs = elapsedMilliseconds($searchStartedAt);
                         writeLog('info', 'Websuche erfolgreich abgeschlossen.');
@@ -2521,6 +2557,12 @@ if ($useTools) {
         if ($searchQueryUsed !== '') {
             $responseDetails['search_query'] = $searchQueryUsed;
         }
+        if ($searchSources !== []) {
+            // Cap to a reasonable number of pills; SearXNG already limits each
+            // individual query to 5 results, this only matters when the model
+            // called search_web more than once.
+            $responseDetails['search_sources'] = array_slice(array_values($searchSources), 0, 8);
+        }
         addContextUsageToResponseDetails($responseDetails, $endpoint, $usage['total'], $finalData['choices'][0]['finish_reason'] ?? null);
         $finalData['response_details'] = $responseDetails;
     }
@@ -2535,9 +2577,16 @@ if ($useTools) {
         $assistantContent = normalizeAssistantContent(
             $finalData['choices'][0]['message']['content'] ?? ''
         );
+        $assistantMessage = ['role' => 'assistant', 'content' => $assistantContent];
+        // Persist the used sources on the message itself so they reappear as
+        // pills the next time the user opens this chat, without needing a
+        // separate lookup at load time.
+        if (isset($responseDetails['search_sources']) && $responseDetails['search_sources'] !== []) {
+            $assistantMessage['sources'] = $responseDetails['search_sources'];
+        }
         $sessionMessages = array_merge(
             $payload['messages'],
-            [['role' => 'assistant', 'content' => $assistantContent]]
+            [$assistantMessage]
         );
         saveConversationSession($sessionId, $model, $sessionMessages, $sessionUserId);
     }

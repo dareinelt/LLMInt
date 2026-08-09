@@ -174,12 +174,19 @@ function ensureRuntimeSchema(PDO $pdo): void
             id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             query       VARCHAR(400)    NOT NULL DEFAULT '',
             status      ENUM('running','done','error') NOT NULL DEFAULT 'running',
+            results     MEDIUMTEXT      NULL,
             started_at  TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
             finished_at TIMESTAMP(3)    NULL,
             PRIMARY KEY (id),
             KEY idx_status_started (status, started_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
+
+    // Quellen (Titel/URL) der gefundenen Suchergebnisse, für spätere Auswertung
+    // und Anzeige im Admin-Bereich.
+    try {
+        $pdo->exec("ALTER TABLE search_logs ADD COLUMN results MEDIUMTEXT NULL AFTER status");
+    } catch (Throwable $_e) { /* column already exists */ }
 
     // Active-client heartbeat tracking.
     $pdo->exec("
