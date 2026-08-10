@@ -130,6 +130,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
             $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
+            $reasoningEffort     = trim($_POST['ep_reasoning_effort'] ?? 'high');
+            if (!in_array($reasoningEffort, ['low', 'medium', 'high'], true)) {
+                $reasoningEffort = 'high';
+            }
             $supportsVision      = isset($_POST['ep_supports_vision']) ? 1 : 0;
             $costWeight          = max(0.0001, min(1000, (float) ($_POST['ep_cost_weight'] ?? 1.0)));
             $capacityWeight      = max(0.0001, min(1000, (float) ($_POST['ep_capacity_weight'] ?? 1.0)));
@@ -151,12 +155,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db->prepare(
                     'INSERT INTO endpoints (alias, base_url, timeout, max_context, context_limit_per_slot,
                                             default_model, specialized_for_category,
-                                            supports_tool_calling, is_llamacpp, supports_vision, is_active, sort_order,
+                                            supports_tool_calling, is_llamacpp, reasoning_effort, supports_vision, is_active, sort_order,
                                             ssh_host, ssh_port, ssh_user, ssh_password, cost_weight, capacity_weight)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
                 )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
                             $newModel, $specializedFor,
-                            $supportsToolCalling, $isLlamacpp, $supportsVision, $isActive, $maxOrder + 1,
+                            $supportsToolCalling, $isLlamacpp, $reasoningEffort, $supportsVision, $isActive, $maxOrder + 1,
                             $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null,
                             $costWeight, $capacityWeight]);
                 $endpointLabel = $newAlias !== '' ? $newAlias : rtrim($newUrl, '/');
@@ -181,6 +185,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
             $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
+            $reasoningEffort     = trim($_POST['ep_reasoning_effort'] ?? 'high');
+            if (!in_array($reasoningEffort, ['low', 'medium', 'high'], true)) {
+                $reasoningEffort = 'high';
+            }
             $supportsVision      = isset($_POST['ep_supports_vision']) ? 1 : 0;
             $costWeight          = max(0.0001, min(1000, (float) ($_POST['ep_cost_weight'] ?? 1.0)));
             $capacityWeight      = max(0.0001, min(1000, (float) ($_POST['ep_capacity_weight'] ?? 1.0)));
@@ -208,24 +216,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, max_context = ?, context_limit_per_slot = ?,
                                 default_model = ?,
-                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, supports_vision = ?, is_active = ?,
+                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, reasoning_effort = ?, supports_vision = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?, cost_weight = ?, capacity_weight = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
                                 $newModel, $specializedFor,
-                                $supportsToolCalling, $isLlamacpp, $supportsVision, $isActive, $sshHost, $sshPort, $sshUser,
+                                $supportsToolCalling, $isLlamacpp, $reasoningEffort, $supportsVision, $isActive, $sshHost, $sshPort, $sshUser,
                                 $costWeight, $capacityWeight, $epId]);
                 } else {
                     $db->prepare(
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, max_context = ?, context_limit_per_slot = ?,
                                 default_model = ?,
-                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, supports_vision = ?, is_active = ?,
+                                specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, reasoning_effort = ?, supports_vision = ?, is_active = ?,
                                 ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?, cost_weight = ?, capacity_weight = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
                                 $newModel, $specializedFor,
-                                $supportsToolCalling, $isLlamacpp, $supportsVision, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword,
+                                $supportsToolCalling, $isLlamacpp, $reasoningEffort, $supportsVision, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword,
                                 $costWeight, $capacityWeight, $epId]);
                 }
                 if (is_array($previousEndpoint) && (int) ($previousEndpoint['is_active'] ?? 0) === 1 && $isActive !== 1) {
@@ -949,6 +957,7 @@ foreach ($endpoints as $ep) {
         'specialized_for_category' => $ep['specialized_for_category'] ?? '',
         'supports_tool_calling'    => (int) ($ep['supports_tool_calling'] ?? 1),
         'is_llamacpp'              => (int) ($ep['is_llamacpp'] ?? 0),
+        'reasoning_effort'         => $ep['reasoning_effort'] ?? 'high',
         'supports_vision'          => (int) ($ep['supports_vision'] ?? 0),
         'is_active'                => $ep['is_active'],
         'ssh_host'                 => $ep['ssh_host'] ?? '',
@@ -2679,12 +2688,26 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <p class="hint">
                         Aktivieren, wenn dieser Endpunkt ein direkt (bare metal) betriebener
                         llama.cpp-Server ist. Die JSON-Anfrage wird dann llama.cpp-kompatibel
-                        aufgebaut (<code>"reasoning_effort":"high"</code>, keine
+                        aufgebaut (mit dem unten gewählten <code>"reasoning_effort"</code>, keine
                         LM-Studio-Platzhalter wie <code>"max_tokens":-1</code>) und es wird
                         kein Tool-Calling verwendet – ohne <code>--jinja</code> lehnt
                         llama.cpp Anfragen mit <code>tools</code> ab.
                         Beispiel-Startbefehl:
                         <code>./llama-server -m /pfad/zum/modell.gguf --host 0.0.0.0 --port 8080 --jinja</code>
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label for="ep-reasoning-effort">Reasoning-Effort (llama.cpp)</label>
+                    <select id="ep-reasoning-effort" name="ep_reasoning_effort">
+                        <?php $currentReasoningEffort = $editEp ? ($editEp['reasoning_effort'] ?? 'high') : 'high'; ?>
+                        <option value="low"<?= $currentReasoningEffort === 'low' ? ' selected' : '' ?>>Low</option>
+                        <option value="medium"<?= $currentReasoningEffort === 'medium' ? ' selected' : '' ?>>Mid</option>
+                        <option value="high"<?= $currentReasoningEffort === 'high' ? ' selected' : '' ?>>High</option>
+                    </select>
+                    <p class="hint">
+                        Wert, der als <code>"reasoning_effort"</code> an direkte llama.cpp-Endpunkte
+                        übergeben wird. Gilt nur, wenn oben "Direkte llama.cpp-Instanz" aktiviert ist.
                     </p>
                 </div>
 
@@ -4449,6 +4472,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const activeCheck  = document.getElementById('ep-active');
     const toolCallingCheck = document.getElementById('ep-supports-tool-calling');
     const llamacppCheck    = document.getElementById('ep-is-llamacpp');
+    const reasoningEffortSelect = document.getElementById('ep-reasoning-effort');
     const visionCheck      = document.getElementById('ep-supports-vision');
     const loadBtn      = document.getElementById('ep-load-btn');
     const endpointConfigPanel = document.getElementById('config-endpoints');
@@ -4529,6 +4553,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         activeCheck.checked    = ep.is_active == 1;
         if (toolCallingCheck) toolCallingCheck.checked = ep.supports_tool_calling != 0;
         if (llamacppCheck) llamacppCheck.checked = ep.is_llamacpp == 1;
+        if (reasoningEffortSelect) reasoningEffortSelect.value = ep.reasoning_effort || 'high';
         if (visionCheck) visionCheck.checked = ep.supports_vision == 1;
         // Clear datalist options from a previous load-models call.
         modelList.innerHTML    = '';
@@ -4557,6 +4582,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         activeCheck.checked   = true;
         if (toolCallingCheck) toolCallingCheck.checked = true;
         if (llamacppCheck) llamacppCheck.checked = false;
+        if (reasoningEffortSelect) reasoningEffortSelect.value = 'high';
         if (visionCheck) visionCheck.checked = false;
         modelList.innerHTML   = '';
         if (specializedSelect) specializedSelect.value = '';

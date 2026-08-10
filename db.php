@@ -103,9 +103,15 @@ function ensureRuntimeSchema(PDO $pdo): void
     } catch (Throwable $_e) { /* column already exists */ }
 
     // llama.cpp flag: whether this endpoint is a direct (bare-metal) llama.cpp
-    // instance. Such endpoints receive "reasoning_effort":"high" in the payload.
+    // instance. Such endpoints receive "reasoning_effort" (see below) in the payload.
     try {
         $pdo->exec("ALTER TABLE endpoints ADD COLUMN is_llamacpp TINYINT(1) NOT NULL DEFAULT 0 AFTER supports_tool_calling");
+    } catch (Throwable $_e) { /* column already exists */ }
+
+    // Reasoning effort sent to llama.cpp endpoints ("reasoning_effort" field),
+    // configurable per model group / endpoint. One of 'low', 'medium', 'high'.
+    try {
+        $pdo->exec("ALTER TABLE endpoints ADD COLUMN reasoning_effort VARCHAR(10) NOT NULL DEFAULT 'high' AFTER is_llamacpp");
     } catch (Throwable $_e) { /* column already exists */ }
 
     // Vision flag: whether the model served by this endpoint accepts image
