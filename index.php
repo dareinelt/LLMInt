@@ -1474,7 +1474,7 @@ $csrfToken = $_SESSION['csrf_token'];
                 <option value="low">Detail: Niedrig</option>
                 <option value="high">Detail: Hoch</option>
             </select>
-            <button id="attach-image-btn" title="Bild anhängen (Vision-fähiges Modell erforderlich)">🖼</button>
+            <button id="attach-image-btn" title="Bild anhängen">🖼</button>
             <button id="clear-btn" title="Verlauf löschen">🗑</button>
             <button id="send-btn" title="Senden">↑</button>
         </div>
