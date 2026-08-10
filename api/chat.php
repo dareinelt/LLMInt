@@ -2234,7 +2234,7 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     $url      = $baseUrl . '/chat/completions';
     // Keep the llama.cpp payload adjustments in sync with the new endpoint.
     if (!empty($endpoint['is_llamacpp'])) {
-        $forwardPayload['reasoning_effort'] = 'high';
+        $forwardPayload['reasoning_effort'] = $endpoint['reasoning_effort'] ?? 'high';
         if (array_key_exists('stop', $forwardPayload) && $forwardPayload['stop'] === null) {
             unset($forwardPayload['stop']);
         }
@@ -2304,12 +2304,12 @@ if ($stream) {
     $forwardPayload['stream_options'] = ['include_usage' => true];
 }
 
-// Direct llama.cpp instances receive an explicit high reasoning effort and a
-// payload without LM-Studio-specific placeholder values: llama.cpp expects
-// "stop" to be absent instead of null and "max_tokens" to be absent instead
-// of the LM Studio convention -1.
+// Direct llama.cpp instances receive the reasoning effort configured for
+// their endpoint (low/medium/high) and a payload without LM-Studio-specific
+// placeholder values: llama.cpp expects "stop" to be absent instead of null
+// and "max_tokens" to be absent instead of the LM Studio convention -1.
 if (!empty($endpoint['is_llamacpp'])) {
-    $forwardPayload['reasoning_effort'] = 'high';
+    $forwardPayload['reasoning_effort'] = $endpoint['reasoning_effort'] ?? 'high';
     if ($forwardPayload['stop'] === null) {
         unset($forwardPayload['stop']);
     }
