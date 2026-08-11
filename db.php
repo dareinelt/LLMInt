@@ -207,12 +207,22 @@ function ensureRuntimeSchema(PDO $pdo): void
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS active_clients (
             token      CHAR(128)    NOT NULL,
+            ip         VARCHAR(45)  NULL,
+            hostname   VARCHAR(255) NULL,
             last_seen  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
                                     ON UPDATE CURRENT_TIMESTAMP(3),
             PRIMARY KEY (token),
             KEY idx_ac_last_seen (last_seen)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
+
+    // IP / hostname of the connected client (added later – older installations).
+    try {
+        $pdo->exec("ALTER TABLE active_clients ADD COLUMN ip VARCHAR(45) NULL AFTER token");
+    } catch (Throwable $_e) { /* column already exists */ }
+    try {
+        $pdo->exec("ALTER TABLE active_clients ADD COLUMN hostname VARCHAR(255) NULL AFTER ip");
+    } catch (Throwable $_e) { /* column already exists */ }
 
     // Periodic samples of the concurrent client count (for min/max/avg).
     $pdo->exec("
@@ -1388,6 +1398,45 @@ function purgeExpiredConversationSessions(): void
         );
     } catch (Throwable $e) {
         // Best-effort
+    }
+}
+
+/**
+ * Return a list of currently connected clients (browser tabs seen within the
+ * last 90 seconds), grouped by network address.
+ *
+ * Each entry contains the IP address, the reverse-resolved hostname (may be
+ * empty) and the number of open tabs from that address.
+ *
+ * @return array<int,array{ip:string,hostname:string,tabs:int}>
+ */
+function listActiveClients(?PDO $pdo = null): array
+{
+    try {
+        $db = $pdo ?? getDb();
+        $rows = $db->query(
+            "SELECT COALESCE(ip, '')       AS ip,
+                    COALESCE(MAX(hostname), '') AS hostname,
+                    COUNT(*)               AS tabs
+               FROM active_clients
+              WHERE last_seen > DATE_SUB(NOW(), INTERVAL 90 SECOND)
+              GROUP BY COALESCE(ip, '')
+              ORDER BY tabs DESC, ip ASC
+              LIMIT 60"
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = [
+                'ip'       => (string) $r['ip'],
+                'hostname' => (string) $r['hostname'],
+                'tabs'     => (int) $r['tabs'],
+            ];
+        }
+        return $out;
+    } catch (Throwable $e) {
+        // Table or columns may not exist on older installations
+        return [];
     }
 }
 
