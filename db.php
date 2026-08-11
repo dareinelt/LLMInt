@@ -1418,9 +1418,12 @@ function listActiveClients(?PDO $pdo = null): array
     try {
         $db = $pdo ?? getDb();
         $rows = $db->query(
-            "SELECT COALESCE(ip, '')       AS ip,
+            // Every selected column has to be aggregated – grouping by a CASE
+            // expression is not recognised as a functional dependency by
+            // MySQL's default sql_mode ONLY_FULL_GROUP_BY (error 1055).
+            "SELECT COALESCE(MAX(ip), '')       AS ip,
                     COALESCE(MAX(hostname), '') AS hostname,
-                    COUNT(*)               AS tabs
+                    COUNT(*)                    AS tabs
                FROM active_clients
               WHERE last_seen > DATE_SUB(NOW(), INTERVAL 90 SECOND)
               GROUP BY CASE WHEN COALESCE(ip, '') = '' THEN token ELSE ip END
