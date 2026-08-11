@@ -1357,7 +1357,7 @@ if (isset($_GET['edit_emb']) && (int) $_GET['edit_emb'] > 0) {
     }
 }
 
-$clientStats = ['current' => 0, 'today_min' => 0, 'today_max' => 0, 'today_avg' => 0.0];
+$clientStats = ['current' => 0, 'today_min' => 0, 'today_max' => 0, 'today_avg' => 0.0, 'list' => []];
 try {
     $current = (int) $db->query(
         "SELECT COUNT(*) FROM active_clients
@@ -1375,6 +1375,7 @@ try {
         'today_min' => ($cRow && $cRow['min_cnt'] !== null) ? (int) $cRow['min_cnt'] : $current,
         'today_max' => ($cRow && $cRow['max_cnt'] !== null) ? (int) $cRow['max_cnt'] : $current,
         'today_avg' => ($cRow && $cRow['avg_cnt'] !== null) ? round((float) $cRow['avg_cnt'], 1) : (float) $current,
+        'list'      => listActiveClients($db),
     ];
 } catch (PDOException $e) {
     // Tables may not exist on older installations
@@ -1914,6 +1915,22 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         }
         .tree-reset-btn:hover { background: #464646; color: var(--text); }
 
+        /* ── Dashboard fullscreen mode ───────────────────────────── */
+        #dashboard-card:fullscreen {
+            width: 100vw;
+            height: 100vh;
+            max-width: none;
+            margin: 0;
+            border-radius: 0;
+            overflow-y: auto;
+            background: var(--surface);
+        }
+
+        #dashboard-card:fullscreen #load-tree-container {
+            height: calc(100vh - 300px);
+            min-height: 320px;
+        }
+
         @keyframes tree-pulse {
             0%,100% { transform: scale(1); opacity: 1; }
             50%      { transform: scale(1.8); opacity: .35; }
@@ -2057,6 +2074,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             <h2 style="margin:0;padding:0;border:none">🚀 Dashboard</h2>
             <div class="tree-header-controls">
                 <button class="tree-reset-btn" id="tree-reset-btn" title="Ansicht zurücksetzen">⊡ Ansicht zurücksetzen</button>
+                <button class="tree-reset-btn" id="tree-fullscreen-btn" title="Dashboard auf volle Fenstergröße vergrößern">⛶ Vollbild</button>
                 <div class="tree-refresh-info">
                     <span class="tree-refresh-dot" id="tree-live-dot"></span>
                     <span id="tree-status">Initialisierung …</span>
@@ -5057,7 +5075,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         'today_min' => $clientStats['today_min'],
         'today_max' => $clientStats['today_max'],
         'today_avg' => $clientStats['today_avg'],
-    ], JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+        'list'      => $clientStats['list'],
+    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
     const MODEL_COLORS = <?= json_encode($modelColorMap,
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
@@ -5075,6 +5094,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     // ── Pan / zoom state ──────────────────────────────────────────────────────
 
     let treeW = 600, treeH = 400; // full diagram dimensions
+    let treeX = 0, treeY = 0;     // top-left corner of the diagram (may be negative)
     let vpX = 0, vpY = 0, vpW = 600, vpH = 400; // current viewport (SVG coords)
 
     function applyViewBox() {
@@ -5082,7 +5102,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     }
 
     function resetView() {
-        vpX = 0; vpY = 0; vpW = treeW; vpH = treeH;
+        vpX = treeX; vpY = treeY; vpW = treeW; vpH = treeH;
         applyViewBox();
     }
 
@@ -5184,6 +5204,42 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     if (resetBtn) resetBtn.addEventListener('click', resetView);
 
+    // ── Fullscreen toggle for the whole dashboard card ────────────────────────
+
+    const fsBtn  = document.getElementById('tree-fullscreen-btn');
+    const dashEl = document.getElementById('dashboard-card');
+
+    function isFullscreen() {
+        return document.fullscreenElement === dashEl;
+    }
+
+    function updateFsBtn() {
+        if (!fsBtn) return;
+        const on = isFullscreen();
+        fsBtn.textContent = on ? '⛶ Vollbild beenden' : '⛶ Vollbild';
+        fsBtn.title = on
+            ? 'Vollbildmodus beenden'
+            : 'Dashboard auf volle Fenstergröße vergrößern';
+    }
+
+    if (fsBtn && dashEl && dashEl.requestFullscreen) {
+        fsBtn.addEventListener('click', function () {
+            if (isFullscreen()) {
+                document.exitFullscreen().catch(() => {});
+            } else {
+                dashEl.requestFullscreen().catch(() => {});
+            }
+        });
+        document.addEventListener('fullscreenchange', function () {
+            updateFsBtn();
+            // Re-fit the diagram to the new container size
+            resetView();
+        });
+        updateFsBtn();
+    } else if (fsBtn) {
+        fsBtn.style.display = 'none';
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     function mk(tag, attrs) {
@@ -5222,6 +5278,27 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         return str.length > max ? str.slice(0, max - 1) + '…' : str;
     }
 
+    // Label for a connected client: hostname when known, otherwise IP address.
+    function clientLabel(c) {
+        const host = (c && c.hostname ? String(c.hostname) : '').trim();
+        const ip   = (c && c.ip ? String(c.ip) : '').trim();
+        if (host !== '') {
+            // Prefer the short hostname when the FQDN gets too long
+            const short = host.split('.')[0];
+            return truncate(host.length > 26 && short !== '' ? short : host, 26);
+        }
+        return ip !== '' ? truncate(ip, 26) : 'unbekannt';
+    }
+
+    function clientTooltip(c) {
+        const host = (c && c.hostname ? String(c.hostname) : '').trim();
+        const ip   = (c && c.ip ? String(c.ip) : '').trim();
+        const tabs = (c && c.tabs) ? c.tabs : 1;
+        const who  = host !== '' ? (ip !== '' ? `${host} (${ip})` : host)
+                                 : (ip !== '' ? ip : 'Unbekannte Adresse');
+        return `${who} · ${tabs} Tab${tabs !== 1 ? 's' : ''}`;
+    }
+
     function extractIntelligenceLabel(modelName) {
         if (!modelName) return '–';
         const matches = [...String(modelName).matchAll(/(?:\b(a))?(\d+(?:[.,]\d+)?)\s*b\b/gi)];
@@ -5255,7 +5332,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const hasComfy    = Array.isArray(comfyEndpoints) && comfyEndpoints.length > 0;
 
         if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasSd && !hasComfy) {
-            treeW = 400; treeH = 60;
+            treeW = 400; treeH = 60; treeX = 0; treeY = 0;
             svg.setAttribute('viewBox', `0 0 ${treeW} ${treeH}`);
             txt(svg, 'Keine Endpunkte konfiguriert.', {
                 x: 16, y: 38,
@@ -5380,9 +5457,66 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             comfyCurY += COMFY_H + V_GAP;
         }
 
-        // Update pan/zoom state for new diagram size
-        treeW = TOTAL_W;
-        treeH = TOTAL_H;
+        // ── Client cloud layout ───────────────────────────────────────────────
+        // Connected clients are placed as small bubbles in a cloud around the
+        // (unchanged) "Clients" tile. Labelled with hostname, else IP address.
+        const clientList = (clients && Array.isArray(clients.list)) ? clients.list.slice(0, 40) : [];
+        const cloudNodes = [];
+        {
+            const cx = COL0_X + CLIENT_W / 2;
+            const cy = rootCY;
+            const BUB_H = 26;
+            const RING_SIZES = [6, 9, 12, 13];
+
+            let idx = 0;
+            let ring = 0;
+            while (idx < clientList.length) {
+                const perRing  = RING_SIZES[Math.min(ring, RING_SIZES.length - 1)];
+                const inRing   = Math.min(perRing, clientList.length - idx);
+                const radiusX  = CLIENT_W / 2 + 96 + ring * 74;
+                const radiusY  = CLIENT_H / 2 + 62 + ring * 52;
+                // Leave the right-hand side free – the connector to the root
+                // node leaves the tile there.
+                const startDeg = 42;
+                const endDeg   = 318;
+                for (let i = 0; i < inRing; i++) {
+                    const c   = clientList[idx + i];
+                    const t   = inRing === 1 ? 0.5 : i / (inRing - 1);
+                    const deg = startDeg + t * (endDeg - startDeg);
+                    const rad = deg * Math.PI / 180;
+                    const label = clientLabel(c);
+                    const w = Math.max(78, Math.min(196, label.length * 6.2 + 26));
+                    // Keep the bubbles clear of the root node column
+                    const maxRight = COL1_X - 14;
+                    let bcx = cx + Math.cos(rad) * radiusX;
+                    if (bcx + w / 2 > maxRight) { bcx = maxRight - w / 2; }
+                    cloudNodes.push({
+                        client: c,
+                        label,
+                        w,
+                        h: BUB_H,
+                        cx: bcx,
+                        cy: cy + Math.sin(rad) * radiusY,
+                    });
+                }
+                idx += inRing;
+                ring++;
+            }
+        }
+
+        // Update pan/zoom state for new diagram size (the cloud may stick out
+        // to the left / above / below the regular diagram area)
+        let minX = 0, minY = 0, maxX = TOTAL_W, maxY = TOTAL_H;
+        for (const n of cloudNodes) {
+            minX = Math.min(minX, n.cx - n.w / 2 - PAD);
+            minY = Math.min(minY, n.cy - n.h / 2 - PAD);
+            maxX = Math.max(maxX, n.cx + n.w / 2 + PAD);
+            maxY = Math.max(maxY, n.cy + n.h / 2 + PAD);
+        }
+        treeX = minX;
+        treeY = minY;
+        treeW = maxX - minX;
+        treeH = maxY - minY;
         resetView();
 
         // ── Connector curves ──────────────────────────────────────────────────
@@ -5475,6 +5609,52 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'rgba(255,255,255,0.22)',
                 anyRunning
             ));
+        }
+
+        // ── Client cloud (bubbles around the Clients tile) ────────────────────
+        for (const n of cloudNodes) {
+            const bx = n.cx - n.w / 2;
+            const by = n.cy - n.h / 2;
+
+            // Connector from the Clients tile to the bubble
+            svg.appendChild(mk('line', {
+                x1: COL0_X + CLIENT_W / 2,
+                y1: rootCY,
+                x2: n.cx,
+                y2: n.cy,
+                stroke: 'rgba(34,197,94,0.22)',
+                'stroke-width': 1,
+            }));
+
+            const g = mk('g', { transform: `translate(${bx},${by})` });
+
+            const title = mk('title', null);
+            title.textContent = clientTooltip(n.client);
+            g.appendChild(title);
+
+            g.appendChild(mk('rect', {
+                x: 0, y: 0, width: n.w, height: n.h,
+                rx: n.h / 2,
+                fill: 'url(#grad-cli)',
+                stroke: 'rgba(34,197,94,0.45)',
+                'stroke-width': 1,
+            }));
+            g.appendChild(mk('circle', {
+                cx: 12, cy: n.h / 2, r: 3.5, fill: '#22c55e',
+            }));
+            txt(g, n.label, {
+                x: 22, y: n.h / 2 + 4,
+                fill: '#c9d6c9', 'font-size': 10, 'font-family': 'sans-serif',
+            });
+            if ((n.client.tabs || 1) > 1) {
+                txt(g, `×${n.client.tabs}`, {
+                    x: n.w - 8, y: n.h / 2 + 4,
+                    'text-anchor': 'end',
+                    fill: '#6b7280', 'font-size': 9, 'font-family': 'sans-serif',
+                });
+            }
+
+            svg.appendChild(g);
         }
 
         // ── Client node ───────────────────────────────────────────────────────

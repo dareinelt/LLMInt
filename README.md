@@ -31,7 +31,7 @@ LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer inte
 - **Chat-Tools:** Websuche mit SearXNG, Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
 - **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO.
 - **OpenAI-kompatible API:** Modellliste und Chat Completions, wahlweise mit den Chat-Tools.
-- **Monitoring:** Endpunktlast, Tokenverbrauch, aktive Clients, Such- und Generierungsjobs sowie optionale SSH-Systemmetriken.
+- **Monitoring:** Endpunktlast, Tokenverbrauch, aktive Clients (als Wolke mit Hostname bzw. IP-Adresse rund um die Clients-Kachel), Such- und Generierungsjobs sowie optionale SSH-Systemmetriken. Das Dashboard lässt sich per **⛶ Vollbild** auf die volle Browserfenstergröße vergrößern.
 - **Prompt Security:** mehrstufige Prüfung von Chat-Eingaben mit konfigurierbaren Regeln, Bewertung und Protokollierung.
 
 ## Architektur

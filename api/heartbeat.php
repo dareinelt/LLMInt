@@ -7,12 +7,13 @@
  *
  * Each browser tab that has the main app open sends a POST every 30 s with a
  * randomly-generated per-tab token.  This endpoint:
- *   1. Upserts the token in active_clients (resets last_seen).
+ *   1. Upserts the token in active_clients (resets last_seen, stores IP/hostname).
  *   2. Purges entries older than 90 s (tab is considered gone).
  *   3. Records a count sample in client_count_log at most once per 30 s
  *      (used for today's min / max / avg in the admin load tree).
  *
- * No authentication is required; no user-identifiable data is stored.
+ * No authentication is required; apart from the network address of the client
+ * (shown to admins only) no user-identifiable data is stored.
  *
  * Expected POST body (JSON):  { "token": "<32-128 hex chars>" }
  * Response (JSON):            { "ok": true, "count": <int> }
@@ -22,6 +23,23 @@ require_once __DIR__ . '/../db.php';
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
+
+/**
+ * Return the best-guess client IP address.
+ * Checks X-Forwarded-For when a proxy injects it, falls back to REMOTE_ADDR.
+ */
+function heartbeatClientIp(): ?string
+{
+    $xff = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
+    if ($xff !== '') {
+        $ip = trim(explode(',', $xff)[0]);
+        if (filter_var($ip, FILTER_VALIDATE_IP)) {
+            return $ip;
+        }
+    }
+    $remote = $_SERVER['REMOTE_ADDR'] ?? '';
+    return filter_var($remote, FILTER_VALIDATE_IP) ? $remote : null;
+}
 
 $input = json_decode(file_get_contents('php://input'), true);
 $token = isset($input['token']) ? (string) $input['token'] : '';
@@ -35,12 +53,38 @@ if (!preg_match('/^[0-9a-f]{32,128}$/i', $token)) {
 try {
     $db = getDb();
 
+    $ip = heartbeatClientIp();
+
+    // Resolve the hostname only once per IP (reverse DNS can be slow) – reuse
+    // an already-known hostname for the same address whenever possible.
+    $hostname = null;
+    if ($ip !== null) {
+        $stmt = $db->prepare(
+            'SELECT hostname FROM active_clients
+              WHERE ip = ? AND hostname IS NOT NULL AND hostname <> \'\'
+              LIMIT 1'
+        );
+        $stmt->execute([$ip]);
+        $known = $stmt->fetchColumn();
+
+        if (is_string($known) && $known !== '') {
+            $hostname = $known;
+        } else {
+            $resolved = @gethostbyaddr($ip);
+            if (is_string($resolved) && $resolved !== '' && $resolved !== $ip) {
+                $hostname = mb_substr($resolved, 0, 255);
+            }
+        }
+    }
+
     // 1. Upsert heartbeat
     $db->prepare(
-        'INSERT INTO active_clients (token, last_seen)
-         VALUES (?, NOW(3))
-         ON DUPLICATE KEY UPDATE last_seen = NOW(3)'
-    )->execute([$token]);
+        'INSERT INTO active_clients (token, ip, hostname, last_seen)
+         VALUES (?, ?, ?, NOW(3))
+         ON DUPLICATE KEY UPDATE ip = VALUES(ip),
+                                 hostname = VALUES(hostname),
+                                 last_seen = NOW(3)'
+    )->execute([$token, $ip, $hostname]);
 
     // 2. Purge expired clients (no activity for > 90 s)
     $db->exec(
