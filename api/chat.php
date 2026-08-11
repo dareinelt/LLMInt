@@ -1017,6 +1017,50 @@ function normalizeAssistantContent(mixed $content): string
 }
 
 /**
+ * Collapses every "system" message of a conversation into a single system
+ * message at the very beginning.
+ *
+ * Chat templates rendered by llama.cpp in --jinja mode (Mistral, Magistral,
+ * Devstral, …) abort with
+ *   "Jinja Exception: System message must be at the beginning."
+ * as soon as they encounter more than one system message or a system message
+ * that is not the first entry. LLMInt prepends both the date/time notice and
+ * the configurable global system prompt, and clients may add their own system
+ * message on top, so the outgoing conversation regularly contained several of
+ * them. Merging them keeps the instructions semantically identical for every
+ * backend while remaining compatible with those strict templates – it is
+ * therefore applied to all endpoints, not just those flagged as direct
+ * llama.cpp instances.
+ */
+function mergeSystemMessages(array $messages): array
+{
+    $systemParts = [];
+    $rest        = [];
+
+    foreach ($messages as $msg) {
+        if (is_array($msg) && ($msg['role'] ?? '') === 'system') {
+            $text = trim(normalizeAssistantContent($msg['content'] ?? ''));
+            if ($text !== '') {
+                $systemParts[] = $text;
+            }
+            continue;
+        }
+        $rest[] = $msg;
+    }
+
+    if ($systemParts === []) {
+        return $rest;
+    }
+
+    array_unshift($rest, [
+        'role'    => 'system',
+        'content' => implode("\n\n", $systemParts),
+    ]);
+
+    return $rest;
+}
+
+/**
  * Returns true when a single message's "content" value contains at least one
  * OpenAI-style "image_url" content part (i.e. an attached image).
  */
@@ -2290,6 +2334,10 @@ if ($globalSystemPrompt !== '') {
 // global system prompt above is edited; it is prepended so it appears at the
 // very beginning of the system instructions.
 array_unshift($llmMessages, ['role' => 'system', 'content' => buildCurrentDateTimeSystemPrompt()]);
+// Strict chat templates (llama.cpp with --jinja) only accept one system
+// message and only as the very first entry, so all system instructions –
+// including any the client sent – are merged into a single leading message.
+$llmMessages = mergeSystemMessages($llmMessages);
 
 // Forward only the fields LM Studio expects.
 $forwardPayload = [
