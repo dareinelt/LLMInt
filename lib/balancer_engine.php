@@ -299,6 +299,40 @@ function recordEndpointOutcome(string $table, int $endpointId, bool $success, ?f
 }
 
 /**
+ * Manually closes the circuit breaker of a single endpoint: the failure
+ * streak is cleared and the cooldown window is dropped, so the endpoint
+ * becomes immediately eligible for routing again. Used by the admin
+ * dashboard to recover an endpoint without waiting for the cooldown.
+ *
+ * @param string $table      Endpoint table name (endpoints|sd_endpoints|comfy_endpoints).
+ * @param int    $endpointId Endpoint primary key.
+ *
+ * @return bool True if an endpoint row was reset.
+ */
+function resetEndpointCircuit(string $table, int $endpointId): bool
+{
+    if ($endpointId <= 0 || !in_array($table, ['endpoints', 'sd_endpoints', 'comfy_endpoints'], true)) {
+        return false;
+    }
+
+    try {
+        $stmt = getDb()->prepare("
+            UPDATE {$table}
+               SET consecutive_failures = 0,
+                   circuit_state = 'closed',
+                   circuit_opened_at = NULL,
+                   cooldown_until = NULL
+             WHERE id = ?
+        ");
+        $stmt->execute([$endpointId]);
+
+        return $stmt->rowCount() > 0;
+    } catch (Throwable $_e) {
+        return false;
+    }
+}
+
+/**
  * SQL fragment (to be embedded in a WHERE clause on alias `e`) that excludes
  * endpoints whose circuit breaker is open and still within its cooldown
  * window. Endpoints in 'closed' or 'half_open' state, and endpoints whose

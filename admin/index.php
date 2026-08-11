@@ -264,6 +264,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashOk = 'Endpunkt gelöscht.';
             }
 
+        // ── Reset circuit breaker ─────────────────────────────────────────────
+        } elseif ($action === 'reset_circuit') {
+            $epId = (int) ($_POST['ep_id'] ?? 0);
+            if ($epId <= 0) {
+                $flashError = 'Ungültige Endpunkt-ID.';
+            } else {
+                $epRow = $db->prepare('SELECT alias, base_url FROM endpoints WHERE id = ? LIMIT 1');
+                $epRow->execute([$epId]);
+                $epRow = $epRow->fetch();
+
+                if (!is_array($epRow)) {
+                    $flashError = 'Endpunkt nicht gefunden.';
+                } else {
+                    $endpointLabel = trim((string) ($epRow['alias'] ?? ''));
+                    if ($endpointLabel === '') {
+                        $endpointLabel = trim((string) ($epRow['base_url'] ?? ''));
+                    }
+                    if (resetEndpointCircuit('endpoints', $epId)) {
+                        writeLog('info', 'Circuit-Breaker für Modellendpunkt ' . $endpointLabel . ' manuell zurückgesetzt.');
+                        $flashOk = 'Circuit-Breaker zurückgesetzt.';
+                    } else {
+                        $flashError = 'Circuit-Breaker konnte nicht zurückgesetzt werden.';
+                    }
+                }
+            }
+
         // ── Save search settings ──────────────────────────────────────────────
         } elseif ($action === 'save_search_settings') {
             $newSearxngUrl = trim($_POST['searxng_base_url'] ?? '');
@@ -2142,6 +2168,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         <?php endif; ?>
                         <?php if ($s['avg_latency_ms'] !== null): ?>
                             <br><span style="color:var(--text-muted)">⌀&thinsp;<?= number_format((int) $s['avg_latency_ms']) ?>&thinsp;ms</span>
+                        <?php endif; ?>
+                        <?php if ($circuitState !== 'closed' || (int) ($s['consecutive_failures'] ?? 0) > 0): ?>
+                            <br>
+                            <form method="POST" style="display:inline">
+                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                                <input type="hidden" name="action"     value="reset_circuit">
+                                <input type="hidden" name="ep_id"      value="<?= (int) $s['id'] ?>">
+                                <button type="submit" class="btn btn-sm" style="margin-top:4px"
+                                        title="Circuit-Breaker schließen und Fehlerzähler zurücksetzen">♻ Circuit zurücksetzen</button>
+                            </form>
                         <?php endif; ?>
                     </td>
                     <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
@@ -5853,9 +5889,17 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     const toggle = document.getElementById('dash-detail-toggle');
     const body   = document.getElementById('dash-detail-body');
     if (!toggle || !body) return;
+    const STORE_KEY = 'dashDetailOpen';
+    let stored = null;
+    try { stored = sessionStorage.getItem(STORE_KEY); } catch (e) { /* ignore */ }
+    if (stored === '1') {
+        body.classList.add('open');
+        toggle.classList.add('open');
+    }
     toggle.addEventListener('click', function () {
         const open = body.classList.toggle('open');
         toggle.classList.toggle('open', open);
+        try { sessionStorage.setItem(STORE_KEY, open ? '1' : '0'); } catch (e) { /* ignore */ }
     });
 })();
 </script>
