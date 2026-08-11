@@ -76,7 +76,7 @@ function pickEndpointForModel(
         // Step 1: gather scored candidates (read-committed snapshot).
         $stmt = $db->prepare("
             SELECT e.id, e.alias, e.base_url, e.timeout, e.default_model,
-                   e.supports_tool_calling, e.is_llamacpp, e.supports_vision,
+                   e.supports_tool_calling, e.is_llamacpp, e.reasoning_effort, e.supports_vision,
                    e.circuit_state, e.cooldown_until,
                    e.avg_latency_ms, e.cost_weight, e.capacity_weight,
                    e.max_context, e.context_limit_per_slot,
