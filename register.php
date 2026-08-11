@@ -16,7 +16,7 @@ session_start();
 
 // Already logged in?
 if (isset($_SESSION['admin_user'])) {
-    header('Location: admin/index.php');
+    header('Location: index.php');
     exit;
 }
 
@@ -375,7 +375,7 @@ function validatePassword(string $pass): bool
 
     <div class="link-row">
         <a href="index.php">← Zurück zum Chat</a>
-        <a href="admin/login.php">Anmelden</a>
+        <a href="login.php">Anmelden</a>
     </div>
 </div>
 
