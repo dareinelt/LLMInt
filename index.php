@@ -3489,11 +3489,11 @@ $csrfToken = $_SESSION['csrf_token'];
 <div id="info-overlay" role="dialog" aria-modal="true" aria-labelledby="footer-info-link">
     <div id="info-box">
         <div class="info-content">
-            Ihr Chat-Assistent läuft lokal auf Ihrem Gerät – das bedeutet: Ihre Daten bleiben bei Ihnen!
+            Ihr Chat-Assistent läuft lokal auf Ihrem Gerät, in unserem Netzwerk – das bedeutet: Ihre Daten bleiben bei uns!
             Wir teilen keine Informationen mit Dritten. Damit Sie immer die besten Antworten erhalten,
             greift LLMInt zusätzlich auf Wissen aus verschiedenen Suchmaschinenquellen zurück.
             Die Suchanfragen werden so weitergegeben, dass kein Rückschluss auf die Quelle der Anfrage
-            möglich ist. Ein Teil der Software ist KI-gestützt entwickelt (Claude Opus, Fable;
+            möglich ist. Ein Teil der Software ist KI-gestützt entwickelt (Claude Opus 5, Fable 5;
             OpenAI GPT5.5, 5.6).
         </div>
         <button id="info-close">Schließen</button>
