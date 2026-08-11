@@ -790,6 +790,32 @@ function getGlobalSystemPrompt(): string
 }
 
 /**
+ * Build the fixed date/time notice that is injected into every chat request.
+ *
+ * This text is hard-coded and therefore independent of the configurable
+ * application-wide system prompt: it is always sent, even if an admin replaces
+ * the global prompt with a custom text. The current date and time are
+ * determined per request from the server clock (see date.timezone in php.ini).
+ */
+function buildCurrentDateTimeSystemPrompt(): string
+{
+    $now = new DateTimeImmutable('now');
+    $weekdays = [
+        1 => 'Montag',
+        2 => 'Dienstag',
+        3 => 'Mittwoch',
+        4 => 'Donnerstag',
+        5 => 'Freitag',
+        6 => 'Samstag',
+        7 => 'Sonntag',
+    ];
+    $weekday = $weekdays[(int) $now->format('N')] ?? '';
+    $stamp = trim($weekday . ', ' . $now->format('d.m.Y') . ', ' . $now->format('H:i') . ' Uhr');
+
+    return 'Wichtige Info für dich: Das heutige Datum und die aktuelle Uhrzeit ist ' . $stamp . '.';
+}
+
+/**
  * Default subject line for the registration confirmation e-mail.
  */
 const REGISTRATION_EMAIL_SUBJECT_DEFAULT = 'Bitte bestätige deine E-Mail-Adresse';

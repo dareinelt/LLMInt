@@ -2285,6 +2285,11 @@ $globalSystemPrompt = getGlobalSystemPrompt();
 if ($globalSystemPrompt !== '') {
     array_unshift($llmMessages, ['role' => 'system', 'content' => $globalSystemPrompt]);
 }
+// Always tell the upstream model the current date and time. This notice is
+// hard-coded and therefore stays in place regardless of how the configurable
+// global system prompt above is edited; it is prepended so it appears at the
+// very beginning of the system instructions.
+array_unshift($llmMessages, ['role' => 'system', 'content' => buildCurrentDateTimeSystemPrompt()]);
 
 // Forward only the fields LM Studio expects.
 $forwardPayload = [
