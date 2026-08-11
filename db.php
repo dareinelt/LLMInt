@@ -103,13 +103,15 @@ function ensureRuntimeSchema(PDO $pdo): void
     } catch (Throwable $_e) { /* column already exists */ }
 
     // llama.cpp flag: whether this endpoint is a direct (bare-metal) llama.cpp
-    // instance. Such endpoints receive "reasoning_effort" (see below) in the payload.
+    // instance. Such endpoints get a llama.cpp-compatible payload (no LM Studio
+    // placeholders) and no tool calling.
     try {
         $pdo->exec("ALTER TABLE endpoints ADD COLUMN is_llamacpp TINYINT(1) NOT NULL DEFAULT 0 AFTER supports_tool_calling");
     } catch (Throwable $_e) { /* column already exists */ }
 
-    // Reasoning effort sent to llama.cpp endpoints ("reasoning_effort" field),
-    // configurable per model group / endpoint. One of 'low', 'medium', 'high'.
+    // Reasoning effort sent to the endpoint ("reasoning_effort" field),
+    // configurable per model group / endpoint for every endpoint type.
+    // One of 'none' (do not send the field), 'low', 'medium', 'high'.
     try {
         $pdo->exec("ALTER TABLE endpoints ADD COLUMN reasoning_effort VARCHAR(10) NOT NULL DEFAULT 'high' AFTER is_llamacpp");
     } catch (Throwable $_e) { /* column already exists */ }
@@ -1687,4 +1689,31 @@ function getSessionIntelligenceGroup(string $sessionId): ?array
         $model = $resolved;
     }
     return ['label' => $label, 'model' => $model];
+}
+
+/**
+ * Valid values for the per-endpoint reasoning effort configuration.
+ *
+ * 'none' means: do not send a "reasoning_effort" field at all.
+ *
+ * @return string[]
+ */
+function reasoningEffortOptions(): array
+{
+    return ['none', 'low', 'medium', 'high'];
+}
+
+/**
+ * Normalizes a stored reasoning-effort value.
+ *
+ * @param mixed $value Raw value from the endpoints table.
+ * @return string|null The effort to send, or null when nothing should be sent.
+ */
+function normalizeReasoningEffort($value): ?string
+{
+    $effort = is_string($value) ? strtolower(trim($value)) : '';
+    if ($effort === '' || $effort === 'none') {
+        return null;
+    }
+    return in_array($effort, ['low', 'medium', 'high'], true) ? $effort : 'high';
 }

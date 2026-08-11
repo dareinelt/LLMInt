@@ -130,8 +130,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
             $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
-            $reasoningEffort     = trim($_POST['ep_reasoning_effort'] ?? 'high');
-            if (!in_array($reasoningEffort, ['low', 'medium', 'high'], true)) {
+            $reasoningEffort     = strtolower(trim($_POST['ep_reasoning_effort'] ?? 'high'));
+            if (!in_array($reasoningEffort, reasoningEffortOptions(), true)) {
                 $reasoningEffort = 'high';
             }
             $supportsVision      = isset($_POST['ep_supports_vision']) ? 1 : 0;
@@ -185,8 +185,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $specializedFor      = trim($_POST['ep_specialized_for_category'] ?? '');
             $supportsToolCalling = isset($_POST['ep_supports_tool_calling']) ? 1 : 0;
             $isLlamacpp          = isset($_POST['ep_is_llamacpp']) ? 1 : 0;
-            $reasoningEffort     = trim($_POST['ep_reasoning_effort'] ?? 'high');
-            if (!in_array($reasoningEffort, ['low', 'medium', 'high'], true)) {
+            $reasoningEffort     = strtolower(trim($_POST['ep_reasoning_effort'] ?? 'high'));
+            if (!in_array($reasoningEffort, reasoningEffortOptions(), true)) {
                 $reasoningEffort = 'high';
             }
             $supportsVision      = isset($_POST['ep_supports_vision']) ? 1 : 0;
@@ -2688,8 +2688,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <p class="hint">
                         Aktivieren, wenn dieser Endpunkt ein direkt (bare metal) betriebener
                         llama.cpp-Server ist. Die JSON-Anfrage wird dann llama.cpp-kompatibel
-                        aufgebaut (mit dem unten gewählten <code>"reasoning_effort"</code>, keine
-                        LM-Studio-Platzhalter wie <code>"max_tokens":-1</code>) und es wird
+                        aufgebaut (keine LM-Studio-Platzhalter wie
+                        <code>"max_tokens":-1</code>) und es wird
                         kein Tool-Calling verwendet – ohne <code>--jinja</code> lehnt
                         llama.cpp Anfragen mit <code>tools</code> ab.
                         Beispiel-Startbefehl:
@@ -2698,16 +2698,20 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 </div>
 
                 <div class="form-group">
-                    <label for="ep-reasoning-effort">Reasoning-Effort (llama.cpp)</label>
+                    <label for="ep-reasoning-effort">Reasoning-Effort</label>
                     <select id="ep-reasoning-effort" name="ep_reasoning_effort">
                         <?php $currentReasoningEffort = $editEp ? ($editEp['reasoning_effort'] ?? 'high') : 'high'; ?>
+                        <option value="none"<?= $currentReasoningEffort === 'none' ? ' selected' : '' ?>>Nicht senden</option>
                         <option value="low"<?= $currentReasoningEffort === 'low' ? ' selected' : '' ?>>Low</option>
                         <option value="medium"<?= $currentReasoningEffort === 'medium' ? ' selected' : '' ?>>Mid</option>
                         <option value="high"<?= $currentReasoningEffort === 'high' ? ' selected' : '' ?>>High</option>
                     </select>
                     <p class="hint">
-                        Wert, der als <code>"reasoning_effort"</code> an direkte llama.cpp-Endpunkte
-                        übergeben wird. Gilt nur, wenn oben "Direkte llama.cpp-Instanz" aktiviert ist.
+                        Wert, der als <code>"reasoning_effort"</code> an diesen Endpunkt übergeben
+                        wird – unabhängig davon, ob es sich um eine direkte llama.cpp-Instanz oder
+                        einen anderen OpenAI-kompatiblen Endpunkt (LM Studio, vLLM, Ollama …)
+                        handelt. Mit "Nicht senden" wird das Feld weggelassen, z. B. für Backends,
+                        die unbekannte Felder ablehnen.
                     </p>
                 </div>
 

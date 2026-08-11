@@ -2276,17 +2276,21 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     $timeout  = max(1, (int) $endpoint['timeout']);
     $responseDetails = buildResponseDetails($endpoint);
     $url      = $baseUrl . '/chat/completions';
-    // Keep the llama.cpp payload adjustments in sync with the new endpoint.
+    // Keep the reasoning effort and the llama.cpp payload adjustments in sync
+    // with the new endpoint.
+    $newReasoningEffort = normalizeReasoningEffort($endpoint['reasoning_effort'] ?? null);
+    if ($newReasoningEffort !== null) {
+        $forwardPayload['reasoning_effort'] = $newReasoningEffort;
+    } else {
+        unset($forwardPayload['reasoning_effort']);
+    }
     if (!empty($endpoint['is_llamacpp'])) {
-        $forwardPayload['reasoning_effort'] = $endpoint['reasoning_effort'] ?? 'high';
         if (array_key_exists('stop', $forwardPayload) && $forwardPayload['stop'] === null) {
             unset($forwardPayload['stop']);
         }
         if (isset($forwardPayload['max_tokens']) && (int) $forwardPayload['max_tokens'] === -1) {
             unset($forwardPayload['max_tokens']);
         }
-    } else {
-        unset($forwardPayload['reasoning_effort']);
     }
     return true;
 };
@@ -2357,12 +2361,21 @@ if ($stream) {
     $forwardPayload['stream_options'] = ['include_usage' => true];
 }
 
-// Direct llama.cpp instances receive the reasoning effort configured for
-// their endpoint (low/medium/high) and a payload without LM-Studio-specific
-// placeholder values: llama.cpp expects "stop" to be absent instead of null
-// and "max_tokens" to be absent instead of the LM Studio convention -1.
+// The reasoning effort configured for the endpoint (low/medium/high) is sent
+// to every endpoint type – not just direct llama.cpp instances – so that
+// OpenAI-compatible backends (LM Studio, vLLM, Ollama, …) can honour it as
+// well. Endpoints configured with "none" get no "reasoning_effort" field at
+// all, which is the right choice for backends that reject unknown fields.
+$endpointReasoningEffort = normalizeReasoningEffort($endpoint['reasoning_effort'] ?? null);
+if ($endpointReasoningEffort !== null) {
+    $forwardPayload['reasoning_effort'] = $endpointReasoningEffort;
+}
+
+// Direct llama.cpp instances additionally need a payload without
+// LM-Studio-specific placeholder values: llama.cpp expects "stop" to be absent
+// instead of null and "max_tokens" to be absent instead of the LM Studio
+// convention -1.
 if (!empty($endpoint['is_llamacpp'])) {
-    $forwardPayload['reasoning_effort'] = $endpoint['reasoning_effort'] ?? 'high';
     if ($forwardPayload['stop'] === null) {
         unset($forwardPayload['stop']);
     }
