@@ -951,6 +951,66 @@ $csrfToken = $_SESSION['csrf_token'];
             user-select: none;
         }
 
+        #footer-info-link {
+            color: inherit;
+            background: none;
+            border: none;
+            font: inherit;
+            padding: 0;
+            cursor: pointer;
+            text-decoration: underline dotted;
+        }
+
+        #footer-info-link:hover { color: var(--text); }
+
+        /* ── Info overlay (footer credit) ──────────────────────────── */
+        #info-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 700;
+            background: rgba(0,0,0,.6);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+        }
+
+        #info-overlay.open { display: flex; }
+
+        #info-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 32px 36px 28px;
+            max-width: 520px;
+            width: calc(100% - 32px);
+            box-shadow: 0 24px 60px rgba(0,0,0,.6);
+            text-align: left;
+            line-height: 1.6;
+        }
+
+        #info-box .info-content {
+            margin-bottom: 20px;
+            font-size: .93rem;
+            color: var(--text);
+        }
+
+        #info-close {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius);
+            font-size: .95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .15s;
+        }
+
+        #info-close:hover { background: var(--accent-dark); }
+
         /* ── Scrollbar ─────────────────────────────────────────────── */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -1486,7 +1546,7 @@ $csrfToken = $_SESSION['csrf_token'];
         </div>
 
     </div>
-    <div id="footer-info">LLMInt by Daniel-André Reinelt</div>
+    <div id="footer-info"><button type="button" id="footer-info-link">LLMInt by Daniel-André Reinelt</button></div>
 </div>
 
 </div><!-- /#main-area -->
@@ -3424,5 +3484,37 @@ $csrfToken = $_SESSION['csrf_token'];
 })();
 </script>
 <?php endif; ?>
+
+<!-- ── Info overlay (footer credit) ─────────────────────────── -->
+<div id="info-overlay" role="dialog" aria-modal="true" aria-labelledby="footer-info-link">
+    <div id="info-box">
+        <div class="info-content">
+            Ihr Chat-Assistent läuft lokal auf Ihrem Gerät – das bedeutet: Ihre Daten bleiben bei Ihnen!
+            Wir teilen keine Informationen mit Dritten. Damit Sie immer die besten Antworten erhalten,
+            greift LLMInt zusätzlich auf Wissen aus verschiedenen Suchmaschinenquellen zurück.
+            Die Suchanfragen werden so weitergegeben, dass kein Rückschluss auf die Quelle der Anfrage
+            möglich ist. Ein Teil der Software ist KI-gestützt entwickelt (Claude Opus, Fable;
+            OpenAI GPT5.5, 5.6).
+        </div>
+        <button id="info-close">Schließen</button>
+    </div>
+</div>
+<script>
+(function () {
+    const overlay = document.getElementById('info-overlay');
+    const link    = document.getElementById('footer-info-link');
+    const closeBtn= document.getElementById('info-close');
+    if (!overlay || !link) return;
+
+    function close() { overlay.classList.remove('open'); }
+
+    link.addEventListener('click', function () { overlay.classList.add('open'); });
+    closeBtn.addEventListener('click', close);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && overlay.classList.contains('open')) close();
+    });
+})();
+</script>
 </body>
 </html>
