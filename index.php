@@ -1832,7 +1832,23 @@ $csrfToken = $_SESSION['csrf_token'];
         statusBar.className   = type;
     }
 
-    function scrollToBottom() {
+    /* Auto-follow is paused as soon as the user scrolls up (e.g. to re-read
+       older text while an answer is still being generated) and resumes once
+       the view is back at the bottom. */
+    let autoScrollEnabled = true;
+    const AUTO_SCROLL_THRESHOLD = 40;
+
+    function isChatAreaAtBottom() {
+        return chatArea.scrollHeight - chatArea.scrollTop - chatArea.clientHeight <= AUTO_SCROLL_THRESHOLD;
+    }
+
+    chatArea.addEventListener('scroll', () => {
+        autoScrollEnabled = isChatAreaAtBottom();
+    });
+
+    function scrollToBottom(force = true) {
+        if (!force && !autoScrollEnabled) return;
+        autoScrollEnabled = true;
         chatArea.scrollTop = chatArea.scrollHeight;
     }
 
@@ -2639,7 +2655,7 @@ $csrfToken = $_SESSION['csrf_token'];
                 // Live rendering: thinking lines fly in one by one next to the
                 // robot, the answer text grows continuously as tokens arrive.
                 updateStreamingBubble(bubble, accumulatedThinking, accumulated);
-                scrollToBottom();
+                scrollToBottom(false);
             }
             return false;
         }
