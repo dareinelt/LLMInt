@@ -5279,7 +5279,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     }
 
     // Label for a connected client: hostname when known, otherwise IP address.
-    function clientLabel(c) {
+    // Clients without any address are listed individually and numbered so that
+    // several of them can be told apart.
+    function clientLabel(c, unknownNo) {
         const host = (c && c.hostname ? String(c.hostname) : '').trim();
         const ip   = (c && c.ip ? String(c.ip) : '').trim();
         if (host !== '') {
@@ -5287,7 +5289,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const short = host.split('.')[0];
             return truncate(host.length > 26 && short !== '' ? short : host, 26);
         }
-        return ip !== '' ? truncate(ip, 26) : 'unbekannt';
+        if (ip !== '') return truncate(ip, 26);
+        return unknownNo && unknownNo > 1 ? `unbekannt ${unknownNo}` : 'unbekannt';
     }
 
     function clientTooltip(c) {
@@ -5461,6 +5464,17 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         // Connected clients are placed as small bubbles in a cloud around the
         // (unchanged) "Clients" tile. Labelled with hostname, else IP address.
         const clientList = (clients && Array.isArray(clients.list)) ? clients.list.slice(0, 40) : [];
+        // Pre-compute the labels: clients without hostname *and* without IP are
+        // numbered consecutively so each one stays distinguishable.
+        const clientLabels = [];
+        {
+            let unknownNo = 0;
+            for (const c of clientList) {
+                const host = (c && c.hostname ? String(c.hostname) : '').trim();
+                const ip   = (c && c.ip ? String(c.ip) : '').trim();
+                clientLabels.push(clientLabel(c, (host === '' && ip === '') ? ++unknownNo : 0));
+            }
+        }
         const cloudNodes = [];
         {
             const cx = COL0_X + CLIENT_W / 2;
@@ -5484,7 +5498,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     const t   = inRing === 1 ? 0.5 : i / (inRing - 1);
                     const deg = startDeg + t * (endDeg - startDeg);
                     const rad = deg * Math.PI / 180;
-                    const label = clientLabel(c);
+                    const label = clientLabels[idx + i];
                     const w = Math.max(78, Math.min(196, label.length * 6.2 + 26));
                     // Keep the bubbles clear of the root node column
                     const maxRight = COL1_X - 14;

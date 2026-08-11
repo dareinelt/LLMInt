@@ -1405,6 +1405,9 @@ function purgeExpiredConversationSessions(): void
  * Return a list of currently connected clients (browser tabs seen within the
  * last 90 seconds), grouped by network address.
  *
+ * Clients without a known address ("unbekannt") are *not* grouped – every such
+ * connection is returned as its own entry.
+ *
  * Each entry contains the IP address, the reverse-resolved hostname (may be
  * empty) and the number of open tabs from that address.
  *
@@ -1420,7 +1423,7 @@ function listActiveClients(?PDO $pdo = null): array
                     COUNT(*)               AS tabs
                FROM active_clients
               WHERE last_seen > DATE_SUB(NOW(), INTERVAL 90 SECOND)
-              GROUP BY COALESCE(ip, '')
+              GROUP BY CASE WHEN COALESCE(ip, '') = '' THEN token ELSE ip END
               ORDER BY tabs DESC, ip ASC
               LIMIT 60"
         )->fetchAll(PDO::FETCH_ASSOC);
