@@ -110,6 +110,195 @@ function runSearxngSearch(string $baseUrl, string $query, int $timeout = 15): ar
     ];
 }
 
+/**
+ * Validates a URL the model wants to fetch and protects against SSRF:
+ * only plain http/https URLs pointing at public IP addresses are allowed,
+ * everything else (file://, localhost, private/link-local/reserved ranges)
+ * is rejected before any request leaves the server.
+ */
+function assertFetchableWebUrl(string $url): array
+{
+    $parts = parse_url($url);
+    if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
+        throw new RuntimeException('Ungültige URL.');
+    }
+
+    $scheme = strtolower((string) $parts['scheme']);
+    if ($scheme !== 'http' && $scheme !== 'https') {
+        throw new RuntimeException('Nur http- und https-URLs können abgerufen werden.');
+    }
+    if (isset($parts['user']) || isset($parts['pass'])) {
+        throw new RuntimeException('URLs mit Zugangsdaten werden nicht abgerufen.');
+    }
+
+    $host = strtolower(trim((string) $parts['host'], '[]'));
+    if ($host === '') {
+        throw new RuntimeException('Ungültige URL.');
+    }
+
+    $ips = [];
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        $ips[] = $host;
+    } else {
+        $records = @dns_get_record($host, DNS_A | DNS_AAAA);
+        foreach (is_array($records) ? $records : [] as $record) {
+            if (isset($record['ip'])) {
+                $ips[] = (string) $record['ip'];
+            } elseif (isset($record['ipv6'])) {
+                $ips[] = (string) $record['ipv6'];
+            }
+        }
+        if ($ips === []) {
+            $resolved = gethostbyname($host);
+            if ($resolved !== $host) {
+                $ips[] = $resolved;
+            }
+        }
+    }
+
+    if ($ips === []) {
+        throw new RuntimeException('Hostname konnte nicht aufgelöst werden.');
+    }
+    foreach ($ips as $ip) {
+        if (!filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        )) {
+            throw new RuntimeException('Interne oder reservierte Adressen werden nicht abgerufen.');
+        }
+    }
+
+    return ['url' => $url, 'host' => $host, 'ips' => $ips];
+}
+
+/**
+ * Converts an HTML document into compact plain text the LLM can read:
+ * script/style/nav noise is dropped, tags are stripped and whitespace is
+ * collapsed.
+ */
+function extractReadableText(string $html): string
+{
+    $text = preg_replace(
+        '#<(script|style|noscript|template|svg|head)\b[^>]*>.*?</\1>#is',
+        ' ',
+        $html
+    ) ?? $html;
+    $text = preg_replace('#<!--.*?-->#s', ' ', $text) ?? $text;
+    $text = preg_replace('#<(br|/p|/div|/li|/h[1-6]|/tr)\b[^>]*>#i', "\n", $text) ?? $text;
+    $text = strip_tags($text);
+    $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $text = preg_replace('/[ \t\x{00A0}]+/u', ' ', $text) ?? $text;
+    $text = preg_replace('/\n\s*\n\s*\n+/u', "\n\n", $text) ?? $text;
+
+    return trim($text);
+}
+
+/**
+ * Extracts the <title> of an HTML document, if present.
+ */
+function extractHtmlTitle(string $html): string
+{
+    if (preg_match('#<title\b[^>]*>(.*?)</title>#is', $html, $m) !== 1) {
+        return '';
+    }
+    return trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+}
+
+/**
+ * Downloads a single web page (typically one of the URLs search_web returned)
+ * and returns its readable text content so the model can work with the actual
+ * page instead of the short search snippet.
+ */
+function fetchWebPage(string $url, int $timeout = 15, int $maxChars = 6000): array
+{
+    $target = assertFetchableWebUrl($url);
+    $maxBytes = 2 * 1024 * 1024;
+
+    $ch = curl_init($target['url']);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => min($timeout, 10),
+        // Redirects are followed manually so every hop can be re-validated
+        // against the SSRF rules above.
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_HTTPHEADER     => [
+            'Accept: text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+            'Accept-Language: de,en;q=0.8',
+        ],
+        CURLOPT_USERAGENT      => 'LLMInt/1.0 (+web_fetch)',
+        CURLOPT_PROTOCOLS      => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+        CURLOPT_BUFFERSIZE     => 16384,
+        CURLOPT_NOPROGRESS     => false,
+        CURLOPT_PROGRESSFUNCTION => static function ($resource, $downloadSize, $downloaded) use ($maxBytes): int {
+            return ($downloaded > $maxBytes || $downloadSize > $maxBytes) ? 1 : 0;
+        },
+    ]);
+
+    $body = '';
+    $finalUrl = $target['url'];
+    $contentType = '';
+    $httpCode = 0;
+
+    for ($hop = 0; $hop < 4; $hop++) {
+        curl_setopt($ch, CURLOPT_URL, $finalUrl);
+        $body = curl_exec($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErr = curl_error($ch);
+        $contentType = strtolower((string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
+
+        if ($curlErr !== '') {
+            curl_close($ch);
+            throw new RuntimeException('Seite nicht erreichbar: ' . $curlErr);
+        }
+
+        if (in_array($httpCode, [301, 302, 303, 307, 308], true)) {
+            $location = trim((string) curl_getinfo($ch, CURLINFO_REDIRECT_URL));
+            if ($location === '') {
+                break;
+            }
+            try {
+                $finalUrl = assertFetchableWebUrl($location)['url'];
+            } catch (RuntimeException $e) {
+                curl_close($ch);
+                throw new RuntimeException('Weiterleitung blockiert: ' . $e->getMessage());
+            }
+            continue;
+        }
+        break;
+    }
+    curl_close($ch);
+
+    if ($httpCode < 200 || $httpCode >= 300) {
+        throw new RuntimeException('Seite lieferte HTTP ' . $httpCode . '.');
+    }
+    if ($contentType !== '' && !preg_match('#(text/|application/(xhtml\+xml|json|xml))#', $contentType)) {
+        throw new RuntimeException('Nicht unterstützter Inhaltstyp: ' . $contentType . '.');
+    }
+
+    $body = (string) $body;
+    $title = extractHtmlTitle($body);
+    $content = extractReadableText($body);
+    if ($content === '') {
+        throw new RuntimeException('Die Seite enthielt keinen lesbaren Text.');
+    }
+
+    $truncated = false;
+    if (mb_strlen($content, 'UTF-8') > $maxChars) {
+        $content = mb_substr($content, 0, $maxChars, 'UTF-8');
+        $truncated = true;
+    }
+
+    return [
+        'url' => $finalUrl,
+        'title' => $title,
+        'content' => $content,
+        'truncated' => $truncated,
+        'char_count' => mb_strlen($content, 'UTF-8'),
+    ];
+}
+
 function startSearchLog(string $query): int
 {
     try {
@@ -169,7 +358,7 @@ function createSearchToolDefinition(): array
         'type' => 'function',
         'function' => [
             'name' => 'search_web',
-            'description' => 'Sucht aktuelle Informationen im Web über SearXNG. Nur aufrufen, wenn die Anfrage aktuelle, sich häufig ändernde oder nach dem Wissensstand des Modells liegende Informationen erfordert (z. B. aktuelle Ereignisse, Preise, Versionsnummern) und diese nicht bereits zuverlässig aus eigenem Wissen beantwortet werden können. Für allgemeines, zeitloses Wissen NICHT aufrufen.',
+            'description' => 'Sucht aktuelle Informationen im Web über SearXNG. Nur aufrufen, wenn die Anfrage aktuelle, sich häufig ändernde oder nach dem Wissensstand des Modells liegende Informationen erfordert (z. B. aktuelle Ereignisse, Preise, Versionsnummern) und diese nicht bereits zuverlässig aus eigenem Wissen beantwortet werden können. Für allgemeines, zeitloses Wissen NICHT aufrufen. Die Treffer enthalten nur kurze Snippets – reichen diese nicht aus, anschließend web_fetch mit den gelieferten URLs aufrufen, um den vollständigen Seiteninhalt zu lesen.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -179,6 +368,31 @@ function createSearchToolDefinition(): array
                     ],
                 ],
                 'required' => ['query'],
+            ],
+        ],
+    ]];
+}
+
+function createWebFetchToolDefinition(): array
+{
+    return [[
+        'type' => 'function',
+        'function' => [
+            'name' => 'web_fetch',
+            'description' => 'Ruft den Textinhalt einer Webseite ab. Direkt nach search_web für die interessantesten Treffer-URLs aufrufen, wenn die Suchsnippets für eine belastbare Antwort nicht ausreichen (z. B. Preise, Details, Zahlen). Nur öffentliche http/https-URLs, bevorzugt URLs aus vorherigen search_web-Ergebnissen.',
+            'parameters' => [
+                'type' => 'object',
+                'properties' => [
+                    'url' => [
+                        'type' => 'string',
+                        'description' => 'Vollständige http(s)-URL der abzurufenden Seite, in der Regel aus einem search_web-Ergebnis.',
+                    ],
+                    'max_chars' => [
+                        'type' => 'integer',
+                        'description' => 'Optionale Obergrenze der gelieferten Zeichen (500–20000, Standard: 6000).',
+                    ],
+                ],
+                'required' => ['url'],
             ],
         ],
     ]];
@@ -2470,6 +2684,7 @@ if ($useTools) {
     $tools = [];
     if ($useSearchTool) {
         $tools = array_merge($tools, createSearchToolDefinition());
+        $tools = array_merge($tools, createWebFetchToolDefinition());
     }
     if ($useSdTool) {
         $tools = array_merge($tools, createImageGenerationToolDefinition());
@@ -2496,7 +2711,9 @@ if ($useTools) {
         @set_time_limit(0);
     }
 
-    for ($iteration = 0; $iteration < 6; $iteration++) {
+    // Budget for the tool dialog: enough iterations so a search_web call can be
+    // followed by several web_fetch calls before the final answer is composed.
+    for ($iteration = 0; $iteration < 8; $iteration++) {
         $toolPayload = $forwardPayload;
         $toolPayload['messages'] = $messages;
         $toolPayload['stream'] = false;
@@ -2651,6 +2868,34 @@ if ($useTools) {
                         writeLog('info', 'Websuche erhöhte Bearbeitungszeit um ' . $searchElapsedMs . ' ms.');
                     } catch (Throwable $e) {
                         completeSearchLog($searchLogId, 'error');
+                        $toolResult = ['error' => $e->getMessage()];
+                    }
+                }
+            } elseif ($toolName === 'web_fetch' && $useSearchTool) {
+                $args = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
+                if (!is_array($args)) {
+                    $args = [];
+                }
+                $fetchUrl = trim((string) ($args['url'] ?? ''));
+                $maxChars = isset($args['max_chars']) ? (int) $args['max_chars'] : 6000;
+                $maxChars = max(500, min(20000, $maxChars));
+
+                if ($fetchUrl === '') {
+                    $toolResult = ['error' => 'Leere URL.'];
+                } else {
+                    writeLog('info', 'Seitenabruf durch Modell ' . $model . ' gestartet (URL: ' . mb_substr($fetchUrl, 0, 200, 'UTF-8') . ').');
+                    $fetchStartedAt = microtime(true);
+                    try {
+                        $toolResult = fetchWebPage($fetchUrl, min($timeout, 15), $maxChars);
+                        $sourceUrl = (string) $toolResult['url'];
+                        $sourceTitle = trim((string) $toolResult['title']);
+                        $searchSources[$sourceUrl] = [
+                            'title' => $sourceTitle !== '' ? $sourceTitle : $sourceUrl,
+                            'url' => $sourceUrl,
+                        ];
+                        writeLog('info', 'Seitenabruf erfolgreich abgeschlossen.');
+                        writeLog('info', 'Seitenabruf erhöhte Bearbeitungszeit um ' . elapsedMilliseconds($fetchStartedAt) . ' ms.');
+                    } catch (Throwable $e) {
                         $toolResult = ['error' => $e->getMessage()];
                     }
                 }
