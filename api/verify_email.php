@@ -66,7 +66,7 @@ function showPage(string $title, string $message, bool $success): void
     $bgColor  = $success ? 'rgba(34,197,94,.12)'  : 'rgba(239,68,68,.12)';
     $bdColor  = $success ? 'rgba(34,197,94,.4)'   : 'rgba(239,68,68,.4)';
     $icon     = $success ? '✓' : '✗';
-    $loginUrl = '../admin/login.php';
+    $loginUrl = '../login.php';
     ?>
     <!DOCTYPE html>
     <html lang="de">
