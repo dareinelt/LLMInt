@@ -290,6 +290,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
 
+        // ── Pause / resume endpoint ───────────────────────────────────────────
+        } elseif ($action === 'toggle_endpoint_pause') {
+            $epId   = (int) ($_POST['ep_id'] ?? 0);
+            $paused = (int) ($_POST['pause'] ?? 0) === 1;
+            if ($epId <= 0) {
+                $flashError = 'Ungültige Endpunkt-ID.';
+            } else {
+                $epRow = $db->prepare('SELECT alias, base_url FROM endpoints WHERE id = ? LIMIT 1');
+                $epRow->execute([$epId]);
+                $epRow = $epRow->fetch();
+
+                if (!is_array($epRow)) {
+                    $flashError = 'Endpunkt nicht gefunden.';
+                } else {
+                    $endpointLabel = trim((string) ($epRow['alias'] ?? ''));
+                    if ($endpointLabel === '') {
+                        $endpointLabel = trim((string) ($epRow['base_url'] ?? ''));
+                    }
+                    if (setEndpointPaused('endpoints', $epId, $paused)) {
+                        if ($paused) {
+                            writeLog('warning', 'Modellendpunkt ' . $endpointLabel . ' manuell pausiert.');
+                            $flashOk = 'Endpunkt pausiert.';
+                        } else {
+                            writeLog('info', 'Modellendpunkt ' . $endpointLabel . ' manuell fortgesetzt.');
+                            $flashOk = 'Endpunkt fortgesetzt.';
+                        }
+                    } else {
+                        $flashError = $paused
+                            ? 'Endpunkt konnte nicht pausiert werden.'
+                            : 'Endpunkt konnte nicht fortgesetzt werden.';
+                    }
+                }
+            }
+
         // ── Save search settings ──────────────────────────────────────────────
         } elseif ($action === 'save_search_settings') {
             $newSearxngUrl = trim($_POST['searxng_base_url'] ?? '');
@@ -2179,6 +2213,18 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                                         title="Circuit-Breaker schließen und Fehlerzähler zurücksetzen">♻ Circuit zurücksetzen</button>
                             </form>
                         <?php endif; ?>
+                        <?php $epPaused = (int) ($s['is_active'] ?? 0) !== 1; ?>
+                        <br>
+                        <form method="POST" style="display:inline">
+                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                            <input type="hidden" name="action"     value="toggle_endpoint_pause">
+                            <input type="hidden" name="ep_id"      value="<?= (int) $s['id'] ?>">
+                            <input type="hidden" name="pause"      value="<?= $epPaused ? '0' : '1' ?>">
+                            <button type="submit" class="btn btn-sm" style="margin-top:4px"
+                                    title="<?= $epPaused
+                                        ? 'Endpunkt wieder für neue Aufgaben freigeben'
+                                        : 'Endpunkt für neue Aufgaben sperren (laufende Aufgaben bleiben unberührt)' ?>"><?= $epPaused ? '▶ Fortsetzen' : '⏸ Pausieren' ?></button>
+                        </form>
                     </td>
                     <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
                     <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>

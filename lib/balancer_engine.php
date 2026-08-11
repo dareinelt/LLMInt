@@ -333,6 +333,48 @@ function resetEndpointCircuit(string $table, int $endpointId): bool
 }
 
 /**
+ * Pauses or resumes a single endpoint by flipping its `is_active` flag.
+ * A paused endpoint is skipped by the balancer when new tasks are routed,
+ * while already running tasks are left untouched. Resuming additionally
+ * clears the circuit-breaker state so the endpoint starts with a clean
+ * health record.
+ *
+ * @param string $table      Endpoint table name (endpoints|sd_endpoints|comfy_endpoints).
+ * @param int    $endpointId Endpoint primary key.
+ * @param bool   $paused     True to pause, false to resume.
+ *
+ * @return bool True if an endpoint row was updated.
+ */
+function setEndpointPaused(string $table, int $endpointId, bool $paused): bool
+{
+    if ($endpointId <= 0 || !in_array($table, ['endpoints', 'sd_endpoints', 'comfy_endpoints'], true)) {
+        return false;
+    }
+
+    try {
+        $stmt = getDb()->prepare("
+            UPDATE {$table}
+               SET is_active = ?
+             WHERE id = ?
+               AND is_active <> ?
+        ");
+        $stmt->execute([$paused ? 0 : 1, $endpointId, $paused ? 0 : 1]);
+
+        if ($stmt->rowCount() < 1) {
+            return false;
+        }
+
+        if (!$paused) {
+            resetEndpointCircuit($table, $endpointId);
+        }
+
+        return true;
+    } catch (Throwable $_e) {
+        return false;
+    }
+}
+
+/**
  * SQL fragment (to be embedded in a WHERE clause on alias `e`) that excludes
  * endpoints whose circuit breaker is open and still within its cooldown
  * window. Endpoints in 'closed' or 'half_open' state, and endpoints whose
