@@ -1859,6 +1859,16 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         #load-tree-container.dragging { cursor: grabbing; }
 
+        #tree-maximize-exit {
+            display: none;
+            position: absolute;
+            top: 10px;
+            right: 12px;
+            z-index: 1;
+        }
+
+        #load-tree-container.tree-maximized #tree-maximize-exit { display: block; }
+
         #load-tree-svg {
             display: block;
             width: 100%;
@@ -1915,20 +1925,20 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         }
         .tree-reset-btn:hover { background: #464646; color: var(--text); }
 
-        /* ── Dashboard fullscreen mode ───────────────────────────── */
-        #dashboard-card:fullscreen {
+        /* ── Diagramm auf volle Fenstergröße ─────────────────────── */
+        #load-tree-container.tree-maximized {
+            position: fixed;
+            top: 0;
+            left: 0;
             width: 100vw;
             height: 100vh;
-            max-width: none;
-            margin: 0;
+            z-index: 9999;
             border-radius: 0;
-            overflow-y: auto;
             background: var(--surface);
         }
 
-        #dashboard-card:fullscreen #load-tree-container {
-            height: calc(100vh - 300px);
-            min-height: 320px;
+        body.tree-maximized-open {
+            overflow: hidden;
         }
 
         @keyframes tree-pulse {
@@ -2074,7 +2084,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             <h2 style="margin:0;padding:0;border:none">🚀 Dashboard</h2>
             <div class="tree-header-controls">
                 <button class="tree-reset-btn" id="tree-reset-btn" title="Ansicht zurücksetzen">⊡ Ansicht zurücksetzen</button>
-                <button class="tree-reset-btn" id="tree-fullscreen-btn" title="Dashboard auf volle Fenstergröße vergrößern">⛶ Vollbild</button>
+                <button class="tree-reset-btn" id="tree-fullscreen-btn" title="Diagramm auf volle Fenstergröße vergrößern">⛶ Vollbild</button>
                 <div class="tree-refresh-info">
                     <span class="tree-refresh-dot" id="tree-live-dot"></span>
                     <span id="tree-status">Initialisierung …</span>
@@ -2154,6 +2164,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         <!-- Live load-distribution visualization -->
         <div id="load-tree-container">
+            <button type="button" class="tree-reset-btn" id="tree-maximize-exit" title="Vollbild beenden">⛶ Vollbild beenden</button>
             <svg id="load-tree-svg"
                  xmlns="http://www.w3.org/2000/svg"
                  preserveAspectRatio="xMinYMin meet"
@@ -5204,41 +5215,54 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     if (resetBtn) resetBtn.addEventListener('click', resetView);
 
-    // ── Fullscreen toggle for the whole dashboard card ────────────────────────
+    // ── Maximize only the diagram area to the browser window ──────────────────
 
-    const fsBtn  = document.getElementById('tree-fullscreen-btn');
-    const dashEl = document.getElementById('dashboard-card');
+    const fsBtn    = document.getElementById('tree-fullscreen-btn');
+    const fsExitBtn = document.getElementById('tree-maximize-exit');
 
-    function isFullscreen() {
-        return document.fullscreenElement === dashEl;
+    function isMaximized() {
+        return container.classList.contains('tree-maximized');
     }
 
     function updateFsBtn() {
         if (!fsBtn) return;
-        const on = isFullscreen();
+        const on = isMaximized();
         fsBtn.textContent = on ? '⛶ Vollbild beenden' : '⛶ Vollbild';
         fsBtn.title = on
-            ? 'Vollbildmodus beenden'
-            : 'Dashboard auf volle Fenstergröße vergrößern';
+            ? 'Vollbild beenden'
+            : 'Diagramm auf volle Fenstergröße vergrößern';
     }
 
-    if (fsBtn && dashEl && dashEl.requestFullscreen) {
+    function setMaximized(on) {
+        container.classList.toggle('tree-maximized', on);
+        document.body.classList.toggle('tree-maximized-open', on);
+        updateFsBtn();
+        // Re-fit the diagram to the new container size
+        resetView();
+    }
+
+    if (fsBtn) {
         fsBtn.addEventListener('click', function () {
-            if (isFullscreen()) {
-                document.exitFullscreen().catch(() => {});
-            } else {
-                dashEl.requestFullscreen().catch(() => {});
-            }
-        });
-        document.addEventListener('fullscreenchange', function () {
-            updateFsBtn();
-            // Re-fit the diagram to the new container size
-            resetView();
+            setMaximized(!isMaximized());
         });
         updateFsBtn();
-    } else if (fsBtn) {
-        fsBtn.style.display = 'none';
     }
+
+    if (fsExitBtn) {
+        fsExitBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+        fsExitBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            setMaximized(false);
+        });
+    }
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && isMaximized()) setMaximized(false);
+    });
+
+    window.addEventListener('resize', function () {
+        if (isMaximized()) resetView();
+    });
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
