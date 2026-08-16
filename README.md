@@ -2,10 +2,19 @@
 
 LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer internen KI-Plattform. Sie stellt Chat, Routing und Lastverteilung, Dokument-RAG, Bildgenerierung, Benutzerverwaltung sowie Betriebsmonitoring in einer Oberfläche bereit.
 
+Weitere Dokumente im Repository:
+
+| Dokument | Zielgruppe |
+|---|---|
+| `README.md` | Betrieb, Installation, Konfiguration und Funktionsüberblick |
+| `description.md` | detaillierte Architektur- und Funktionsreferenz für Entwicklung und Coding-Agenten |
+| `Demo.md` | nicht-technische Erklärung für Entscheider und Fachbereiche |
+
 ## Inhaltsverzeichnis
 
 - [Funktionen](#funktionen)
 - [Architektur](#architektur)
+- [Repository-Struktur](#repository-struktur)
 - [Modellrouting und Entscheidungsfindung](#modellrouting-und-entscheidungsfindung)
 - [Intelligence Upgrade](#intelligence-upgrade)
 - [Intelligenzgruppe direkt ansprechen](#intelligenzgruppe-direkt-ansprechen)
@@ -17,6 +26,8 @@ LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer inte
 - [Hybrid-RAG](#hybrid-rag)
 - [Prompt Security](#prompt-security)
 - [API](#api)
+- [Datenmodell](#datenmodell)
+- [Entwicklung](#entwicklung)
 - [Betrieb und Sicherheit](#betrieb-und-sicherheit)
 - [Troubleshooting](#troubleshooting)
 - [Lizenz](#lizenz)
@@ -53,6 +64,24 @@ Wichtige Komponenten:
 - `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an.
 - `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
 - `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
+
+Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Build-Schritt: Jede URL entspricht einer PHP-Datei, Abhängigkeiten werden über `require_once` geladen, und Frontend-CSS/-JavaScript liegen inline in `index.php` beziehungsweise `admin/index.php`. Eine vollständige technische Referenz mit Funktions-, Tabellen- und Einstellungsnamen enthält [`description.md`](description.md).
+
+## Repository-Struktur
+
+| Pfad | Inhalt |
+|---|---|
+| `index.php` | Chat-Oberfläche mit Streaming, Sitzungsliste, Upload-Dialog und Bildanhängen |
+| `login.php`, `register.php`, `logout.php` | Anmeldung, Selbstregistrierung mit E-Mail-Verifikation, Abmeldung |
+| `db.php` | Datenbankverbindung, idempotentes Laufzeitschema, Einstellungen, Logging, Chat-Sitzungen, Intelligenzgruppen |
+| `config.php` | leitet `LMSTUDIO_BASE_URL` und `LMSTUDIO_TIMEOUT` aus Endpunkten beziehungsweise Einstellungen ab |
+| `setup.php` | Erstinstallation: Tabellen, Migrationen, Standardeinstellungen, Standardadministrator |
+| `api/` | JSON- und SSE-Endpunkte sowie die Bibliotheken für Balancer und Embeddings |
+| `lib/` | Balancer-Engine, Prompt Security, OpenAI-Hilfsfunktionen, LDAP-Anbindung, SMTP-Client, Routing-Prompt |
+| `admin/` | Administration, Dashboard-Livedaten, SSH-Systemmetriken, API-Keys, Prompt Security |
+| `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth |
+| `doc_uploads/`, `sd_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
+| `assets/`, `docs/`, `ressources/` | Bilder der Oberfläche, Diagramme der Dokumentation, Beispiel-Systemprompt |
 
 ## Modellrouting und Entscheidungsfindung
 
@@ -377,6 +406,57 @@ print(response.choices[0].message.content)
 | Bildgenerierung | `api/sd_generate.php`, `api/sd_checkpoints.php`, `api/comfy_generate.php`, `api/comfy_checkpoints.php` |
 | Integrationen | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` |
 | Benutzer und Status | `api/verify_email.php`, `api/reset_password.php`, `api/admin_user_action.php`, `api/heartbeat.php` |
+
+### Anfrageformat von `api/chat.php`
+
+Der Endpunkt erwartet einen JSON-Body und antwortet mit JSON oder – bei `"stream": true` – mit `text/event-stream`.
+
+| Feld | Bedeutung |
+|---|---|
+| `model`, `messages` | Modellname und Nachrichtenverlauf im OpenAI-Format; Bildanhänge als `image_url`-Teile |
+| `stream`, `temperature`, `max_tokens`, `top_p`, `stop`, `stream_options` | übliche Generierungsparameter |
+| `session_id` | speichert den Verlauf in `conversation_sessions` |
+| `intelligence_group` | Intelligenzgruppe für die aktuelle Sitzung |
+| `force_search_query` | erzwingt eine Websuche vor dem Modellaufruf |
+| `intelligence_upgrade_accepted`, `action` | Annahme beziehungsweise Ablehnung (`decline_intelligence_upgrade`) des Upgrade-Angebots |
+
+Beim Streaming werden zusätzlich zu den OpenAI-Chunks folgende Frames gesendet: `{"status":"queued", ...}` während der Wartezeit auf einen freien Slot, `{"error": "..."}` bei Fehlern, `{"type":"intelligence_upgrade", ...}` für das Upgrade-Angebot, `{"type":"response_details", ...}` mit Endpunkt, Dauer, Quellen und Kontextauslastung sowie abschließend `[DONE]`. Über die OpenAI-kompatiblen Pfade entfallen die LLMInt-spezifischen Frames.
+
+### Tools des Chat-Modells
+
+| Tool | Voraussetzung | Parameter |
+|---|---|---|
+| `search_web` | konfiguriertes SearXNG | `query` |
+| `web_fetch` | konfiguriertes SearXNG | `url`, optional `max_chars` (500–20000, Standard 6000) |
+| `generate_image` | aktiver AUTOMATIC1111-Endpunkt | `prompt`, optional `negative_prompt`, `width`, `height` |
+| `generate_image_comfy` | aktiver ComfyUI-Endpunkt | wie `generate_image` |
+| `query_documents` | vorhandene Dokument-Uploads | `query` |
+
+Tools werden nur an Endpunkte gesendet, die als Tool-Calling-fähig markiert sind.
+
+## Datenmodell
+
+Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation inklusive der Tabelle `users` aus, `db.php` stellt bei jedem Start über `ensureRuntimeSchema()` alle Laufzeittabellen und Migrationen sicher.
+
+| Gruppe | Tabellen |
+|---|---|
+| Konfiguration und Konten | `settings`, `users`, `api_keys` |
+| LLM-Betrieb | `endpoints`, `tasks`, `endpoint_sys_stats`, `app_logs` |
+| Chat und Routing | `conversation_sessions`, `routing_categories`, `routing_rules`, `search_logs` |
+| Dokumente und Embeddings | `document_uploads`, `document_chunks`, `embedding_endpoints`, `embedding_cache`, `embedding_logs` |
+| Bildgenerierung | `sd_endpoints`, `sd_tasks`, `comfy_endpoints`, `comfy_tasks` |
+| Monitoring | `active_clients`, `client_count_log` |
+| Sicherheit | `prompt_security_rules`, `prompt_security_logs` |
+
+## Entwicklung
+
+- Voraussetzung ist lediglich PHP mit den genannten Erweiterungen sowie eine Datenbank; Composer, npm oder ein Build-Schritt werden nicht benötigt.
+- Änderungen am Schema gehören nach `ensureRuntimeSchema()` in `db.php`, damit bestehende Installationen automatisch migrieren; die Erstinstallation wird in `setup.php` ergänzt.
+- Neue Einstellungen erhalten ein Formular mit `action`-Wert in `admin/index.php` und werden über `getSetting()` beziehungsweise `setSetting()` verwendet.
+- Neue HTTP-Endpunkte werden als eigene Datei unter `api/` angelegt, binden `db.php` ein und prüfen Sitzung, Rolle und CSRF-Token wie die bestehenden Endpunkte.
+- Neue Chat-Tools benötigen eine Definition, eine Verfügbarkeitsprüfung und einen Zweig in der Tool-Schleife von `api/chat.php`.
+- Datenbankzugriffe erfolgen ausschließlich über vorbereitete PDO-Statements, Ausgaben werden mit `htmlspecialchars()` maskiert, Meldungen sind auf Deutsch, Protokollierung erfolgt über `writeLog()`.
+- Vor dem Commit sollten geänderte Dateien mit `php -l` geprüft werden. Details zu Funktionen, Tabellen und Einstellungsschlüsseln stehen in [`description.md`](description.md).
 
 ## Betrieb und Sicherheit
 
