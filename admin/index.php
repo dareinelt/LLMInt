@@ -1406,7 +1406,7 @@ function modelIntelligenceLabel(string $model): string
 }
 
 foreach ($endpoints as $ep) {
-    $m = $ep['default_model'];
+    $m = canonicalModelName((string) $ep['default_model']);
     if ($m !== '' && !isset($modelColorMap[$m])) {
         $modelColorMap[$m] = $palette[$colorIdx % count($palette)];
         $colorIdx++;
@@ -2210,7 +2210,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <td>
                         <?php if ($s['default_model'] !== ''): ?>
                             <span class="model-badge"
-                                  style="background:<?= htmlspecialchars($modelColorMap[$s['default_model']] ?? '#555') ?>">
+                                  style="background:<?= htmlspecialchars($modelColorMap[canonicalModelName((string) $s['default_model'])] ?? '#555') ?>">
                                 <?= htmlspecialchars($s['default_model']) ?>
                             </span>
                         <?php else: ?>
@@ -2631,7 +2631,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     <td>
                         <?php if ($ep['default_model'] !== ''): ?>
                             <span class="model-badge"
-                                  style="background:<?= htmlspecialchars($modelColorMap[$ep['default_model']] ?? '#555') ?>"
+                                  style="background:<?= htmlspecialchars($modelColorMap[canonicalModelName((string) $ep['default_model'])] ?? '#555') ?>"
                                   title="<?= htmlspecialchars($ep['default_model']) ?>">
                                 <?= htmlspecialchars($ep['default_model']) ?>
                             </span>
@@ -5328,6 +5328,21 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         return `${who} · ${tabs} Tab${tabs !== 1 ? 's' : ''}`;
     }
 
+    // Normalises a model identifier for grouping/colouring purposes (mirrors
+    // canonicalModelName() in db.php): strips any directory prefix and a
+    // common model file extension, then lowercases. This ensures identical
+    // models sharing the same short name (but referenced via different
+    // paths, e.g. "google/gemma-4-e4b" vs. "/opt/llama.cpp/models/gemma-4-
+    // E4B-Q4_K_M.gguf") are grouped and coloured together.
+    function canonicalModelName(model) {
+        if (!model) return '';
+        let name = String(model).trim();
+        if (name === '') return '';
+        name = name.replace(/^.*[/\\]/, '');
+        name = name.replace(/\.(gguf|bin|safetensors|pt|ckpt)$/i, '');
+        return name.toLowerCase();
+    }
+
     function extractIntelligenceLabel(modelName) {
         if (!modelName) return '–';
         const matches = [...String(modelName).matchAll(/(?:\b(a))?(\d+(?:[.,]\d+)?)\s*b\b/gi)];
@@ -5393,12 +5408,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         addLinearGradient('grad-comfy', 0, 1, '#221430', '#180e22');
         svg.appendChild(defs);
 
-        // Group LLM endpoints by model
+        // Group LLM endpoints by model (identical models sharing a canonical
+        // name are grouped together even if referenced via different paths).
         const groups = new Map();
         const colorMap = {};
         let ci = 0;
         for (const ep of (endpoints || [])) {
-            const key = ep.default_model || '–';
+            const key = canonicalModelName(ep.default_model) || '–';
             if (!groups.has(key)) {
                 groups.set(key, []);
                 colorMap[key] = MODEL_COLORS[key] || PALETTE[ci % PALETTE.length];
@@ -5805,7 +5821,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         // ── Endpoint nodes ────────────────────────────────────────────────────
         for (const ep of endpoints) {
             const model    = ep.default_model || '–';
-            const color    = colorMap[model] || '#555';
+            const color    = colorMap[canonicalModelName(model) || '–'] || '#555';
             const eY       = epCY[ep.id];
             const curEpH   = epHMap[ep.id] || EP_H;
             const isActive = ep.is_active === 1;
