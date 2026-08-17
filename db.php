@@ -1471,6 +1471,32 @@ function listUserConversations(int $userId): array
 }
 
 /**
+ * Normalises a model identifier to a canonical name suitable for grouping.
+ *
+ * Endpoints frequently reference the same model via different strings, e.g.
+ * a short repo-style name ("google/gemma-4-e4b") vs. a full filesystem path
+ * ("/opt/llama.cpp/models/gemma-4-E4B-Q4_K_M.gguf"). This strips any
+ * directory prefix (both "/" and "\" separators), drops a common model file
+ * extension, and lowercases the result so that identical models are
+ * recognised as the same group regardless of how the path is written.
+ *
+ * Note: this is for display/grouping purposes (colour badges, topology
+ * diagram) only – routing (`default_model` matching) intentionally still
+ * uses exact string comparison.
+ */
+function canonicalModelName(string $model): string
+{
+    $name = trim($model);
+    if ($name === '') {
+        return '';
+    }
+    $name = preg_replace('#^.*[/\\\\]#', '', $name);
+    $name = preg_replace('/\.(gguf|bin|safetensors|pt|ckpt)$/i', '', $name);
+
+    return mb_strtolower($name);
+}
+
+/**
  * Returns null when no numeric "Xb" label is found.
  *
  * MoE model names additionally carry the number of *active* parameters as an
