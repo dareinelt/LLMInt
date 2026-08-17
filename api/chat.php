@@ -2355,6 +2355,8 @@ writeLog('info', 'Antwortgenerierung gestartet.');
 // Log a warning when every active endpoint for this model has more than two
 // running sessions, hinting that additional endpoints should be provided.
 try {
+    $overloadModelPool = equivalentActiveModelNames($model);
+    $overloadPlaceholders = implode(',', array_fill(0, count($overloadModelPool), '?'));
     $overloadRows = getDb()->prepare("
         SELECT e.id, e.alias, e.default_model,
                COALESCE(r.running_count, 0) AS running_count
@@ -2366,9 +2368,9 @@ try {
                GROUP BY endpoint_id
           ) r ON r.endpoint_id = e.id
          WHERE e.is_active = 1
-           AND e.default_model = ?
+           AND e.default_model IN ({$overloadPlaceholders})
     ");
-    $overloadRows->execute([$model]);
+    $overloadRows->execute($overloadModelPool);
     $epRows = $overloadRows->fetchAll();
     if (!empty($epRows)) {
         $allBusy = true;
@@ -2490,6 +2492,11 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     $timeout  = max(1, (int) $endpoint['timeout']);
     $responseDetails = buildResponseDetails($endpoint);
     $url      = $baseUrl . '/chat/completions';
+    // The endpoint just picked may be an equivalence-pool match for $model
+    // rather than an exact `default_model` match (see
+    // equivalentActiveModelNames() in db.php) – always forward the label the
+    // endpoint itself expects, not the originally requested $model.
+    $forwardPayload['model'] = $endpoint['default_model'] !== '' ? $endpoint['default_model'] : $model;
     // Keep the reasoning effort and the llama.cpp payload adjustments in sync
     // with the new endpoint.
     $newReasoningEffort = normalizeReasoningEffort($endpoint['reasoning_effort'] ?? null);
@@ -2558,8 +2565,16 @@ array_unshift($llmMessages, ['role' => 'system', 'content' => buildCurrentDateTi
 $llmMessages = mergeSystemMessages($llmMessages);
 
 // Forward only the fields LM Studio expects.
+//
+// The "model" field sent upstream is the endpoint's own default_model, not
+// the originally requested $model: the balancer pools endpoints that serve
+// the same model under different labels (see equivalentActiveModelNames()
+// in db.php), so the endpoint actually picked may differ in path/extension/
+// quantisation from $model even though it is functionally equivalent.
+// OpenAI-compatible backends that validate the "model" field (vLLM, Ollama,
+// LM Studio) require the label they themselves expose.
 $forwardPayload = [
-    'model'       => $model,
+    'model'       => $endpoint['default_model'] !== '' ? $endpoint['default_model'] : $model,
     'messages'    => $llmMessages,
     'stream'      => $stream,
     'temperature' => $payload['temperature'] ?? 0.7,

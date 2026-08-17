@@ -5,10 +5,16 @@
  *
  * Load-balancing / routing engine for multi-endpoint LLM routing.
  *
- * Endpoints are grouped by their `default_model` value.
+ * Endpoints are grouped by their `default_model` value. Endpoints whose
+ * `default_model` differs only in path/extension/quantisation (see
+ * canonicalModelName() / equivalentActiveModelNames() in db.php) are treated
+ * as serving the same model and pooled together, so differently deployed but
+ * functionally identical endpoints share load instead of being routed
+ * independently.
  * Selection rules (applied in order):
- *   1. Only active endpoints whose `default_model` matches the requested model
- *      and whose circuit breaker is not currently open (see lib/balancer_engine.php).
+ *   1. Only active endpoints whose `default_model` is equivalent to the
+ *      requested model (exact match or same canonical model name) and whose
+ *      circuit breaker is not currently open (see lib/balancer_engine.php).
  *   2. Optionally, only endpoints that support tool-calling ($requireToolCalling).
  *   3. Only endpoints with fewer than $maxConcurrent currently-running tasks
  *      (configurable via the `balancer_max_concurrent` setting; previously
@@ -71,6 +77,12 @@ function pickEndpointForModel(
     $toolCallingWhere = $requireToolCalling ? 'AND e.supports_tool_calling = 1' : '';
     $visionWhere = $requireVision ? 'AND e.supports_vision = 1' : '';
 
+    // Endpoints serving the same model under a different label (e.g. a short
+    // repo-style name vs. a full quantised file name) are functionally
+    // equivalent and pooled together for routing, not just for display.
+    $modelPool = equivalentActiveModelNames($model);
+    $modelPlaceholders = implode(',', array_fill(0, count($modelPool), '?'));
+
     $db->beginTransaction();
     try {
         // Step 1: gather scored candidates (read-committed snapshot).
@@ -92,7 +104,7 @@ function pickEndpointForModel(
                  GROUP BY endpoint_id
             ) r ON r.endpoint_id = e.id
             WHERE e.is_active = 1
-              AND e.default_model = ?
+              AND e.default_model IN ({$modelPlaceholders})
               AND COALESCE(r.running_count, 0) < ?
               AND {$circuitWhere}
               {$toolCallingWhere}
@@ -106,7 +118,7 @@ function pickEndpointForModel(
             LIMIT 8
         ");
         $stmt->execute([
-            $model,
+            ...$modelPool,
             $maxConcurrent,
             (float) getBalancerSetting('balancer_weight_latency'),
             (float) getBalancerSetting('balancer_weight_cost'),
@@ -169,14 +181,16 @@ function pickEndpointForModel(
 function hasActiveEndpointForModel(string $model, bool $requireVision = false): bool
 {
     $visionWhere = $requireVision ? 'AND supports_vision = 1' : '';
+    $modelPool = equivalentActiveModelNames($model);
+    $modelPlaceholders = implode(',', array_fill(0, count($modelPool), '?'));
     $stmt = getDb()->prepare("
         SELECT COUNT(*)
           FROM endpoints
          WHERE is_active = 1
-           AND default_model = ?
+           AND default_model IN ({$modelPlaceholders})
            {$visionWhere}
     ");
-    $stmt->execute([$model]);
+    $stmt->execute($modelPool);
 
     return (int) $stmt->fetchColumn() > 0;
 }

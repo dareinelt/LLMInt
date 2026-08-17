@@ -5329,17 +5329,20 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     }
 
     // Normalises a model identifier for grouping/colouring purposes (mirrors
-    // canonicalModelName() in db.php): strips any directory prefix and a
-    // common model file extension, then lowercases. This ensures identical
-    // models sharing the same short name (but referenced via different
-    // paths, e.g. "google/gemma-4-e4b" vs. "/opt/llama.cpp/models/gemma-4-
-    // E4B-Q4_K_M.gguf") are grouped and coloured together.
+    // canonicalModelName() in db.php): strips any directory prefix, a common
+    // model file extension, and a trailing quantisation marker (optionally
+    // preceded by an "-it" instruction-tuned marker, e.g. "-it-q4_k_m",
+    // "-q8_0", "-fp16"), then lowercases. This ensures identical models
+    // sharing the same short name (but referenced via different paths or
+    // quantisations, e.g. "google/gemma-4-e4b" vs. "/opt/llama.cpp/models/
+    // gemma-4-E4B-it-Q4_K_M.gguf") are grouped and coloured together.
     function canonicalModelName(model) {
         if (!model) return '';
         let name = String(model).trim();
         if (name === '') return '';
         name = name.replace(/^.*[/\\]/, '');
         name = name.replace(/\.(gguf|bin|safetensors|pt|ckpt)$/i, '');
+        name = name.replace(/(-it)?[-_](?:iq[1-4](?:_[a-z0-9]+)?|q[2-8](?:_[0-9k](?:_[ms])?)?|fp16|fp32|f16|f32|bf16|int4|int8)$/i, '');
         return name.toLowerCase();
     }
 

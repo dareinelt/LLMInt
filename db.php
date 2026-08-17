@@ -1471,18 +1471,24 @@ function listUserConversations(int $userId): array
 }
 
 /**
- * Normalises a model identifier to a canonical name suitable for grouping.
+ * Normalises a model identifier to a canonical name suitable for grouping
+ * *and* for treating differently-deployed endpoints as functionally
+ * equivalent during routing.
  *
  * Endpoints frequently reference the same model via different strings, e.g.
  * a short repo-style name ("google/gemma-4-e4b") vs. a full filesystem path
- * ("/opt/llama.cpp/models/gemma-4-E4B-Q4_K_M.gguf"). This strips any
+ * ("/opt/llama.cpp/models/gemma-4-E4B-it-Q4_K_M.gguf"). This strips any
  * directory prefix (both "/" and "\" separators), drops a common model file
- * extension, and lowercases the result so that identical models are
- * recognised as the same group regardless of how the path is written.
+ * extension, strips a trailing quantisation marker (optionally preceded by
+ * an "-it" instruction-tuned marker, e.g. "-it-q4_k_m", "-q8_0", "-fp16"),
+ * and lowercases the result so that identical models are recognised as the
+ * same group/pool regardless of how the endpoint labels the served file.
  *
- * Note: this is for display/grouping purposes (colour badges, topology
- * diagram) only – routing (`default_model` matching) intentionally still
- * uses exact string comparison.
+ * Used both for display/grouping purposes (colour badges, topology diagram)
+ * and by the load balancer (`pickEndpointForModel()` /
+ * `hasActiveEndpointForModel()`), so that endpoints serving the same model
+ * under different names are pooled together for routing, not just shown
+ * together visually.
  */
 function canonicalModelName(string $model): string
 {
@@ -1492,8 +1498,53 @@ function canonicalModelName(string $model): string
     }
     $name = preg_replace('#^.*[/\\\\]#', '', $name);
     $name = preg_replace('/\.(gguf|bin|safetensors|pt|ckpt)$/i', '', $name);
+    $name = preg_replace(
+        '/(-it)?[-_](?:iq[1-4](?:_[a-z0-9]+)?|q[2-8](?:_[0-9k](?:_[ms])?)?|fp16|fp32|f16|f32|bf16|int4|int8)$/i',
+        '',
+        $name
+    );
 
     return mb_strtolower($name);
+}
+
+/**
+ * Returns the distinct `default_model` values of active endpoints that are
+ * functionally equivalent to $model (same canonicalModelName() key),
+ * including $model itself. Used to pool differently-labelled endpoints that
+ * serve the same underlying model together for routing purposes.
+ *
+ * Falls back to `[$model]` when no active endpoint matches or the model has
+ * no usable canonical key (e.g. empty string), so callers can always use the
+ * result as a safe candidate list.
+ */
+function equivalentActiveModelNames(string $model): array
+{
+    $canonical = canonicalModelName($model);
+    if ($canonical === '') {
+        return [$model];
+    }
+
+    try {
+        $rows = getDb()->query(
+            "SELECT DISTINCT default_model FROM endpoints WHERE is_active = 1 AND default_model <> ''"
+        )->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {
+        return [$model];
+    }
+
+    $matches = [];
+    foreach ($rows as $m) {
+        $m = (string) $m;
+        if (canonicalModelName($m) === $canonical) {
+            $matches[] = $m;
+        }
+    }
+
+    if (empty($matches)) {
+        $matches[] = $model;
+    }
+
+    return $matches;
 }
 
 /**

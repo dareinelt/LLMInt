@@ -203,7 +203,11 @@ Funktionen: `ensureBalancerHealthColumns()`, `getBalancerMaxConcurrent()`,
 
 Auswahl in `pickEndpointForModel()` (`api/balancer.php`):
 
-1. nur aktive Endpunkte mit passendem `default_model`, geschlossenem bzw. abgelaufenem
+1. nur aktive Endpunkte mit passendem `default_model` (exakt oder funktional
+   äquivalent gemäß `equivalentActiveModelNames()`/`canonicalModelName()` in
+   `db.php` – Endpunkte, die dasselbe Modell nur unter anderem Pfad/anderer
+   Quantisierung anbieten, werden zu einem gemeinsamen Routing-Pool
+   zusammengefasst), geschlossenem bzw. abgelaufenem
    Circuit und optional geforderten Fähigkeiten (Tool Calling, Vision),
 2. Bewertung aus normalisierter Auslastung (`capacity_weight`), geglätteter Latenz und
    `cost_weight` mit den Gewichten `balancer_weight_capacity`, `balancer_weight_latency`,
