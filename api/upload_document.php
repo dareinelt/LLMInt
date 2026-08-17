@@ -351,7 +351,7 @@ $imageBase64 = base64_encode($imageData);
 $dataUrl     = 'data:' . $mimeType . ';base64,' . $imageBase64;
 
 $visionPayload = [
-    'model'      => $visionModel,
+    'model'      => $endpoint['default_model'] !== '' ? $endpoint['default_model'] : $visionModel,
     'stream'     => false,
     'messages'   => [
         [
