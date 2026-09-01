@@ -1969,7 +1969,7 @@ $csrfToken = $_SESSION['csrf_token'];
      *  a later recognized command is still picked up, e.g. in
      *  "/unknown /tldr Text …" the "/tldr" is still activated. */
     function applyCommandPrefixFromInput() {
-        const re = /^\s*\/([a-zA-Z]+)(\s+|$)/;
+        const re = /^\s*\/([a-zA-Z0-9]+)(\s+|$)/;
         let text = userInput.value;
         let consumed = 0;
         let changed = false;
