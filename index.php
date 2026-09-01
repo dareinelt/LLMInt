@@ -2091,8 +2091,12 @@ $csrfToken = $_SESSION['csrf_token'];
                 selectCommandSuggestion(s.name);
             });
             item.addEventListener('mouseenter', () => {
+                if (cmdSuggestionIndex === i) return;
+                const prev = cmdAutocompleteEl.children[cmdSuggestionIndex];
+                if (prev) { prev.classList.remove('selected'); prev.setAttribute('aria-selected', 'false'); }
                 cmdSuggestionIndex = i;
-                renderCommandAutocomplete();
+                item.classList.add('selected');
+                item.setAttribute('aria-selected', 'true');
             });
 
             cmdAutocompleteEl.appendChild(item);
