@@ -1874,8 +1874,8 @@ $csrfToken = $_SESSION['csrf_token'];
             const removeBtn = document.createElement('button');
             removeBtn.type = 'button';
             removeBtn.textContent = '×';
-            removeBtn.title = 'Funktion entfernen';
-            removeBtn.setAttribute('aria-label', 'Funktion entfernen');
+            removeBtn.title = def.label + ' entfernen';
+            removeBtn.setAttribute('aria-label', def.label + ' entfernen');
             removeBtn.addEventListener('click', () => {
                 activeCommands = activeCommands.filter(k => k !== key);
                 renderCommandPills();
@@ -1888,19 +1888,29 @@ $csrfToken = $_SESSION['csrf_token'];
         });
     }
 
-    /** Turn one or more leading "/command" tokens in the input into pills. */
+    /** Turn one or more leading "/command" tokens in the input into pills.
+     *  Unrecognized "/word" tokens are skipped over (left untouched) so that
+     *  a later recognized command is still picked up, e.g. in
+     *  "/unknown /tldr Text …" the "/tldr" is still activated. */
     function applyCommandPrefixFromInput() {
+        const re = /^\s*\/([a-zA-Z]+)(\s+|$)/;
+        let text = userInput.value;
+        let consumed = 0;
         let changed = false;
         while (true) {
-            const m = /^\s*\/([a-zA-Z]+)(\s+|$)/.exec(userInput.value);
+            const m = re.exec(text.slice(consumed));
             if (!m) break;
             const key = resolveCommand(m[1].toLowerCase());
-            if (!key) break;
-            userInput.value = userInput.value.slice(m[0].length);
-            if (!activeCommands.includes(key)) activeCommands.push(key);
-            changed = true;
+            if (key) {
+                text = text.slice(0, consumed) + text.slice(consumed + m[0].length);
+                if (!activeCommands.includes(key)) activeCommands.push(key);
+                changed = true;
+            } else {
+                consumed += m[0].length;
+            }
         }
         if (!changed) return;
+        userInput.value = text;
         renderCommandPills();
         setStatus('Prompt-Funktion(en) aktiv: ' + activeCommands.map(k => PROMPT_COMMANDS[k].label).join(', '), 'info');
         autoResizeTextarea(userInput);
