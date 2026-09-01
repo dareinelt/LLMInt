@@ -19,6 +19,7 @@ Weitere Dokumente im Repository:
 - [Intelligence Upgrade](#intelligence-upgrade)
 - [Intelligenzgruppe direkt ansprechen](#intelligenzgruppe-direkt-ansprechen)
 - [Reasoning per Prompt aktivieren](#reasoning-per-prompt-aktivieren)
+- [Prompt-Funktionen per Präfix aktivieren](#prompt-funktionen-per-präfix-aktivieren)
 - [Lastverteilung](#lastverteilung)
 - [Voraussetzungen](#voraussetzungen)
 - [Schnellstart mit Docker](#schnellstart-mit-docker)
@@ -39,6 +40,7 @@ Weitere Dokumente im Repository:
 - **Routing und Lastverteilung:** optionale semantische Klassifikation, kategoriebasierte Modellwahl und konfigurierbare Fallback-Ketten; gesunde Endpunkte werden anhand von Auslastung, Kapazität, Latenz, Kosten und Fairness ausgewählt.
 - **Direkte Modellwahl:** angemeldete Benutzer sprechen mit dem Präfix `@@35b` eine Intelligenzgruppe direkt an; die Auswahl überschreibt Benutzer- und Standardmodelle und bleibt im Chat aktiv.
 - **Reasoning auf Abruf:** Thinking/Reasoning ist standardmäßig deaktiviert und wird mit dem Präfix `!!` für den jeweiligen Prompt eingeschaltet (Anzeige als 💡-Pille in der Eingabezeile).
+- **Prompt-Funktionen:** Präfixe wie `/table`, `/tldr` oder `/eli5` schalten für den jeweiligen Prompt eine feste Systemprompt-Ergänzung frei (z. B. Tabellenformat, Kurz-Zusammenfassung, kindgerechte Erklärung); Anzeige als eigene Pille je aktiver Funktion, mehrere Funktionen lassen sich kombinieren.
 - **Intelligence Upgrade:** beantwortet einfache Anfragen zunächst ressourcenschonend und bietet bei freier Kapazität optional ein leistungsfähigeres Modell für eine erneute Bearbeitung an.
 - **Hybrid-RAG:** Dokument-Upload mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
 - **Chat-Tools:** Websuche mit SearXNG (`search_web`) inklusive Nachladen ganzer Seiteninhalte (`web_fetch`), Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
@@ -171,6 +173,38 @@ Thinking/Reasoning ist standardmäßig deaktiviert: Anfragen werden ohne Denksch
 - Das Präfix wird – analog zur direkten Modellwahl per `@@` – sofort durch eine Pille mit dem Symbol einer eingeschalteten Glühlampe (💡) ersetzt, die sich mit `×` wieder entfernen lässt.
 - Nach dem Absenden wird die Aktivierung automatisch zurückgesetzt; der nächste Prompt läuft wieder ohne Reasoning.
 - Das Präfix wird serverseitig aus der Nachricht entfernt und erreicht das Modell nicht.
+
+## Prompt-Funktionen per Präfix aktivieren
+
+Analog zur direkten Modellwahl per `@@` und zum Reasoning per `!!` lassen sich häufig gebrauchte Anweisungen für Format, Länge, Stil oder Vorgehensweise über ein `/kommando`-Präfix am Anfang des Prompts aktivieren. Jedes erkannte Präfix wird sofort durch eine eigene, mit `×` entfernbare Pille ersetzt; mehrere Präfixe lassen sich hintereinander eingeben (z. B. `/tldr /list Fasse den Text zusammen.`), um mehrere Funktionen gleichzeitig zu kombinieren. Nach dem Absenden werden die aktiven Funktionen automatisch zurückgesetzt.
+
+Technisch ergänzt jede aktive Funktion den Systemprompt der laufenden Anfrage um eine feste Anweisung (siehe Tabelle); die Präfixe selbst werden serverseitig nie an das Modell übertragen.
+
+| Präfix | Wirkung |
+| --- | --- |
+| `/table` | Antwort ausschließlich als Markdown-Tabelle. |
+| `/outline` | Übersichtliche, hierarchische Gliederung bzw. Inhaltsverzeichnis. |
+| `/list` | Antwort als Aufzählung (Bullet Points). |
+| `/checklist` | Umsetzbare To-do-Liste mit Checkboxen. |
+| `/steps` | Chronologische Schritt-für-Schritt-Anleitung. |
+| `/code` | Antwort ausschließlich als Code-Block. |
+| `/json` | Antwort strikt als valides JSON. |
+| `/tldr` | Ultrakurze Zusammenfassung in 2–3 Sätzen. |
+| `/summary` | Klassische, ausgewogene Zusammenfassung. |
+| `/short` (oder `/brief`) | Extrem prägnante Antwort ohne Floskeln. |
+| `/expand` | Baut kurze Notizen zu einem detaillierten Text aus. |
+| `/eli5` | Erklärung mit einfachen Analogien wie für ein Kind. |
+| `/deep` (oder `/adv`) | Akademisches Niveau mit tiefer wissenschaftlicher Analyse. |
+| `/tech` | Rein technische Erklärung mit Fachbegriffen und Systemdetails. |
+| `/examples` | Erklärung primär anhand praktischer Beispiele. |
+| `/human` | Lockerer, menschlich klingender Stil ohne KI-Floskeln. |
+| `/expert` (oder `/pro`) | Formeller, professioneller Stil mit Branchen-Fachjargon. |
+| `/casual` | Freundlicher, entspannter Ton für Social Media/Chat. |
+| `/rewrite` | Formuliert einen bereitgestellten Text stilistisch um. |
+| `/proscons` | Analyse der Vor- und Nachteile einer Idee oder Entscheidung. |
+| `/brainstorm` | Liste kreativer, unkonventioneller Ideen. |
+| `/factcheck` | Prüft eine Behauptung im Text auf ihren Wahrheitsgehalt. |
+| `/critic` | Sucht gezielt nach Schwachstellen und logischen Fehlern in einer Argumentation. |
 
 ## Lastverteilung
 

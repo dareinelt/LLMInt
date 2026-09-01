@@ -274,6 +274,10 @@ Verwaltung: `admin/prompt_security.php` (Dashboard, Regeln, Logs, Einstellungen)
   `removeActiveGroup()`.
 - Reasoning: `applyReasoningPrefixFromInput()`, `renderReasoningPill()`; das `!!`-Präfix
   aktiviert Reasoning für genau einen Prompt und wird als 💡-Pille dargestellt.
+- Prompt-Funktionen: `applyCommandPrefixFromInput()`, `renderCommandPills()`,
+  `resolveCommand()`; `/kommando`-Präfixe (siehe `PROMPT_COMMANDS`, z. B. `/table`, `/tldr`,
+  `/eli5`) hängen je eine feste Anweisung an den Systemprompt des nächsten Requests an und
+  werden als eigene Pillen dargestellt.
 - Dokumente: `openUploadModal()`, `setFile()`, Upload per `FormData` inklusive `csrf_token`
   an `api/upload_document.php`, Statusanzeige über `loadStatus()`/`renderUploads()`.
 - Präsenz: `sendHeartbeat()` gegen `api/heartbeat.php`.
