@@ -798,6 +798,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
         /* ── Input box (textarea + action buttons) ─────────────────── */
         #input-box {
+            position: relative;
             display: flex;
             align-items: flex-end;
             gap: 6px;
@@ -909,6 +910,49 @@ $csrfToken = $_SESSION['csrf_token'];
         }
 
         .cmd-pill button:hover { background: rgba(46,196,140,.25); }
+
+        /* ── Slash-command autocomplete (suggestions while typing "/…") ── */
+        #cmd-autocomplete {
+            display: none;
+            position: absolute;
+            bottom: calc(100% + 8px);
+            left: 0;
+            min-width: 240px;
+            max-width: 360px;
+            max-height: 260px;
+            overflow-y: auto;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,.35);
+            padding: 4px;
+            z-index: 50;
+        }
+
+        #cmd-autocomplete.open { display: block; }
+
+        .cmd-suggestion {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: .82rem;
+            color: var(--text);
+            white-space: nowrap;
+        }
+
+        .cmd-suggestion .cmd-suggestion-name { font-weight: 600; color: #2ec48c; }
+        .cmd-suggestion .cmd-suggestion-label {
+            color: var(--text-muted);
+            font-size: .76rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .cmd-suggestion:hover,
+        .cmd-suggestion.selected { background: var(--surface-alt); }
 
         #clear-btn {
             width: 32px;
@@ -1648,6 +1692,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
         <!-- Main input container -->
         <div id="input-box">
+            <div id="cmd-autocomplete" role="listbox" aria-label="Prompt-Funktionen"></div>
             <span id="group-pill" title="Angesprochene Intelligenzgruppe">
                 <span id="group-pill-label"></span>
                 <button type="button" id="group-pill-remove" title="Intelligenzgruppe entfernen" aria-label="Intelligenzgruppe entfernen">×</button>
@@ -1709,6 +1754,7 @@ $csrfToken = $_SESSION['csrf_token'];
     const reasoningPillLabel  = document.getElementById('reasoning-pill-label');
     const reasoningPillRemove = document.getElementById('reasoning-pill-remove');
     const cmdPillsEl          = document.getElementById('cmd-pills');
+    const cmdAutocompleteEl   = document.getElementById('cmd-autocomplete');
     const attachImageBtn   = document.getElementById('attach-image-btn');
     const attachImageInput = document.getElementById('attach-image-input');
     const attachPreview    = document.getElementById('attach-preview');
@@ -1991,6 +2037,113 @@ $csrfToken = $_SESSION['csrf_token'];
         setStatus('Prompt-Funktion(en) aktiv: ' + activeCommands.map(k => PROMPT_COMMANDS[k].label).join(', '), 'info');
         autoResizeTextarea(userInput);
     }
+
+    /* ── Slash-command autocomplete ──────────────────────── */
+    /* While the user is typing a "/command" prefix at the start of the
+       input, show a small list of matching prompt functions. ↑/↓ navigate,
+       Enter/Tab select, Esc closes. */
+    let cmdSuggestions = [];        // [{ name, key, def }]
+    let cmdSuggestionIndex = -1;
+
+    function hideCommandAutocomplete() {
+        if (!cmdAutocompleteEl) return;
+        cmdAutocompleteEl.classList.remove('open');
+        cmdAutocompleteEl.innerHTML = '';
+        cmdSuggestions = [];
+        cmdSuggestionIndex = -1;
+    }
+
+    function commandAutocompleteOpen() {
+        return !!(cmdAutocompleteEl && cmdAutocompleteEl.classList.contains('open'));
+    }
+
+    /** Apply the given command name from the suggestion list to the input. */
+    function selectCommandSuggestion(name) {
+        userInput.value = userInput.value.replace(/^\s*\/[a-zA-Z0-9]*/, '/' + name + ' ');
+        hideCommandAutocomplete();
+        applyCommandPrefixFromInput();
+        autoResizeTextarea(userInput);
+        userInput.focus();
+    }
+
+    function renderCommandAutocomplete() {
+        cmdAutocompleteEl.innerHTML = '';
+        cmdSuggestions.forEach((s, i) => {
+            const item = document.createElement('div');
+            item.className = 'cmd-suggestion' + (i === cmdSuggestionIndex ? ' selected' : '');
+            item.setAttribute('role', 'option');
+            item.setAttribute('aria-selected', i === cmdSuggestionIndex ? 'true' : 'false');
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'cmd-suggestion-name';
+            nameEl.textContent = s.def.emoji + ' /' + s.name;
+            item.appendChild(nameEl);
+
+            const labelEl = document.createElement('span');
+            labelEl.className = 'cmd-suggestion-label';
+            labelEl.textContent = s.def.label;
+            item.appendChild(labelEl);
+
+            /* mousedown instead of click so the textarea does not lose focus
+               (blur would close the list) before the selection is applied. */
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                selectCommandSuggestion(s.name);
+            });
+            item.addEventListener('mouseenter', () => {
+                if (cmdSuggestionIndex === i) return;
+                const prev = cmdAutocompleteEl.children[cmdSuggestionIndex];
+                if (prev) { prev.classList.remove('selected'); prev.setAttribute('aria-selected', 'false'); }
+                cmdSuggestionIndex = i;
+                item.classList.add('selected');
+                item.setAttribute('aria-selected', 'true');
+            });
+
+            cmdAutocompleteEl.appendChild(item);
+        });
+        cmdAutocompleteEl.classList.toggle('open', cmdSuggestions.length > 0);
+        const sel = cmdAutocompleteEl.children[cmdSuggestionIndex];
+        if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: 'nearest' });
+    }
+
+    /** Show suggestions when the input consists of a single "/prefix" token. */
+    function updateCommandAutocomplete() {
+        if (!cmdAutocompleteEl) return;
+        const m = /^\s*\/([a-zA-Z0-9]*)$/.exec(userInput.value);
+        if (!m) { hideCommandAutocomplete(); return; }
+        const prefix = m[1].toLowerCase();
+        const seen = new Set();
+        cmdSuggestions = [];
+        Object.keys(PROMPT_COMMANDS).forEach(name => {
+            if (!name.startsWith(prefix)) return;
+            const key = resolveCommand(name);
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            cmdSuggestions.push({ name, key, def: PROMPT_COMMANDS[key] });
+        });
+        cmdSuggestions.sort((a, b) => a.name.localeCompare(b.name));
+        cmdSuggestionIndex = cmdSuggestions.length ? 0 : -1;
+        renderCommandAutocomplete();
+    }
+
+    userInput.addEventListener('keydown', (e) => {
+        if (!commandAutocompleteOpen()) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const dir = e.key === 'ArrowDown' ? 1 : -1;
+            cmdSuggestionIndex = (cmdSuggestionIndex + dir + cmdSuggestions.length) % cmdSuggestions.length;
+            renderCommandAutocomplete();
+        } else if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (cmdSuggestionIndex >= 0) selectCommandSuggestion(cmdSuggestions[cmdSuggestionIndex].name);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            hideCommandAutocomplete();
+        }
+    });
+
+    userInput.addEventListener('blur', () => hideCommandAutocomplete());
 
     /* ── Sidebar session management ──────────────────────── */
 
@@ -3427,6 +3580,7 @@ $csrfToken = $_SESSION['csrf_token'];
         if (loggedIn && intelligenceGroupEnabled) applyGroupPrefixFromInput();
         applyReasoningPrefixFromInput();
         applyCommandPrefixFromInput();
+        updateCommandAutocomplete();
         autoResizeTextarea(userInput);
     });
 
