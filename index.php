@@ -752,8 +752,10 @@ $csrfToken = $_SESSION['csrf_token'];
 
         #user-input::placeholder { color: var(--text-muted); }
 
-        /* ── Intelligence group pill (set via "@@35b" prefix) ──────── */
-        #group-pill {
+        /* ── Intelligence group pill (set via "@@35b" prefix) and
+              reasoning pill (set via the "!!" prefix) ──────────────── */
+        #group-pill,
+        #reasoning-pill {
             display: none;
             align-items: center;
             gap: 6px;
@@ -769,9 +771,11 @@ $csrfToken = $_SESSION['csrf_token'];
             white-space: nowrap;
         }
 
-        #group-pill.visible { display: inline-flex; }
+        #group-pill.visible,
+        #reasoning-pill.visible { display: inline-flex; }
 
-        #group-pill button {
+        #group-pill button,
+        #reasoning-pill button {
             border: none;
             background: transparent;
             color: inherit;
@@ -782,7 +786,16 @@ $csrfToken = $_SESSION['csrf_token'];
             border-radius: 999px;
         }
 
-        #group-pill button:hover { background: rgba(108,99,255,.25); }
+        #group-pill button:hover,
+        #reasoning-pill button:hover { background: rgba(108,99,255,.25); }
+
+        #reasoning-pill {
+            background: rgba(255,196,0,.15);
+            color: #f5b301;
+            border-color: rgba(255,196,0,.45);
+        }
+
+        #reasoning-pill button:hover { background: rgba(255,196,0,.25); }
 
         #clear-btn {
             width: 32px;
@@ -1526,6 +1539,10 @@ $csrfToken = $_SESSION['csrf_token'];
                 <span id="group-pill-label"></span>
                 <button type="button" id="group-pill-remove" title="Intelligenzgruppe entfernen" aria-label="Intelligenzgruppe entfernen">×</button>
             </span>
+            <span id="reasoning-pill" title="Reasoning für diesen Prompt aktiv">
+                <span id="reasoning-pill-label"></span>
+                <button type="button" id="reasoning-pill-remove" title="Reasoning deaktivieren" aria-label="Reasoning deaktivieren">×</button>
+            </span>
             <textarea id="user-input" rows="1"
                       placeholder="Nachricht schreiben … (Enter = Senden, Shift+Enter = Zeilenumbruch)"></textarea>
             <input type="file" id="attach-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none">
@@ -1574,6 +1591,9 @@ $csrfToken = $_SESSION['csrf_token'];
     const groupPill       = document.getElementById('group-pill');
     const groupPillLabel  = document.getElementById('group-pill-label');
     const groupPillRemove = document.getElementById('group-pill-remove');
+    const reasoningPill       = document.getElementById('reasoning-pill');
+    const reasoningPillLabel  = document.getElementById('reasoning-pill-label');
+    const reasoningPillRemove = document.getElementById('reasoning-pill-remove');
     const attachImageBtn   = document.getElementById('attach-image-btn');
     const attachImageInput = document.getElementById('attach-image-input');
     const attachPreview    = document.getElementById('attach-preview');
@@ -1685,6 +1705,41 @@ $csrfToken = $_SESSION['csrf_token'];
         setActiveGroup(label, true);
         setStatus('Intelligenzgruppe ' + label + ' aktiv.', 'info');
         autoResizeTextarea(userInput);
+    }
+
+    /* ── Reasoning (addressed with the "!!" prefix) ────────────── */
+    /* Thinking/reasoning is off by default and is switched on for a single
+       prompt by starting it with "!!". */
+    let reasoningActive = false;
+
+    function renderReasoningPill() {
+        if (!reasoningPill) return;
+        if (reasoningActive) {
+            reasoningPillLabel.textContent = '💡 Reasoning';
+            reasoningPill.classList.add('visible');
+        } else {
+            reasoningPill.classList.remove('visible');
+        }
+    }
+
+    /** Turn a leading "!!" in the input into a pill as soon as it is typed. */
+    function applyReasoningPrefixFromInput() {
+        const m = /^\s*!!\s*/.exec(userInput.value);
+        if (!m) return;
+        userInput.value = userInput.value.slice(m[0].length);
+        reasoningActive = true;
+        renderReasoningPill();
+        setStatus('Reasoning für diesen Prompt aktiv.', 'info');
+        autoResizeTextarea(userInput);
+    }
+
+    if (reasoningPillRemove) {
+        reasoningPillRemove.addEventListener('click', () => {
+            reasoningActive = false;
+            renderReasoningPill();
+            setStatus('Reasoning deaktiviert.', 'info');
+            userInput.focus();
+        });
     }
 
     if (groupPillRemove) {
@@ -2700,7 +2755,12 @@ $csrfToken = $_SESSION['csrf_token'];
                 return false;
             }
 
-            const thinkingDelta = obj.choices?.[0]?.delta?.reasoning_content ?? '';
+            // Reasoning output is only rendered when it was explicitly
+            // requested for this prompt (via the "!!" prefix); otherwise any
+            // thinking tokens a backend still emits are dropped.
+            const thinkingDelta = payload.reasoning === true
+                ? (obj.choices?.[0]?.delta?.reasoning_content ?? '')
+                : '';
             const delta = obj.choices?.[0]?.delta?.content ?? '';
             if (thinkingDelta) {
                 accumulatedThinking += thinkingDelta;
@@ -2975,6 +3035,9 @@ $csrfToken = $_SESSION['csrf_token'];
     /* ── Send message ────────────────────────────────────── */
 
     async function sendMessage() {
+        // A "!!" prefix may still be in the box when the message is sent
+        // without an intermediate input event (e.g. programmatic input).
+        applyReasoningPrefixFromInput();
         const text  = userInput.value.trim();
         const model = defaultModel;
 
@@ -3031,6 +3094,13 @@ $csrfToken = $_SESSION['csrf_token'];
             payload.intelligence_group = activeGroup;
             groupChanged = false;
         }
+
+        // Reasoning is off by default and only enabled for the single prompt
+        // that was prefixed with "!!".
+        const reasoningForThisPrompt = reasoningActive;
+        if (reasoningForThisPrompt) payload.reasoning = true;
+        reasoningActive = false;
+        renderReasoningPill();
 
         try {
             let result = await executeStreamingRequest(payload, bubble);
@@ -3100,6 +3170,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
     userInput.addEventListener('input', () => {
         if (loggedIn && intelligenceGroupEnabled) applyGroupPrefixFromInput();
+        applyReasoningPrefixFromInput();
         autoResizeTextarea(userInput);
     });
 

@@ -1745,6 +1745,22 @@ function extractIntelligenceGroupPrefix(string $text): array
 }
 
 /**
+ * Split an optional "!!" prefix off a chat message.
+ *
+ * Thinking/reasoning is disabled by default; the prefix switches it on for the
+ * single prompt it is written in.
+ *
+ * @return array{0:bool,1:string} [true when the prefix was present, remaining text]
+ */
+function extractReasoningPrefix(string $text): array
+{
+    if (!preg_match('/^\s*!!\s*/', $text, $m)) {
+        return [false, $text];
+    }
+    return [true, (string) substr($text, strlen($m[0]))];
+}
+
+/**
  * Persist the intelligence group that is active for a chat session.
  * The row is created when it does not exist yet, so the group already applies
  * to the very first message of a new chat.
