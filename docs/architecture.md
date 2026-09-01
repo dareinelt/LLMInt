@@ -260,8 +260,11 @@ ComfyUI-Endpunkte; die jeweilige Tabelle wird als Parameter übergeben.
 1. nur aktive Endpunkte mit passendem `default_model` (exakt oder funktional äquivalent
    gemäß `equivalentActiveModelNames()`/`canonicalModelName()` in `db.php`), geschlossenem
    bzw. abgelaufenem Circuit und optional geforderten Fähigkeiten (Tool Calling, Vision),
-2. Bewertung aus laufender Auslastung und geglätteter Latenz,
-3. Fairness-Tiebreaker über die älteste Zuweisung,
+2. Auswahl nach laufender Auslastung und anschließend nach Fair-Share, d. h. der
+   Anzahl bereits zugewiesener Tasks innerhalb von `balancer_fairness_window_seconds`
+   (die geglättete Latenz wird nicht bewertet – alle Endpunkte liegen im selben
+   Subnetz, `avg_latency_ms` dient nur der Statistik),
+3. Round-Robin-Tiebreaker über die älteste Zuweisung (nie genutzte Endpunkte zuerst),
 4. Reservierung in einer Transaktion mit `SELECT ... FOR UPDATE` und erneuter
    Kapazitätsprüfung, anschließend `INSERT` in `tasks` mit Status `running`.
 

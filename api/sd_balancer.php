@@ -11,8 +11,11 @@
  *   1. Only active sd_endpoints whose circuit breaker is not open.
  *   2. Only endpoints with fewer than the configured maximum currently-running
  *      sd_tasks (`balancer_max_concurrent` setting, previously hard-coded to 4).
- *   3. Prefer the endpoint with the best routing score (load, latency).
- *   4. Among equally-scored endpoints, prefer the one that received a task
+ *   3. Prefer the endpoint with the fewest running tasks, then the endpoint
+ *      that handled the fewest tasks inside the fairness window
+ *      (`balancer_fairness_window_seconds`). Latency is not part of the
+ *      decision (same subnet, statistics only).
+ *   4. Among otherwise equal endpoints, prefer the one that received a task
  *      least recently (round-robin effect).
  *
  * Task lifecycle is recorded atomically inside a DB transaction, reserving
@@ -52,24 +55,14 @@ function pickSdEndpoint(string $mode = 'txt2img', ?int $maxConcurrent = null): ?
                    e.circuit_state, e.cooldown_until,
                    e.avg_latency_ms,
                    COALESCE(r.running_count, 0) AS running_count,
+                   COALESCE(r.recent_task_count, 0) AS recent_task_count,
                    r.last_task_at
             FROM sd_endpoints e
-            LEFT JOIN (
-                SELECT endpoint_id,
-                       COUNT(*)        AS running_count,
-                       MAX(started_at) AS last_task_at
-                  FROM sd_tasks
-                 WHERE status = 'running'
-                 GROUP BY endpoint_id
-            ) r ON r.endpoint_id = e.id
+            " . balancerLoadJoinSql('sd_tasks') . "
             WHERE e.is_active = 1
               AND COALESCE(r.running_count, 0) < ?
               AND {$circuitWhere}
-            ORDER BY
-                COALESCE(r.running_count, 0) ASC,
-                COALESCE(e.avg_latency_ms, 999999) ASC,
-                CASE WHEN r.last_task_at IS NULL THEN 0 ELSE 1 END ASC,
-                r.last_task_at ASC
+            ORDER BY " . balancerFairnessOrderBySql() . "
             LIMIT 8
         ");
         $stmt->execute([

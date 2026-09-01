@@ -174,7 +174,7 @@ Full data model description: [`architecture.md`](architecture.md#4-datenmodell-Ã
 | `intelligence_group_enabled` | Enable `@@` prefix routing |
 | `global_system_prompt`, `intelligence_upgrade_message` | Prompt content |
 | `routing_decision_model` | Classifier model; categories in `routing_categories`, mapping in `routing_rules` |
-| `balancer_max_concurrent`, `balancer_circuit_fail_threshold`, `balancer_circuit_cooldown_seconds`, `balancer_orphan_timeout_seconds`, `balancer_backoff_base_ms`, `balancer_backoff_max_ms`, `balancer_backoff_jitter`, `balancer_fallback_chains` | Balancer/resilience tuning |
+| `balancer_max_concurrent`, `balancer_circuit_fail_threshold`, `balancer_circuit_cooldown_seconds`, `balancer_orphan_timeout_seconds`, `balancer_fairness_window_seconds`, `balancer_backoff_base_ms`, `balancer_backoff_max_ms`, `balancer_backoff_jitter`, `balancer_fallback_chains` | Balancer/resilience tuning |
 | `embedding_enabled`, `embedding_model`, `embedding_timeout`, `embedding_cache_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`, `reranker_enabled`, `reranker_endpoint`, `reranker_model`, `reranker_top_k` | RAG tuning |
 | `pdf_vision_enabled`, `pdf_vision_dpi`, `pdf_vision_max_pages`, `upload_max_mb` | Document upload: PDFâ†’image vision analysis and size limit |
 | `searxng_base_url` | SearXNG instance URL |

@@ -42,6 +42,7 @@ $balancerMaxConcurrent        = getBalancerMaxConcurrent();
 $balancerCircuitFailThreshold = getBalancerCircuitFailThreshold();
 $balancerCircuitCooldownSecs  = getBalancerCircuitCooldownSeconds();
 $balancerOrphanTimeoutSecs    = getBalancerOrphanTimeoutSeconds();
+$balancerFairnessWindowSecs   = getBalancerFairnessWindowSeconds();
 $balancerBackoffBaseMs        = (int) getBalancerSetting('balancer_backoff_base_ms');
 $balancerBackoffMaxMs         = (int) getBalancerSetting('balancer_backoff_max_ms');
 $balancerBackoffJitter        = getBalancerSetting('balancer_backoff_jitter') === '1';
@@ -372,6 +373,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newFailThreshold   = max(1, min(100, (int) ($_POST['balancer_circuit_fail_threshold'] ?? 3)));
             $newCooldownSecs    = max(1, min(3600, (int) ($_POST['balancer_circuit_cooldown_seconds'] ?? 30)));
             $newOrphanTimeout   = max(10, min(86400, (int) ($_POST['balancer_orphan_timeout_seconds'] ?? 300)));
+            $newFairnessWindow  = max(60, min(86400, (int) ($_POST['balancer_fairness_window_seconds'] ?? 900)));
             $newBackoffBaseMs   = max(1, min(60000, (int) ($_POST['balancer_backoff_base_ms'] ?? 200)));
             $newBackoffMaxMs    = max($newBackoffBaseMs, min(600000, (int) ($_POST['balancer_backoff_max_ms'] ?? 8000)));
             $newBackoffJitter   = isset($_POST['balancer_backoff_jitter']);
@@ -385,6 +387,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 setSetting('balancer_circuit_fail_threshold', (string) $newFailThreshold);
                 setSetting('balancer_circuit_cooldown_seconds', (string) $newCooldownSecs);
                 setSetting('balancer_orphan_timeout_seconds', (string) $newOrphanTimeout);
+                setSetting('balancer_fairness_window_seconds', (string) $newFairnessWindow);
                 setSetting('balancer_backoff_base_ms', (string) $newBackoffBaseMs);
                 setSetting('balancer_backoff_max_ms', (string) $newBackoffMaxMs);
                 setSetting('balancer_backoff_jitter', $newBackoffJitter ? '1' : '0');
@@ -394,6 +397,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $balancerCircuitFailThreshold = $newFailThreshold;
                 $balancerCircuitCooldownSecs  = $newCooldownSecs;
                 $balancerOrphanTimeoutSecs    = $newOrphanTimeout;
+                $balancerFairnessWindowSecs   = $newFairnessWindow;
                 $balancerBackoffBaseMs        = $newBackoffBaseMs;
                 $balancerBackoffMaxMs         = $newBackoffMaxMs;
                 $balancerBackoffJitter        = $newBackoffJitter;
@@ -3131,6 +3135,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                   <input type="number" id="balancer-max-concurrent" name="balancer_max_concurrent"
                          min="1" max="100" value="<?= (int) $balancerMaxConcurrent ?>">
                   <p class="hint">Ersetzt das früher fest codierte Limit von 4 gleichzeitig laufenden Tasks pro Endpunkt.</p>
+              </div>
+
+              <div class="form-group">
+                  <label for="balancer-fairness-window">Fairness-Fenster (Sekunden)</label>
+                  <input type="number" id="balancer-fairness-window" name="balancer_fairness_window_seconds"
+                         min="60" max="86400" value="<?= (int) $balancerFairnessWindowSecs ?>">
+                  <p class="hint">Zeitfenster, über das die bereits zugeteilten Aufgaben je Endpunkt gezählt werden. Endpunkte mit weniger Aufgaben in diesem Fenster werden bevorzugt, damit gleichwertige Endpunkte denselben Anteil erhalten. Die gemessene Latenz fließt bewusst nicht in die Routing-Entscheidung ein (alle Endpunkte liegen im selben Subnetz) und dient nur der Statistik.</p>
               </div>
 
               <div class="form-group">

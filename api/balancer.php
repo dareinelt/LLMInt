@@ -19,9 +19,12 @@
  *   3. Only endpoints with fewer than $maxConcurrent currently-running tasks
  *      (configurable via the `balancer_max_concurrent` setting; previously
  *      hard-coded to 4).
- *   4. Prefer the endpoint with the best routing score, combining current
- *      load (running task count) and average latency.
- *   5. Among equally-scored endpoints, prefer the one that received a task
+ *   4. Prefer the endpoint with the fewest currently running tasks, then the
+ *      one that handled the fewest tasks within the fairness window
+ *      (`balancer_fairness_window_seconds`). Latency is not part of the
+ *      decision: all endpoints share the same subnet, so `avg_latency_ms`
+ *      is statistics-only.
+ *   5. Among otherwise equal endpoints, prefer the one that received a task
  *      least recently (round-robin effect). Endpoints that have never
  *      received a task sort before used ones.
  *
@@ -93,27 +96,17 @@ function pickEndpointForModel(
                    e.avg_latency_ms,
                    e.max_context, e.context_limit_per_slot,
                    COALESCE(r.running_count, 0) AS running_count,
+                   COALESCE(r.recent_task_count, 0) AS recent_task_count,
                    r.last_task_at
             FROM endpoints e
-            LEFT JOIN (
-                SELECT endpoint_id,
-                       COUNT(*)        AS running_count,
-                       MAX(started_at) AS last_task_at
-                  FROM tasks
-                 WHERE status = 'running'
-                 GROUP BY endpoint_id
-            ) r ON r.endpoint_id = e.id
+            " . balancerLoadJoinSql('tasks') . "
             WHERE e.is_active = 1
               AND e.default_model IN ({$modelPlaceholders})
               AND COALESCE(r.running_count, 0) < ?
               AND {$circuitWhere}
               {$toolCallingWhere}
               {$visionWhere}
-            ORDER BY
-                COALESCE(r.running_count, 0) ASC,
-                COALESCE(e.avg_latency_ms, 999999) ASC,
-                CASE WHEN r.last_task_at IS NULL THEN 0 ELSE 1 END ASC,
-                r.last_task_at ASC
+            ORDER BY " . balancerFairnessOrderBySql() . "
             LIMIT 8
         ");
         $stmt->execute([
