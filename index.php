@@ -797,6 +797,43 @@ $csrfToken = $_SESSION['csrf_token'];
 
         #reasoning-pill button:hover { background: rgba(255,196,0,.25); }
 
+        /* ── Prompt-function pills (set via "/command" prefixes, e.g.
+              "/tldr", "/table", "/eli5") ────────────────────────────── */
+        #cmd-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            flex-shrink: 0;
+            align-self: center;
+        }
+
+        .cmd-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(46,196,140,.15);
+            color: #2ec48c;
+            border: 1px solid rgba(46,196,140,.45);
+            border-radius: 999px;
+            padding: 2px 6px 2px 10px;
+            font-size: .78rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .cmd-pill button {
+            border: none;
+            background: transparent;
+            color: inherit;
+            cursor: pointer;
+            font-size: .8rem;
+            line-height: 1;
+            padding: 2px 4px;
+            border-radius: 999px;
+        }
+
+        .cmd-pill button:hover { background: rgba(46,196,140,.25); }
+
         #clear-btn {
             width: 32px;
             height: 32px;
@@ -1543,6 +1580,7 @@ $csrfToken = $_SESSION['csrf_token'];
                 <span id="reasoning-pill-label"></span>
                 <button type="button" id="reasoning-pill-remove" title="Reasoning deaktivieren" aria-label="Reasoning deaktivieren">×</button>
             </span>
+            <span id="cmd-pills"></span>
             <textarea id="user-input" rows="1"
                       placeholder="Nachricht schreiben … (Enter = Senden, Shift+Enter = Zeilenumbruch)"></textarea>
             <input type="file" id="attach-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none">
@@ -1594,6 +1632,7 @@ $csrfToken = $_SESSION['csrf_token'];
     const reasoningPill       = document.getElementById('reasoning-pill');
     const reasoningPillLabel  = document.getElementById('reasoning-pill-label');
     const reasoningPillRemove = document.getElementById('reasoning-pill-remove');
+    const cmdPillsEl          = document.getElementById('cmd-pills');
     const attachImageBtn   = document.getElementById('attach-image-btn');
     const attachImageInput = document.getElementById('attach-image-input');
     const attachPreview    = document.getElementById('attach-preview');
@@ -1748,6 +1787,123 @@ $csrfToken = $_SESSION['csrf_token'];
             setStatus('Intelligenzgruppe entfernt.', 'info');
             userInput.focus();
         });
+    }
+
+    /* ── Prompt functions (addressed with a "/command" prefix) ─── */
+    /* Each function appends a fixed instruction to the system prompt for the
+       next request only, e.g. "/tldr" or "/table". Several functions can be
+       combined by chaining multiple "/command" prefixes at the start of the
+       message; each becomes its own removable pill. Aliases point to the
+       same underlying instruction so only one pill is ever shown for them. */
+    const PROMPT_COMMANDS = {
+        table:      { emoji: '📊', label: 'Tabelle',
+            addition: 'Gib deine gesamte Antwort ausschließlich als gut strukturierte Markdown-Tabelle aus (mit Kopfzeile und Trennzeile). Verzichte auf einleitenden oder abschließenden Fließtext außerhalb der Tabelle.' },
+        outline:    { emoji: '🗂️', label: 'Gliederung',
+            addition: 'Strukturiere deine Antwort als übersichtliche, hierarchische Gliederung bzw. Inhaltsverzeichnis mit nummerierten oder eingerückten Ebenen (Haupt- und Unterpunkte). Vermeide ausformulierte Fließtext-Absätze.' },
+        list:       { emoji: '•', label: 'Liste',
+            addition: 'Gib die Antwort ausschließlich als Aufzählung (Bullet Points) aus. Jeder Punkt soll kurz und prägnant sein.' },
+        checklist:  { emoji: '☑️', label: 'Checkliste',
+            addition: 'Verwandle das Thema in eine direkt umsetzbare To-do-Liste mit Markdown-Checkboxen ("- [ ] Aufgabe"). Formuliere jeden Punkt als konkrete, ausführbare Handlung.' },
+        steps:      { emoji: '🔢', label: 'Schritte',
+            addition: 'Liefere eine chronologische Schritt-für-Schritt-Anleitung mit durchnummerierten Schritten (1., 2., 3., …). Jeder Schritt soll genau eine Handlung beschreiben.' },
+        code:       { emoji: '💻', label: 'Code',
+            addition: 'Gib die gesamte Antwort ausschließlich als Programmiercode in einem einzigen Code-Block aus. Kein erklärender Fließtext außerhalb des Code-Blocks, außer knappen Kommentaren im Code selbst.' },
+        json:       { emoji: '{ }', label: 'JSON',
+            addition: 'Formatiere die gesamte Antwort strikt als valides, maschinenlesbares JSON. Kein Fließtext, keine Markdown-Formatierung, keine Kommentare – nur das reine JSON-Objekt bzw. -Array.' },
+        tldr:       { emoji: '⚡', label: 'TL;DR',
+            addition: 'Erstelle ausschließlich eine ultrakurze Zusammenfassung (TL;DR) in 2–3 Sätzen. Beschränke dich auf die wichtigste Kernaussage.' },
+        summary:    { emoji: '📝', label: 'Zusammenfassung',
+            addition: 'Liefere eine klassische, ausgewogene Zusammenfassung des Inhalts in mehreren zusammenhängenden Sätzen bzw. einem kurzen Absatz, die die wesentlichen Punkte abdeckt.' },
+        short:      { emoji: '✂️', label: 'Kurz',
+            addition: 'Antworte extrem prägnant und ohne Floskeln, Einleitungen oder Wiederholungen. Komm sofort zum Punkt und nutze so wenige Worte wie möglich.' },
+        brief:      { aliasOf: 'short' },
+        expand:     { emoji: '➕', label: 'Ausbauen',
+            addition: 'Nimm den bereitgestellten Input (auch wenn er nur aus kurzen Stichpunkten oder Notizen besteht) und baue ihn zu einem ausführlichen, detaillierten Text mit Kontext, Erklärungen und Beispielen aus.' },
+        eli5:       { emoji: '🧒', label: 'ELI5',
+            addition: 'Erkläre das Thema so, wie man es einem Kind erklären würde (Explain Like I\'m 5): einfache Sprache, kurze Sätze, anschauliche Alltagsanalogien, keine Fachbegriffe ohne Erklärung.' },
+        deep:       { emoji: '🎓', label: 'Tiefgehend',
+            addition: 'Antworte auf akademischem Niveau mit einer tiefgehenden, wissenschaftlich fundierten Analyse. Beziehe relevante Theorien, Fachbegriffe, Nuancen und ggf. gegensätzliche Standpunkte mit ein.' },
+        adv:        { aliasOf: 'deep' },
+        tech:       { emoji: '⚙️', label: 'Technisch',
+            addition: 'Gib eine rein technische Erklärung mit präzisen Fachbegriffen, Systemdetails und Implementierungsaspekten. Setze Fachwissen der Leserschaft voraus.' },
+        examples:   { emoji: '💡', label: 'Beispiele',
+            addition: 'Erkläre das Thema primär anhand von konkreten, praktischen Beispielen aus der echten Welt statt abstrakter Theorie. Jede Kernaussage soll durch mindestens ein Beispiel veranschaulicht werden.' },
+        human:      { emoji: '🙂', label: 'Menschlich',
+            addition: 'Schreibe in einem lockeren, natürlichen, abwechslungsreichen Stil, der wie ein Mensch klingt. Vermeide typische KI-Floskeln (z. B. "Es ist wichtig zu beachten", "Zusammenfassend lässt sich sagen") und generische Übergänge.' },
+        expert:     { emoji: '🎩', label: 'Experte',
+            addition: 'Schreibe formell, hochprofessionell und nutze branchenüblichen Fachjargon, wie es in einem professionellen Kontext (z. B. Fachpublikation, Businessbericht) erwartet wird.' },
+        pro:        { aliasOf: 'expert' },
+        casual:     { emoji: '😎', label: 'Locker',
+            addition: 'Nutze einen freundlichen, entspannten, informellen Ton – wie in einer lockeren Chat-Nachricht oder einem Social-Media-Post. Kurze Sätze, gerne mit Umgangssprache oder passenden Emojis.' },
+        rewrite:    { emoji: '🔁', label: 'Umformulieren',
+            addition: 'Formuliere den vom Nutzer bereitgestellten Text stilistisch um und verbessere ihn (Klarheit, Lesefluss, Wortwahl), ohne den inhaltlichen Sinn zu verändern. Gib nur den überarbeiteten Text aus.' },
+        proscons:   { emoji: '⚖️', label: 'Pro/Contra',
+            addition: 'Analysiere die genannte Idee oder Entscheidung sofort strukturiert nach Vor- und Nachteilen (z. B. als zwei Listen "Vorteile" und "Nachteile"). Ziehe am Ende ein kurzes Fazit.' },
+        brainstorm: { emoji: '🌪️', label: 'Brainstorm',
+            addition: 'Generiere eine möglichst lange Liste kreativer, unkonventioneller und vielfältiger Ideen zum genannten Stichwort. Bewerte die Ideen nicht, sondern liefere zunächst nur eine breite Auswahl.' },
+        factcheck:  { emoji: '🔍', label: 'Faktencheck',
+            addition: 'Prüfe die im Text enthaltene(n) Behauptung(en) gezielt auf ihren Wahrheitsgehalt. Suche nach stützenden oder widerlegenden Belegen, benenne Unsicherheiten und gib eine klare Einschätzung (wahr/falsch/unklar) mit Begründung.' },
+        critic:     { emoji: '🧐', label: 'Kritiker',
+            addition: 'Nimm die Rolle eines kritischen Prüfers ein und suche gezielt nach Schwachstellen, Risiken, Widersprüchen und logischen Fehlern in der vorliegenden Argumentation. Sei konstruktiv, aber schone die Argumentation nicht.' },
+    };
+
+    /** Resolve an alias (e.g. "brief") to its canonical command key (e.g. "short"). */
+    function resolveCommand(name) {
+        let def = PROMPT_COMMANDS[name];
+        let key = name;
+        while (def && def.aliasOf) { key = def.aliasOf; def = PROMPT_COMMANDS[key]; }
+        return def ? key : null;
+    }
+
+    /* Prompt functions active for the next message, in the order they were added. */
+    let activeCommands = [];
+
+    function renderCommandPills() {
+        if (!cmdPillsEl) return;
+        cmdPillsEl.innerHTML = '';
+        activeCommands.forEach(key => {
+            const def = PROMPT_COMMANDS[key];
+            const pill = document.createElement('span');
+            pill.className = 'cmd-pill';
+            pill.title = 'Prompt-Funktion: /' + key;
+
+            const labelEl = document.createElement('span');
+            labelEl.textContent = def.emoji + ' ' + def.label;
+            pill.appendChild(labelEl);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.textContent = '×';
+            removeBtn.title = 'Funktion entfernen';
+            removeBtn.setAttribute('aria-label', 'Funktion entfernen');
+            removeBtn.addEventListener('click', () => {
+                activeCommands = activeCommands.filter(k => k !== key);
+                renderCommandPills();
+                setStatus(def.label + ' entfernt.', 'info');
+                userInput.focus();
+            });
+            pill.appendChild(removeBtn);
+
+            cmdPillsEl.appendChild(pill);
+        });
+    }
+
+    /** Turn one or more leading "/command" tokens in the input into pills. */
+    function applyCommandPrefixFromInput() {
+        let changed = false;
+        while (true) {
+            const m = /^\s*\/([a-zA-Z]+)(\s+|$)/.exec(userInput.value);
+            if (!m) break;
+            const key = resolveCommand(m[1].toLowerCase());
+            if (!key) break;
+            userInput.value = userInput.value.slice(m[0].length);
+            if (!activeCommands.includes(key)) activeCommands.push(key);
+            changed = true;
+        }
+        if (!changed) return;
+        renderCommandPills();
+        setStatus('Prompt-Funktion(en) aktiv: ' + activeCommands.map(k => PROMPT_COMMANDS[k].label).join(', '), 'info');
+        autoResizeTextarea(userInput);
     }
 
     /* ── Sidebar session management ──────────────────────── */
@@ -1919,6 +2075,8 @@ $csrfToken = $_SESSION['csrf_token'];
         chatArea.innerHTML = '';
         clearUpgradePrompt();
         removeActiveGroup(false);
+        activeCommands = [];
+        renderCommandPills();
         pendingImages = [];
         if (typeof renderAttachPreview === 'function') renderAttachPreview();
         sessionId = generateSessionId();
@@ -3035,9 +3193,11 @@ $csrfToken = $_SESSION['csrf_token'];
     /* ── Send message ────────────────────────────────────── */
 
     async function sendMessage() {
-        // A "!!" prefix may still be in the box when the message is sent
-        // without an intermediate input event (e.g. programmatic input).
+        // A "!!" / "@@" / "/command" prefix may still be in the box when the
+        // message is sent without an intermediate input event (e.g.
+        // programmatic input).
         applyReasoningPrefixFromInput();
+        applyCommandPrefixFromInput();
         const text  = userInput.value.trim();
         const model = defaultModel;
 
@@ -3070,7 +3230,16 @@ $csrfToken = $_SESSION['csrf_token'];
 
         // Build message array (optionally prepend system prompt).
         const messages = [];
-        const sysPrompt = systemPromptTA.value.trim();
+        let sysPrompt = systemPromptTA.value.trim();
+        // Prompt functions selected via "/command" prefixes each contribute a
+        // fixed instruction that is appended to the system prompt for this
+        // single request only.
+        if (activeCommands.length > 0) {
+            const additions = activeCommands.map(k => PROMPT_COMMANDS[k].addition).join('\n\n');
+            sysPrompt = sysPrompt ? sysPrompt + '\n\n' + additions : additions;
+            activeCommands = [];
+            renderCommandPills();
+        }
         if (sysPrompt) messages.push({ role: 'system', content: sysPrompt });
         messages.push(...history);
 
@@ -3171,6 +3340,7 @@ $csrfToken = $_SESSION['csrf_token'];
     userInput.addEventListener('input', () => {
         if (loggedIn && intelligenceGroupEnabled) applyGroupPrefixFromInput();
         applyReasoningPrefixFromInput();
+        applyCommandPrefixFromInput();
         autoResizeTextarea(userInput);
     });
 
