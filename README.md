@@ -8,6 +8,9 @@ Weitere Dokumente im Repository:
 |---|---|
 | `README.md` | Betrieb, Installation, Konfiguration und Funktionsüberblick |
 | `description.md` | detaillierte Architektur- und Funktionsreferenz für Entwicklung und Coding-Agenten |
+| `docs/architecture.md` | Systemarchitektur, Datenflüsse und Diagramme (ergänzt `description.md`) |
+| `docs/functions.md` | vollständige Funktionsreferenz je Datei |
+| `docs/agent_index.md` | kompakte Navigationshilfe für Coding-Agenten |
 | `Demo.md` | nicht-technische Erklärung für Entscheider und Fachbereiche |
 
 ## Inhaltsverzeichnis
@@ -69,7 +72,7 @@ Wichtige Komponenten:
 - `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
 - `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
 
-Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Build-Schritt: Jede URL entspricht einer PHP-Datei, Abhängigkeiten werden über `require_once` geladen, und Frontend-CSS/-JavaScript liegen inline in `index.php` beziehungsweise `admin/index.php`. Eine vollständige technische Referenz mit Funktions-, Tabellen- und Einstellungsnamen enthält [`description.md`](description.md).
+Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Build-Schritt: Jede URL entspricht einer PHP-Datei, Abhängigkeiten werden über `require_once` geladen, und Frontend-CSS/-JavaScript liegen inline in `index.php` beziehungsweise `admin/index.php`. Eine vollständige technische Referenz mit Funktions-, Tabellen- und Einstellungsnamen enthält [`description.md`](description.md); eine grafisch aufbereitete Architekturübersicht mit Diagrammen bietet [`docs/architecture.md`](docs/architecture.md), eine vollständige Funktionsreferenz [`docs/functions.md`](docs/functions.md) und eine kompakte Navigationshilfe für Coding-Agenten [`docs/agent_index.md`](docs/agent_index.md).
 
 ## Repository-Struktur
 
@@ -500,7 +503,7 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 - Neue HTTP-Endpunkte werden als eigene Datei unter `api/` angelegt, binden `db.php` ein und prüfen Sitzung, Rolle und CSRF-Token wie die bestehenden Endpunkte.
 - Neue Chat-Tools benötigen eine Definition, eine Verfügbarkeitsprüfung und einen Zweig in der Tool-Schleife von `api/chat.php`.
 - Datenbankzugriffe erfolgen ausschließlich über vorbereitete PDO-Statements, Ausgaben werden mit `htmlspecialchars()` maskiert, Meldungen sind auf Deutsch, Protokollierung erfolgt über `writeLog()`.
-- Vor dem Commit sollten geänderte Dateien mit `php -l` geprüft werden. Details zu Funktionen, Tabellen und Einstellungsschlüsseln stehen in [`description.md`](description.md).
+- Vor dem Commit sollten geänderte Dateien mit `php -l` geprüft werden. Details zu Funktionen, Tabellen und Einstellungsschlüsseln stehen in [`description.md`](description.md), [`docs/architecture.md`](docs/architecture.md) und [`docs/functions.md`](docs/functions.md).
 
 ## Betrieb und Sicherheit
 
