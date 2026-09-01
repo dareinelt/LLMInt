@@ -11,7 +11,7 @@
  *   1. Only active comfy_endpoints whose circuit breaker is not open.
  *   2. Only endpoints with fewer than the configured maximum currently-running
  *      comfy_tasks (`balancer_max_concurrent` setting, previously hard-coded to 4).
- *   3. Prefer the endpoint with the best routing score (load, latency, cost).
+ *   3. Prefer the endpoint with the best routing score (load, latency).
  *   4. Among equally-scored endpoints, prefer the one that received a task
  *      least recently (round-robin effect).
  *
@@ -49,7 +49,7 @@ function pickComfyEndpoint(?int $maxConcurrent = null): ?array
         $stmt = $db->prepare("
             SELECT e.id, e.base_url, e.timeout, e.default_checkpoint,
                    e.circuit_state, e.cooldown_until,
-                   e.avg_latency_ms, e.cost_weight, e.capacity_weight,
+                   e.avg_latency_ms,
                    COALESCE(r.running_count, 0) AS running_count,
                    r.last_task_at
             FROM comfy_endpoints e
@@ -65,17 +65,14 @@ function pickComfyEndpoint(?int $maxConcurrent = null): ?array
               AND COALESCE(r.running_count, 0) < ?
               AND {$circuitWhere}
             ORDER BY
-                (COALESCE(r.running_count, 0) / GREATEST(e.capacity_weight, 0.0001)) ASC,
-                COALESCE(e.avg_latency_ms, 999999) * ? ASC,
-                e.cost_weight * ? ASC,
+                COALESCE(r.running_count, 0) ASC,
+                COALESCE(e.avg_latency_ms, 999999) ASC,
                 CASE WHEN r.last_task_at IS NULL THEN 0 ELSE 1 END ASC,
                 r.last_task_at ASC
             LIMIT 8
         ");
         $stmt->execute([
             $maxConcurrent,
-            (float) getBalancerSetting('balancer_weight_latency'),
-            (float) getBalancerSetting('balancer_weight_cost'),
         ]);
         $candidates = $stmt->fetchAll();
 

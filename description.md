@@ -86,7 +86,7 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `settings` | Key-Value-Konfiguration (`setting_key`, `setting_value`) |
 | `users` | Konten: `username`, `password_hash`, `email`, `email_verified`, `email_verification_token`, `password_reset_token`, `default_model`, `requires_password_change`, `can_upload_documents`, `role` (`user`/`admin`), `auth_source` (`local`/`ldap`), `ldap_dn`, `last_login` |
 | `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer |
-| `endpoints` | LLM-Endpunkte: `base_url`, `default_model`, `timeout`, `is_active`, Fähigkeiten (Tool Calling, Vision), Balancer-Gesundheit (`circuit_state`, `consecutive_failures`, `cooldown_until`, `avg_latency_ms`, `cost_weight`, `capacity_weight`) |
+| `endpoints` | LLM-Endpunkte: `base_url`, `default_model`, `timeout`, `is_active`, Fähigkeiten (Tool Calling, Vision), Balancer-Gesundheit (`circuit_state`, `consecutive_failures`, `cooldown_until`, `avg_latency_ms`) |
 | `tasks` | Lebenszyklus jeder LLM-Anfrage: `endpoint_id`, `status` (`running`/`done`/`error`), Tokenzähler, `tokens_per_second` |
 | `endpoint_sys_stats` | per SSH gelesene Systemmetriken je Endpunkt |
 | `search_logs` | SearXNG-Suchen mit Status und Ergebnissen |
@@ -212,9 +212,7 @@ Auswahl in `pickEndpointForModel()` (`api/balancer.php`):
    Quantisierung anbieten, werden zu einem gemeinsamen Routing-Pool
    zusammengefasst), geschlossenem bzw. abgelaufenem
    Circuit und optional geforderten Fähigkeiten (Tool Calling, Vision),
-2. Bewertung aus normalisierter Auslastung (`capacity_weight`), geglätteter Latenz und
-   `cost_weight` mit den Gewichten `balancer_weight_capacity`, `balancer_weight_latency`,
-   `balancer_weight_cost`,
+2. Bewertung aus laufender Auslastung und geglätteter Latenz,
 3. Fairness-Tiebreaker über die älteste Zuweisung,
 4. Reservierung in einer Transaktion mit `SELECT ... FOR UPDATE` und erneuter Kapazitäts-
    prüfung, anschließend `INSERT` in `tasks` mit Status `running`.
@@ -344,7 +342,7 @@ sind reine Bibliotheken und werden eingebunden, nicht direkt aufgerufen.
 |---|---|
 | Modelle/Anfragen | `default_model`, `new_user_default_model`, `vision_model`, `streaming_enabled`, `intelligence_group_enabled`, `global_system_prompt`, `intelligence_upgrade_message` |
 | Routing | `routing_decision_model`, Kategorien in `routing_categories`, Zuordnungen in `routing_rules` |
-| Balancer | `balancer_max_concurrent`, `balancer_circuit_fail_threshold`, `balancer_circuit_cooldown_seconds`, `balancer_orphan_timeout_seconds`, `balancer_backoff_base_ms`, `balancer_backoff_max_ms`, `balancer_backoff_jitter`, `balancer_weight_latency`, `balancer_weight_cost`, `balancer_weight_capacity`, `balancer_fallback_chains` |
+| Balancer | `balancer_max_concurrent`, `balancer_circuit_fail_threshold`, `balancer_circuit_cooldown_seconds`, `balancer_orphan_timeout_seconds`, `balancer_backoff_base_ms`, `balancer_backoff_max_ms`, `balancer_backoff_jitter`, `balancer_fallback_chains` |
 | RAG | `embedding_enabled`, `embedding_model`, `embedding_timeout`, `embedding_cache_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`, `reranker_enabled`, `reranker_endpoint`, `reranker_model`, `reranker_top_k` |
 | Integrationen | `searxng_base_url`, `smtp_host`, `smtp_port`, `smtp_encryption`, `smtp_user`, `smtp_pass`, `ldap_enabled`, `ldap_host`, `ldap_port`, `ldap_use_ssl`, `ldap_domain`, `ldap_base_dn`, `ldap_bind_dn`, `ldap_bind_password`, `ldap_user_attr`, `ldap_email_attr`, `ldap_display_name_attr`, `ldap_sspi_enabled` |
 | Betrieb | `log_level`, `log_retention_days`, `login_banner_enabled`, `login_banner_text`, `registration_email_subject`, `registration_email_body` |

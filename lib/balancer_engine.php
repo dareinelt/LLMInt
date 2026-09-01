@@ -8,16 +8,16 @@
  *
  * Provides:
  *   - Configurable limits (max concurrent tasks per endpoint, circuit breaker
- *     thresholds, backoff, orphan-task timeout, routing weights) backed by
- *     the `settings` table so they can be tuned without a deploy.
+ *     thresholds, backoff, orphan-task timeout) backed by the `settings`
+ *     table so they can be tuned without a deploy.
  *   - Circuit breaker state machine (closed -> open -> half_open -> closed)
  *     with automatic resumption after a cooldown period.
  *   - Exponential backoff with jitter for client-side retry loops.
  *   - Configurable fallback chains (model -> ordered list of substitute models).
  *   - Cleanup of orphaned "running" tasks that never received a final status
  *     (e.g. because the PHP worker crashed or was killed).
- *   - A multi-factor routing score combining current load, latency, cost and
- *     capacity so the least loaded / fastest / cheapest endpoint is preferred.
+ *   - A routing score combining current load and latency so the least
+ *     loaded / fastest endpoint is preferred.
  *
  * All functions are defensive: DB errors while reading settings fall back to
  * sane defaults so the balancer keeps working even if `settings` is briefly
@@ -27,7 +27,7 @@
 require_once __DIR__ . '/../db.php';
 
 /**
- * Adds the health / circuit-breaker / latency / cost columns required by the
+ * Adds the health / circuit-breaker / latency columns required by the
  * balancer engine to an endpoint table. Safe to call repeatedly (idempotent).
  */
 function ensureBalancerHealthColumns(PDO $pdo, string $table): void
@@ -39,8 +39,6 @@ function ensureBalancerHealthColumns(PDO $pdo, string $table): void
         "ALTER TABLE {$table} ADD COLUMN cooldown_until TIMESTAMP(3) NULL AFTER circuit_opened_at",
         "ALTER TABLE {$table} ADD COLUMN avg_latency_ms INT UNSIGNED NULL AFTER cooldown_until",
         "ALTER TABLE {$table} ADD COLUMN last_latency_ms INT UNSIGNED NULL AFTER avg_latency_ms",
-        "ALTER TABLE {$table} ADD COLUMN cost_weight DECIMAL(10,4) NOT NULL DEFAULT 1.0000 AFTER last_latency_ms",
-        "ALTER TABLE {$table} ADD COLUMN capacity_weight DECIMAL(10,4) NOT NULL DEFAULT 1.0000 AFTER cost_weight",
     ];
     foreach ($alters as $sql) {
         try {
@@ -73,10 +71,6 @@ const BALANCER_SETTING_DEFAULTS = [
     // Seconds after which a task still marked "running" is considered
     // orphaned (its worker probably crashed) and is force-completed as error.
     'balancer_orphan_timeout_seconds'  => '300',
-    // Relative weights (0..1) used when scoring candidate endpoints.
-    'balancer_weight_latency'          => '0.35',
-    'balancer_weight_cost'             => '0.25',
-    'balancer_weight_capacity'         => '0.40',
     // JSON object mapping a requested model name to an ordered array of
     // fallback model names, e.g. {"big-model:70b": ["big-model:34b", "big-model:8b"]}
     'balancer_fallback_chains'         => '{}',
