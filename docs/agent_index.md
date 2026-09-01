@@ -44,7 +44,11 @@ Ollama) with multi-model routing, load balancing, hybrid RAG, image generation
 | `api/chat.php` | **Main chat pipeline**: prompt security → routing → balancer → tools (search, web fetch, RAG, image gen) → streaming → token accounting |
 | `api/balancer.php` | `pickEndpointForModel()`, `completeTask()`, upgrade suggestions, model availability |
 | `api/embedding.php` | Embeddings: generation, cache, cosine similarity, reranking, chunk embeddings |
-| `api/upload_document.php` | File upload, text extraction, chunking, vision analysis |
+| `api/upload_document.php` | File upload, format routing (docconvert / PDF→images+vision / vision), chunking |
+| `api/doc_convert.php` | HTTP client + config for the `docconvert` Python service, plain-text PHP fallback |
+| `api/pdf_render.php` | `pdftoppm`/`pdfinfo` wrappers: PDF pages → JPEG, per-page text layer |
+| `api/vision.php` | `analyzeImageWithVision()` – shared vision-model call incl. balancer + task accounting |
+| `docconvert/` | Python/FastAPI container converting Office & text files into structured chunks (TTL disk cache) |
 | `admin/index.php` | Admin UI: endpoints, routing, balancer, RAG, LDAP/SMTP, users, logs |
 | `admin/prompt_security.php` | Prompt security rule management |
 | `admin/load_stats.php` | Live dashboard stats (JSON) |
@@ -152,7 +156,8 @@ Full data model description: [`architecture.md`](architecture.md#4-datenmodell-�
 | Change balancer logic | `lib/balancer_engine.php` (shared), `api/balancer.php` (LLM-specific) |
 | Modify prompt security | `lib/prompt_security.php` (logic), `admin/prompt_security.php` (UI) |
 | Add embedding provider | `api/embedding.php` → `pickEmbeddingEndpoint()`, `generateEmbedding()` |
-| Modify RAG/chunking | `api/upload_document.php` (chunking), `api/embedding.php` (embeddings), `api/chat.php` → `queryDocuments()` |
+| Modify RAG/chunking | `api/upload_document.php` (routing/chunking), `docconvert/app/*.py` (format parsing), `api/embedding.php` (embeddings), `api/chat.php` → `queryDocuments()` |
+| Add a document format | `docconvert/app/converters.py` (parser + `SUPPORTED_FORMATS`), `api/doc_convert.php` (MIME map), `index.php` (accept lists) |
 | Admin UI changes | `admin/index.php` (main), `admin/prompt_security.php`, `admin/api_keys.php` |
 | Auth changes | `login.php`, `register.php`, `lib/ldap_auth.php` |
 | OpenAI API changes | `lib/openai_api.php`, `api/openai*/**` |
@@ -171,6 +176,7 @@ Full data model description: [`architecture.md`](architecture.md#4-datenmodell-�
 | `routing_decision_model` | Classifier model; categories in `routing_categories`, mapping in `routing_rules` |
 | `balancer_max_concurrent`, `balancer_circuit_fail_threshold`, `balancer_circuit_cooldown_seconds`, `balancer_orphan_timeout_seconds`, `balancer_backoff_base_ms`, `balancer_backoff_max_ms`, `balancer_backoff_jitter`, `balancer_fallback_chains` | Balancer/resilience tuning |
 | `embedding_enabled`, `embedding_model`, `embedding_timeout`, `embedding_cache_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`, `reranker_enabled`, `reranker_endpoint`, `reranker_model`, `reranker_top_k` | RAG tuning |
+| `pdf_vision_enabled`, `pdf_vision_dpi`, `pdf_vision_max_pages`, `upload_max_mb` | Document upload: PDF→image vision analysis and size limit |
 | `searxng_base_url` | SearXNG instance URL |
 | `smtp_host`, `smtp_port`, `smtp_encryption`, `smtp_user`, `smtp_pass` | Outbound mail |
 | `ldap_enabled`, `ldap_host`, `ldap_port`, `ldap_use_ssl`, `ldap_domain`, `ldap_base_dn`, `ldap_bind_dn`, `ldap_bind_password`, `ldap_user_attr`, `ldap_email_attr`, `ldap_display_name_attr`, `ldap_sspi_enabled` | LDAP/AD & SSO |
@@ -230,10 +236,13 @@ Legacy keys: `lmstudio_base_url`, `lmstudio_timeout`, `endpoints_bootstrapped`.
 │   ├── balancer.php       # Model selection & completion
 │   ├── embedding.php      # Embeddings & RAG
 │   ├── upload_document.php
+│   ├── doc_convert.php    # Client for the docconvert container
+│   ├── pdf_render.php     # pdftoppm/pdfinfo helpers (PDF → page images)
+│   ├── vision.php         # Shared vision-model image analysis
 │   ├── chat_sessions.php
 │   ├── models.php / heartbeat.php / healthcheck.php
 │   ├── reset_password.php / verify_email.php / admin_user_action.php
-│   ├── document_status.php / rebuild_embeddings.php
+│   ├── document_status.php / document_delete.php / rebuild_embeddings.php
 │   ├── test_ldap.php / test_smtp.php / test_searxng.php
 │   ├── sd_balancer.php / sd_generate.php / sd_checkpoints.php
 │   ├── comfy_balancer.php / comfy_generate.php / comfy_checkpoints.php

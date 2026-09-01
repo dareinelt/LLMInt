@@ -30,6 +30,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      docconvert:
+        condition: service_started
     environment:
       # Database connection (must match the db service above)
       DB_HOST: db
@@ -37,6 +39,10 @@ services:
       DB_NAME: ${DB_NAME:-llmint}
       DB_USER: ${DB_USER:-llmint}
       DB_PASS: ${DB_PASS:-llmint}
+      # Document conversion service (Office/text → text + chunks)
+      DOCCONVERT_URL: ${DOCCONVERT_URL:-http://docconvert:8000}
+      DOCCONVERT_TOKEN: ${DOCCONVERT_TOKEN:-}
+      DOCCONVERT_TIMEOUT: ${DOCCONVERT_TIMEOUT:-120}
       # PHP timezone (overrides docker/php.ini if set)
       TZ: ${TZ:-Europe/Berlin}
     volumes:
@@ -48,6 +54,29 @@ services:
       # docker/apache.conf to enable transparent Windows SSO.
       # - ./krb5.keytab:/etc/krb5.keytab:ro
       # - ./krb5.conf:/etc/krb5.conf:ro
+
+  # ── Document converter (Office / text → RAG chunks) ──────────────────────────
+  # Python/FastAPI service used by api/upload_document.php to turn DOCX, XLSX,
+  # PPTX, ODF, CSV and plain-text files into structured text plus chunks.
+  # Internal only: no host port is published.
+  docconvert:
+    build:
+      context: ./docconvert
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Optional shared secret; when set, the web container must send the same
+      # value (DOCCONVERT_TOKEN) in the X-Auth-Token header.
+      DOCCONVERT_TOKEN: ${DOCCONVERT_TOKEN:-}
+      DOCCONVERT_MAX_BYTES: ${DOCCONVERT_MAX_BYTES:-20971520}
+      DOCCONVERT_MAX_CHARS: ${DOCCONVERT_MAX_CHARS:-1800}
+      DOCCONVERT_OVERLAP: ${DOCCONVERT_OVERLAP:-250}
+      DOCCONVERT_CACHE_TTL: ${DOCCONVERT_CACHE_TTL:-3600}
+      DOCCONVERT_CACHE_MAX: ${DOCCONVERT_CACHE_MAX:-500}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      # Temporary chunk cache; survives restarts, pruned by TTL.
+      - docconvert_cache:/var/cache/docconvert
 
   # ── phpMyAdmin ────────────────────────────────────────────────────────────────
   # Protected by HTTP Basic Auth (credentials from PMA_BASIC_AUTH_USER /
@@ -79,3 +108,4 @@ volumes:
   db_data:
   doc_uploads:
   sd_output:
+  docconvert_cache:

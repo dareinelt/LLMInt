@@ -20,6 +20,9 @@ $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
 $guestDefaultModel  = trim(getSetting('default_model', ''));
 $newUserDefaultModel = trim(getSetting('new_user_default_model', ''));
 $visionModel = trim(getSetting('vision_model', ''));
+$pdfVisionEnabled  = getSetting('pdf_vision_enabled', '1') === '1';
+$pdfVisionDpi      = max(72, min(300, (int) getSetting('pdf_vision_dpi', '150')));
+$pdfVisionMaxPages = max(1, min(200, (int) getSetting('pdf_vision_max_pages', '30')));
 $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
 $intelligenceUpgradeMessage = getSetting('intelligence_upgrade_message', '');
 if ($intelligenceUpgradeMessage === '') {
@@ -445,6 +448,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newVisionModel = trim($_POST['vision_model'] ?? '');
             $visionModel = $newVisionModel;
             setSetting('vision_model', $newVisionModel);
+
+            $pdfVisionEnabled  = isset($_POST['pdf_vision_enabled']) ? '1' : '0';
+            $pdfVisionDpi      = max(72, min(300, (int) ($_POST['pdf_vision_dpi'] ?? 150)));
+            $pdfVisionMaxPages = max(1, min(200, (int) ($_POST['pdf_vision_max_pages'] ?? 30)));
+            setSetting('pdf_vision_enabled', $pdfVisionEnabled);
+            setSetting('pdf_vision_dpi', (string) $pdfVisionDpi);
+            setSetting('pdf_vision_max_pages', (string) $pdfVisionMaxPages);
+
             $flashOk = $newVisionModel === ''
                 ? 'Vision-Modell zurückgesetzt (Dokument-Upload deaktiviert).'
                 : 'Vision-Modell gespeichert.';
@@ -3029,9 +3040,43 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                        <?php endif; ?>
                    </select>
                    <p class="hint">
-                       Dieses Vision-fähige Modell analysiert hochgeladene Dokumente (Bilder) und extrahiert deren Inhalt.
+                       Dieses Vision-fähige Modell analysiert hochgeladene Bilder und PDF-Seiten und extrahiert deren Inhalt.
                        Wird in jeder Anfrage als Datenquelle per Tool-Aufruf <code>query_documents</code> bereitgestellt.
                        Leer lassen, um den Dokument-Upload zu deaktivieren.
+                   </p>
+               </div>
+
+               <div class="form-group">
+                   <label>
+                       <input type="checkbox" name="pdf_vision_enabled" value="1"
+                              <?= $pdfVisionEnabled ? 'checked' : '' ?>>
+                       PDF-Seiten als Bilder per Vision-Modell auswerten
+                   </label>
+                   <p class="hint">
+                       Jede PDF-Seite wird mit <code>pdftoppm</code> in ein JPEG umgewandelt und einzeln vom
+                       Vision-Modell gelesen. Damit werden auch gescannte PDFs, Tabellen, Formulare und Diagramme
+                       erfasst. Schlägt die Analyse einer Seite fehl, wird auf deren Textebene zurückgegriffen;
+                       ist die Option deaktiviert, wird ausschließlich <code>pdftotext</code> verwendet.
+                   </p>
+               </div>
+
+               <div class="form-group">
+                   <label for="pdf-vision-dpi">Render-Auflösung (DPI)</label>
+                   <input type="number" id="pdf-vision-dpi" name="pdf_vision_dpi" min="72" max="300" step="1"
+                          value="<?= (int) $pdfVisionDpi ?>">
+                   <p class="hint">
+                       Höhere Werte verbessern die Lesbarkeit kleiner Schrift, vergrößern aber Bilder und
+                       Verarbeitungszeit. Empfohlen: 150 DPI (72–300).
+                   </p>
+               </div>
+
+               <div class="form-group">
+                   <label for="pdf-vision-max-pages">Maximal analysierte Seiten pro PDF</label>
+                   <input type="number" id="pdf-vision-max-pages" name="pdf_vision_max_pages" min="1" max="200" step="1"
+                          value="<?= (int) $pdfVisionMaxPages ?>">
+                   <p class="hint">
+                       Begrenzt die Laufzeit eines Uploads: Jede Seite ist eine eigene Modellanfrage.
+                       Überzählige Seiten werden übersprungen und im extrahierten Text vermerkt.
                    </p>
                </div>
 

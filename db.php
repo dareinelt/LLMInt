@@ -328,8 +328,16 @@ function ensureRuntimeSchema(PDO $pdo): void
         "ALTER TABLE users ADD COLUMN ldap_dn VARCHAR(500) NULL AFTER auth_source",
         "ALTER TABLE document_uploads ADD COLUMN chunk_count INT UNSIGNED NOT NULL DEFAULT 0 AFTER extracted_text",
         "ALTER TABLE document_uploads ADD COLUMN is_global_rag TINYINT(1) NOT NULL DEFAULT 1 AFTER chunk_count",
+        // Chat session a document was attached to (inline upload in the chat).
+        "ALTER TABLE document_uploads ADD COLUMN chat_session_id VARCHAR(128) NULL AFTER is_global_rag",
     ] as $alter) {
         try { $pdo->exec($alter); } catch (Throwable $_e) { /* column already exists */ }
+    }
+
+    try {
+        $pdo->exec("ALTER TABLE document_uploads ADD KEY idx_du_chat_session (chat_session_id)");
+    } catch (Throwable $_e) {
+        // index already exists
     }
 
 
@@ -366,11 +374,13 @@ function ensureRuntimeSchema(PDO $pdo): void
             extracted_text MEDIUMTEXT      NULL,
             chunk_count    INT UNSIGNED    NOT NULL DEFAULT 0,
             is_global_rag  TINYINT(1)      NOT NULL DEFAULT 1,
+            chat_session_id VARCHAR(128)   NULL,
             error_message  TEXT            NULL,
             uploaded_at    TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
             processed_at   TIMESTAMP(3)    NULL,
             PRIMARY KEY (id),
             KEY idx_du_user_status (user_id, status),
+            KEY idx_du_chat_session (chat_session_id),
             KEY idx_du_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
