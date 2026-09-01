@@ -257,8 +257,45 @@ $csrfToken = $_SESSION['csrf_token'];
             padding: 32px 16px;
         }
 
-        .welcome-logo { font-size: 2.8rem; margin-bottom: 8px; }
-        .welcome-logo img { width: 96px; height: 96px; object-fit: contain; }
+        .welcome-logo {
+            font-size: 2.8rem;
+            margin-bottom: 8px;
+            position: relative;
+            width: 96px;
+            height: 96px;
+        }
+        .welcome-logo img {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 96px;
+            height: 96px;
+            object-fit: contain;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .welcome-logo img.wl-active { opacity: 1; }
+        .welcome-logo img.wl-fade { transition: opacity .9s ease; }
+        .welcome-logo img.wl-jet-out {
+            animation: wl-jet-out 1.1s ease-in forwards;
+            z-index: 2;
+        }
+        .welcome-logo img.wl-jet-in { animation: wl-jet-in .6s ease-out; }
+
+        /* Departing robot blasts off through the chat window like on a jetpack */
+        @keyframes wl-jet-out {
+            0%   { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+            20%  { transform: translate(28px, -18px) rotate(14deg); opacity: 1; }
+            45%  { transform: translate(-90px, -120px) rotate(-22deg) scale(.9); opacity: 1; }
+            70%  { transform: translate(120px, -260px) rotate(28deg) scale(.7); opacity: .9; }
+            100% { transform: translate(340px, -460px) rotate(42deg) scale(.45); opacity: 0; }
+        }
+
+        @keyframes wl-jet-in {
+            0%   { transform: translate(-280px, 320px) rotate(-35deg) scale(.45); opacity: 0; }
+            60%  { transform: translate(18px, -14px) rotate(10deg) scale(1.02); opacity: 1; }
+            100% { transform: translate(0, 0) rotate(0deg) scale(1); opacity: 1; }
+        }
 
         #welcome h2 { font-size: 1.6rem; font-weight: 600; }
 
@@ -1918,15 +1955,115 @@ $csrfToken = $_SESSION['csrf_token'];
     function showWelcome() {
         chatArea.innerHTML =
             '<div id="welcome">' +
-            '<div class="welcome-logo"><img src="assets/img/ai-mascot.png" alt="KHWF KI"></div>' +
+            '<div class="welcome-logo">' +
+            '<img data-robot="mascot" class="wl-active" src="assets/img/ai-mascot.png" alt="KHWF KI">' +
+            '<img data-robot="careful" src="assets/img/carefull-robot.png" alt="">' +
+            '<img data-robot="learning" src="assets/img/learning-robot.png" alt="">' +
+            '</div>' +
             '<h2>Wie kann ich helfen?</h2>' +
             '<p>Stelle eine Frage – ich helfe dir gerne weiter.</p>' +
             '</div>';
+        initWelcomeRobots();
     }
 
     function hideWelcome() {
         const w = document.getElementById('welcome');
         if (w) w.remove();
+        stopWelcomeRobots();
+    }
+
+    /* ── Welcome mascot rotation ─────────────────────────── */
+    /* ai-mascot and carefull-robot alternate at random intervals with a
+       jetpack flight animation; learning-robot fades in after 60s of
+       inactivity and is replaced instantly once the user starts typing. */
+
+    const WL_SWAP_MIN_MS   = 12000;  // never swap faster than this
+    const WL_SWAP_JITTER_MS = 20000; // random extra delay on top
+    const WL_IDLE_MS       = 60000;  // inactivity before learning-robot
+
+    let wlCurrent  = 'mascot';
+    let wlPrev     = 'mascot';
+    let wlLearning = false;
+    let wlAnimating = false;
+    let wlSwapTimer = null;
+    let wlIdleTimer = null;
+
+    function wlImg(name) {
+        const w = document.getElementById('welcome');
+        return w ? w.querySelector('.welcome-logo img[data-robot="' + name + '"]') : null;
+    }
+
+    function initWelcomeRobots() {
+        stopWelcomeRobots();
+        wlCurrent = 'mascot';
+        wlPrev = 'mascot';
+        wlLearning = false;
+        wlAnimating = false;
+        wlScheduleSwap();
+        wlResetIdle();
+    }
+
+    function stopWelcomeRobots() {
+        clearTimeout(wlSwapTimer);
+        clearTimeout(wlIdleTimer);
+        wlSwapTimer = null;
+        wlIdleTimer = null;
+    }
+
+    function wlScheduleSwap() {
+        clearTimeout(wlSwapTimer);
+        wlSwapTimer = setTimeout(wlJetSwap, WL_SWAP_MIN_MS + Math.random() * WL_SWAP_JITTER_MS);
+    }
+
+    function wlJetSwap() {
+        if (wlLearning || wlAnimating) { wlScheduleSwap(); return; }
+        const next = wlCurrent === 'mascot' ? 'careful' : 'mascot';
+        const out = wlImg(wlCurrent), inn = wlImg(next);
+        if (!out || !inn) return;
+        wlAnimating = true;
+        out.classList.remove('wl-active', 'wl-fade');
+        out.classList.add('wl-jet-out');
+        inn.classList.remove('wl-fade');
+        inn.classList.add('wl-active', 'wl-jet-in');
+        wlCurrent = next;
+        setTimeout(() => {
+            out.classList.remove('wl-jet-out');
+            inn.classList.remove('wl-jet-in');
+            wlAnimating = false;
+        }, 1200);
+        wlScheduleSwap();
+    }
+
+    function wlShowLearning() {
+        if (wlLearning) return;
+        const out = wlImg(wlCurrent), inn = wlImg('learning');
+        if (!out || !inn) return;
+        wlLearning = true;
+        wlPrev = wlCurrent;
+        out.classList.add('wl-fade');
+        inn.classList.add('wl-fade');
+        void inn.offsetWidth; // force reflow so the transition applies
+        out.classList.remove('wl-active');
+        inn.classList.add('wl-active');
+    }
+
+    function wlHideLearning() {
+        if (!wlLearning) return;
+        wlLearning = false;
+        const inn = wlImg('learning'), back = wlImg(wlPrev);
+        if (inn) inn.classList.remove('wl-fade', 'wl-active');
+        if (back) { back.classList.remove('wl-fade'); back.classList.add('wl-active'); }
+    }
+
+    function wlResetIdle() {
+        clearTimeout(wlIdleTimer);
+        wlIdleTimer = setTimeout(wlShowLearning, WL_IDLE_MS);
+    }
+
+    function wlOnUserTyping() {
+        if (!document.getElementById('welcome')) return;
+        wlHideLearning();
+        wlResetIdle();
     }
 
     /* Default model set by the admin */
@@ -3824,6 +3961,7 @@ $csrfToken = $_SESSION['csrf_token'];
     });
 
     userInput.addEventListener('input', () => {
+        wlOnUserTyping();
         if (loggedIn && intelligenceGroupEnabled) applyGroupPrefixFromInput();
         applyReasoningPrefixFromInput();
         applyCommandPrefixFromInput();
