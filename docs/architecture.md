@@ -295,9 +295,16 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    U[Upload: api/upload_document.php] --> X[Textextraktion\npdftotext / Vision-Modell]
-    X --> C[buildDocumentChunks: Chunking mit Überlappung]
+    U[Upload: api/upload_document.php] --> K{Dateityp}
+    K -->|Office / Text| DC[docconvert-Service\nPython/FastAPI + TTL-Cache]
+    K -->|PDF| PR[pdftoppm: Seiten → JPEG]
+    K -->|Bild| V[Vision-Modell]
+    PR --> V
+    DC --> C[strukturbewusste Chunks]
+    V --> X[Textextraktion]
+    X --> C2[buildDocumentChunks: Chunking mit Überlappung]
     C --> P[persistDocumentChunks]
+    C2 --> P
     P --> E[generateAndStoreChunkEmbeddings]
     Q[Chat-Anfrage] --> QD[queryDocuments in api/chat.php]
     QD --> BM[BM25-Scoring: scoreRagChunk]
@@ -309,16 +316,35 @@ flowchart LR
 ```
 
 - Upload: `api/upload_document.php` prüft Session, `can_upload_documents`, CSRF und
-  MIME-Typ (Text/Markdown, PDF, PNG/JPG/WEBP/GIF), speichert nach `doc_uploads/`.
+  Dateityp, speichert nach `doc_uploads/` und wählt die Verarbeitungsroute:
+  - **Office- und Textdateien** (`docx`, `xlsx`, `xls`, `pptx`, `odt`, `ods`, `odp`,
+    `rtf`, `csv`, `tsv`, `txt`, `md`, `json`, `xml`, `html`, `yaml`, `log`, `ini`)
+    gehen an den `docconvert`-Container (`api/doc_convert.php`), der strukturierten
+    Text plus strukturbewusste Chunks mit Quellenangabe zurückgibt und Ergebnisse
+    per Content-Hash temporär zwischenspeichert. Fällt der Dienst aus, greift für
+    reine Textformate `convertPlainTextLocally()` in PHP.
+  - **PDF**: `api/pdf_render.php` rastert jede Seite mit `pdftoppm` zu einem JPEG,
+    `analyzePdfWithVision()` lässt jede Seite einzeln vom Vision-Modell lesen
+    (`api/vision.php`). So werden auch Scans, Tabellen und Diagramme erfasst.
+    Schlägt eine Seite fehl, wird deren `pdftotext`-Textebene verwendet; ist die
+    Vision-Auswertung deaktiviert, wird ausschließlich `pdftotext` genutzt.
+  - **Bilder** werden direkt vom Vision-Modell beschrieben.
+- Chat-gebundene Uploads: Wird beim Upload eine `session_id` mitgeschickt, landet
+  sie in `document_uploads.chat_session_id`. `queryDocuments()` bevorzugt diese
+  Chunks (BM25-Boost) und `buildChatDocumentSystemPrompt()` weist das Modell auf
+  die angehängten Dateien hin.
 - Embeddings: `generateEmbeddingAuto()`, `pickEmbeddingEndpoint()`,
   `getCachedQueryEmbedding()`/`setCachedQueryEmbedding()` (Cache), Fallback auf reines
   BM25, falls kein Embedding-Endpunkt erreichbar ist.
-- Statusabfrage im Frontend: `api/document_status.php`; Neuberechnung über
+- Statusabfrage im Frontend: `api/document_status.php` (optional per `session_id`
+  gefiltert), Löschen über `api/document_delete.php`; Neuberechnung über
   `api/rebuild_embeddings.php`.
 
 Relevante Einstellungen: `embedding_enabled`, `embedding_model`, `embedding_timeout`,
 `embedding_cache_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`,
-`reranker_enabled`, `reranker_endpoint`, `reranker_model`, `reranker_top_k`.
+`reranker_enabled`, `reranker_endpoint`, `reranker_model`, `reranker_top_k`,
+`vision_model`, `pdf_vision_enabled`, `pdf_vision_dpi`, `pdf_vision_max_pages`,
+`upload_max_mb`.
 
 ---
 
@@ -402,8 +428,9 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/models.php` | GET | – | Modelle eines Endpunkts abfragen |
 | `api/heartbeat.php` | POST | – | Präsenz-Token melden |
 | `api/healthcheck.php` | GET | – | Aggregierter Gesundheitsstatus aller LLM-Endpunkte |
-| `api/document_status.php` | GET | Session | Upload-Status des Benutzers |
-| `api/upload_document.php` | POST | Session + CSRF | Dokument-Upload |
+| `api/document_status.php` | GET | Session | Upload-Status des Benutzers (optional `session_id`-gefiltert) |
+| `api/upload_document.php` | POST | Session + CSRF | Dokument-Upload (Office, Text, PDF, Bild) |
+| `api/document_delete.php` | POST | Session + CSRF | Upload inklusive Chunks entfernen |
 | `api/rebuild_embeddings.php` | POST | Admin + CSRF | Embeddings neu berechnen |
 | `api/sd_generate.php`, `api/comfy_generate.php` | POST | Session | Bildgenerierung |
 | `api/sd_checkpoints.php`, `api/comfy_checkpoints.php` | GET | – | verfügbare Checkpoints |
@@ -422,14 +449,22 @@ aufgerufen.
 ## 13. Betrieb und Container
 
 - `Dockerfile`: Basis `php:8.2-apache`, installiert `pdo_mysql`, `curl`, `mbstring`,
-  `fileinfo`, LDAP, XML/ZIP, Intl, Poppler (`pdftotext`) sowie Kerberos-Komponenten;
-  `ENTRYPOINT` ist `docker/entrypoint.sh` (wartet auf die Datenbank, ruft `setup.php`
-  auf).
+  `fileinfo`, LDAP, XML/ZIP, Intl, Poppler (`pdftotext`, `pdftoppm`, `pdfinfo`) sowie
+  Kerberos-Komponenten; `ENTRYPOINT` ist `docker/entrypoint.sh` (wartet auf die
+  Datenbank, ruft `setup.php` auf).
+- `docconvert/Dockerfile`: Basis `python:3.12-slim`, FastAPI/Uvicorn mit
+  `python-docx`, `openpyxl`, `xlrd`, `python-pptx`, `odfpy`, `striprtf`,
+  `beautifulsoup4`/`lxml`. Läuft als unprivilegierter Nutzer, kein veröffentlichter
+  Port – nur im Compose-Netz erreichbar.
 - `docker-compose.yml`: Dienste `db` (MySQL 8.0 mit Healthcheck), `web` (Port
-  `HTTP_PORT`, Standard 8080) und `phpmyadmin` (Port `PMA_PORT`, Standard 8081, per
-  HTTP Basic Auth geschützt). Volumes: `db_data`, `doc_uploads`, `sd_output`.
+  `HTTP_PORT`, Standard 8080), `docconvert` (interner Konverter) und `phpmyadmin`
+  (Port `PMA_PORT`, Standard 8081, per HTTP Basic Auth geschützt). Volumes:
+  `db_data`, `doc_uploads`, `sd_output`, `docconvert_cache`.
 - `.env.example`: `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_ROOT_PASS`, `HTTP_PORT`,
-  `PMA_PORT`, `PMA_BASIC_AUTH_USER`, `PMA_BASIC_AUTH_PASSWORD`, `TZ`.
+  `PMA_PORT`, `PMA_BASIC_AUTH_USER`, `PMA_BASIC_AUTH_PASSWORD`, `TZ`,
+  `DOCCONVERT_URL`, `DOCCONVERT_TOKEN`, `DOCCONVERT_TIMEOUT`,
+  `DOCCONVERT_CACHE_TTL`, `DOCCONVERT_MAX_BYTES`, `DOCCONVERT_MAX_CHARS`,
+  `DOCCONVERT_OVERLAP`, `DOCCONVERT_CACHE_MAX`.
 
 ---
 

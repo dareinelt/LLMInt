@@ -650,9 +650,10 @@ function scoreRagChunk(string $chunkText, string $query, array $terms): float
 
 /**
  * Returns true when at least one analysed document upload is available
- * for the current user (own uploads or globally shared uploads).
+ * for the current user (own uploads, globally shared uploads, or documents
+ * attached to the current chat session via the paperclip button).
  */
-function hasDocumentUploads(?int $userId): bool
+function hasDocumentUploads(?int $userId, string $chatSessionId = ''): bool
 {
     if ($userId === null || $userId <= 0) {
         return false;
@@ -662,15 +663,102 @@ function hasDocumentUploads(?int $userId): bool
             "SELECT COUNT(*)
                FROM document_uploads
               WHERE status = 'done'
-                AND chunk_count > 0"
-                . " AND (user_id = ? OR is_global_rag = 1)"
+                AND chunk_count > 0
+                AND (user_id = ? OR is_global_rag = 1)
+                AND (chat_session_id IS NULL OR is_global_rag = 1 OR chat_session_id = ?)"
         );
-        $stmt->execute([$userId]);
+        $stmt->execute([$userId, $chatSessionId]);
         $count = (int) $stmt->fetchColumn();
         return $count > 0;
     } catch (Throwable $e) {
         return false;
     }
+}
+
+/**
+ * List the documents the user attached to the given chat session.
+ *
+ * Used to tell the model which files belong to the conversation it is
+ * currently answering in.
+ *
+ * @return array<int,array{id:int,name:string,chunk_count:int,extracted_text:string}>
+ */
+function listChatSessionDocuments(?int $userId, string $chatSessionId, bool $withText = false): array
+{
+    if ($userId === null || $userId <= 0 || $chatSessionId === '') {
+        return [];
+    }
+
+    try {
+        $columns = 'id, original_name, chunk_count' . ($withText ? ', extracted_text' : '');
+        $stmt = getDb()->prepare(
+            "SELECT {$columns}
+               FROM document_uploads
+              WHERE user_id = ?
+                AND chat_session_id = ?
+                AND status = 'done'
+              ORDER BY uploaded_at ASC
+              LIMIT 20"
+        );
+        $stmt->execute([$userId, $chatSessionId]);
+        $rows = $stmt->fetchAll();
+    } catch (Throwable $e) {
+        return [];
+    }
+
+    return array_map(static function (array $row) use ($withText): array {
+        return [
+            'id'             => (int) ($row['id'] ?? 0),
+            'name'           => (string) ($row['original_name'] ?? 'Dokument'),
+            'chunk_count'    => (int) ($row['chunk_count'] ?? 0),
+            'extracted_text' => $withText ? (string) ($row['extracted_text'] ?? '') : '',
+        ];
+    }, $rows ?: []);
+}
+
+/**
+ * Build the system message that makes documents attached to the current chat
+ * visible to the model.
+ *
+ * With tool calling available the note stays short and points at
+ * query_documents. Without tool calling (e.g. plain llama.cpp endpoints) the
+ * extracted text is inlined up to $inlineBudget characters so attached
+ * documents are still usable in the conversation.
+ */
+function buildChatDocumentSystemPrompt(array $documents, bool $toolsAvailable, int $inlineBudget = 24000): string
+{
+    if (empty($documents)) {
+        return '';
+    }
+
+    $names = array_map(
+        static fn(array $doc): string => '"' . $doc['name'] . '"',
+        $documents
+    );
+
+    if ($toolsAvailable) {
+        return 'An diesen Chat sind folgende Dokumente angehängt: ' . implode(', ', $names) . '. '
+             . 'Nutze das Werkzeug "query_documents", um ihren Inhalt gezielt zu durchsuchen, '
+             . 'bevor du Fragen dazu beantwortest, und nenne das Dokument, aus dem eine Information stammt.';
+    }
+
+    // No tool calling: inline the extracted text, fairly shared between files.
+    $perDocument = (int) max(1000, $inlineBudget / max(1, count($documents)));
+    $parts = ['An diesen Chat sind folgende Dokumente angehängt. Nutze ihren Inhalt zur Beantwortung '
+            . 'und nenne das Dokument, aus dem eine Information stammt.'];
+
+    foreach ($documents as $doc) {
+        $text = trim((string) $doc['extracted_text']);
+        if ($text === '') {
+            continue;
+        }
+        if (mb_strlen($text) > $perDocument) {
+            $text = mb_substr($text, 0, $perDocument) . "\n[… gekürzt]";
+        }
+        $parts[] = '--- Dokument "' . $doc['name'] . '" ---' . "\n" . $text;
+    }
+
+    return count($parts) > 1 ? implode("\n\n", $parts) : '';
 }
 
 function createDocumentQueryToolDefinition(): array
@@ -679,7 +767,7 @@ function createDocumentQueryToolDefinition(): array
         'type' => 'function',
         'function' => [
             'name' => 'query_documents',
-            'description' => 'Durchsucht analysierte Dokumente (eigene Uploads sowie global freigegebene Uploads anderer Nutzer) per chunk-basierter RAG-Suche. Gib in deiner Antwort an, aus welchem Dokument die Informationen stammen.',
+            'description' => 'Durchsucht analysierte Dokumente (an diesen Chat angehängte Uploads, eigene Uploads sowie global freigegebene Uploads anderer Nutzer) per chunk-basierter RAG-Suche. An den aktuellen Chat angehängte Dokumente werden bevorzugt. Gib in deiner Antwort an, aus welchem Dokument die Informationen stammen.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -706,9 +794,13 @@ function createDocumentQueryToolDefinition(): array
  *
  * Falls back to plain BM25 when embeddings or the reranker are unavailable.
  *
+ * Documents attached to $chatSessionId (paperclip upload inside the chat) are
+ * loaded first and receive a relevance boost, so the conversation's own files
+ * win over the global knowledge base.
+ *
  * Returns an array with matching document excerpts.
  */
-function queryDocuments(string $query, ?int $userId): array
+function queryDocuments(string $query, ?int $userId, string $chatSessionId = ''): array
 {
     $query = trim($query);
     if ($query === '') {
@@ -739,18 +831,22 @@ function queryDocuments(string $query, ?int $userId): array
         // ── Step 1: Load chunk candidates ────────────────────────────────────
         // When hybrid search is on and embeddings exist, also fetch the stored
         // embedding so we can compute cosine similarity in PHP.
+        // Documents attached to the current chat session are listed first so
+        // they always survive the candidate LIMIT.
         $selectEmbedding = ($hybridEnabled && $embeddingEnabled) ? ', dc.embedding' : '';
         $stmt = $db->prepare(
             "SELECT du.id AS document_id, du.original_name,
+                    (du.chat_session_id <=> ?) AS is_session_document,
                     dc.id AS chunk_id, dc.chunk_index, dc.chunk_text{$selectEmbedding}
                FROM document_chunks dc
                JOIN document_uploads du ON du.id = dc.document_upload_id
               WHERE du.status = 'done'
                 AND (du.user_id = ? OR du.is_global_rag = 1)
-              ORDER BY du.uploaded_at DESC, dc.chunk_index ASC
+                AND (du.chat_session_id IS NULL OR du.is_global_rag = 1 OR du.chat_session_id = ?)
+              ORDER BY is_session_document DESC, du.uploaded_at DESC, dc.chunk_index ASC
               LIMIT {$chunkLimit}"
         );
-        $stmt->execute([$userId]);
+        $stmt->execute([$chatSessionId, $userId, $chatSessionId]);
         $rows = $stmt->fetchAll();
 
         if (empty($rows)) {
@@ -772,6 +868,12 @@ function queryDocuments(string $query, ?int $userId): array
             if ($score <= 0.0) {
                 continue;
             }
+            // Files the user attached to this very conversation are the most
+            // likely intent, so they outrank equally scored knowledge base hits.
+            $isSessionDocument = (int) ($row['is_session_document'] ?? 0) === 1;
+            if ($isSessionDocument) {
+                $score *= 1.5;
+            }
             $bm25Results[] = [
                 'document_id'  => (int) ($row['document_id'] ?? 0),
                 'document'     => (string) ($row['original_name'] ?? 'Unbekannt'),
@@ -780,6 +882,7 @@ function queryDocuments(string $query, ?int $userId): array
                 'chunk_text'   => $chunkText,
                 'content'      => buildRagSnippet($chunkText, $terms),
                 'bm25_score'   => $score,
+                'session_document' => $isSessionDocument,
                 'embedding'    => $row['embedding'] ?? null,
             ];
         }
@@ -836,6 +939,7 @@ function queryDocuments(string $query, ?int $userId): array
                         'chunk_index' => (int) ($row['chunk_index'] ?? 0),
                         'chunk_text'  => $chunkText,
                         'content'     => buildRagSnippet($chunkText, $terms),
+                        'session_document' => (int) ($row['is_session_document'] ?? 0) === 1,
                         'sim_score'   => $sim,
                     ];
                 }
@@ -913,6 +1017,7 @@ function queryDocuments(string $query, ?int $userId): array
         $results = array_map(static function (array $row): array {
             return [
                 'document'  => $row['document'],
+                'attached_to_chat' => (bool) ($row['session_document'] ?? false),
                 'chunk'     => $row['chunk_index'] + 1,
                 'relevance' => round((float) ($row['rrf_score'] ?? $row['bm25_score'] ?? 0.0), 4),
                 'content'   => $row['content'],
@@ -1289,6 +1394,61 @@ function messageContentHasImage(mixed $content): bool
         }
     }
     return false;
+}
+
+/**
+ * Remove every "image_url" content part from a message list.
+ *
+ * Attaching images (and documents) is a feature reserved for logged-in users;
+ * anonymous visitors may only chat with plain text. The client already hides
+ * the buttons, but the request payload is user-controlled, so the server has to
+ * enforce it as well.
+ *
+ * @param array $messages OpenAI-style message list.
+ *
+ * @return array{0:array,1:bool} Cleaned message list and whether anything was removed.
+ */
+function stripImageContentParts(array $messages): array
+{
+    $removed = false;
+
+    foreach ($messages as $idx => $msg) {
+        $content = $msg['content'] ?? null;
+        if (!is_array($content)) {
+            continue;
+        }
+
+        $kept = [];
+        foreach ($content as $part) {
+            if (is_array($part) && ($part['type'] ?? '') === 'image_url') {
+                $removed = true;
+                continue;
+            }
+            $kept[] = $part;
+        }
+
+        if (!$removed) {
+            continue;
+        }
+
+        // Collapse a pure-text remainder back into a plain string so downstream
+        // code (token counting, persistence, endpoints without vision support)
+        // sees an ordinary text message.
+        $textOnly = '';
+        $isTextOnly = true;
+        foreach ($kept as $part) {
+            if (is_array($part) && ($part['type'] ?? '') === 'text' && isset($part['text'])) {
+                $textOnly .= (string) $part['text'];
+            } else {
+                $isTextOnly = false;
+                break;
+            }
+        }
+
+        $messages[$idx]['content'] = $isTextOnly ? $textOnly : $kept;
+    }
+
+    return [$messages, $removed];
 }
 
 /**
@@ -2019,6 +2179,15 @@ foreach ($payload['messages'] as $msg) {
 
 $model = $payload['model'];
 
+// Anonymous visitors may only chat with plain text – image attachments (and the
+// document upload behind them) require a logged-in account.
+if (!isset($_SESSION['admin_id'])) {
+    [$payload['messages'], $strippedImages] = stripImageContentParts($payload['messages']);
+    if ($strippedImages) {
+        writeLog('warning', 'Bildanhang eines nicht angemeldeten Nutzers (' . getClientIp() . ') wurde verworfen.');
+    }
+}
+
 // Whether this request attaches at least one image – only vision-capable
 // endpoints may be selected for it (see admin endpoint config "Vision-fähig").
 $requiresVision = payloadMessagesHaveImage($payload['messages']);
@@ -2579,7 +2748,7 @@ if (!empty($endpoint['is_llamacpp'])) {
 $useSearchTool   = $searxngBaseUrl !== '' && $endpointSupportsToolCalling;
 $useSdTool       = hasSdEndpoints() && $endpointSupportsToolCalling;
 $useComfyTool    = hasComfyEndpoints() && $endpointSupportsToolCalling;
-$useDocQueryTool = hasDocumentUploads($sessionUserId) && $endpointSupportsToolCalling;
+$useDocQueryTool = hasDocumentUploads($sessionUserId, $sessionId) && $endpointSupportsToolCalling;
 $useTools        = $useSearchTool || $useSdTool || $useComfyTool || $useDocQueryTool;
 if ($openAiToolMode === 'disabled') {
     $useSearchTool = false;
@@ -2599,6 +2768,15 @@ $llmMessages = $payload['messages'];
 $globalSystemPrompt = getGlobalSystemPrompt();
 if ($globalSystemPrompt !== '') {
     array_unshift($llmMessages, ['role' => 'system', 'content' => $globalSystemPrompt]);
+}
+// Documents the user attached to this conversation (paperclip button in the
+// composer). With tool calling the model is pointed at query_documents; without
+// it the extracted text is inlined so the files are still usable in the chat.
+$chatDocuments = listChatSessionDocuments($sessionUserId, $sessionId, !$useDocQueryTool);
+$chatDocumentPrompt = buildChatDocumentSystemPrompt($chatDocuments, $useDocQueryTool);
+if ($chatDocumentPrompt !== '') {
+    array_unshift($llmMessages, ['role' => 'system', 'content' => $chatDocumentPrompt]);
+    writeLog('info', count($chatDocuments) . ' an den Chat angehängte Dokument(e) im Kontext berücksichtigt.');
 }
 // Always tell the upstream model the current date and time. This notice is
 // hard-coded and therefore stays in place regardless of how the configurable
@@ -2990,7 +3168,7 @@ if ($useTools) {
             } elseif ($toolName === 'query_documents' && $useDocQueryTool) {
                 $args  = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
                 $query = trim((string) ($args['query'] ?? ''));
-                $toolResult = queryDocuments($query, $sessionUserId);
+                $toolResult = queryDocuments($query, $sessionUserId, $sessionId);
             }
 
             logToolResult($toolName, $toolResult);

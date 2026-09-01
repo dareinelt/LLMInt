@@ -3,15 +3,24 @@
 /**
  * api/upload_document.php
  *
- * Handles document uploads and triggers vision-model analysis.
+ * Handles document uploads and turns them into RAG chunks.
  *
  * POST multipart/form-data:
- *   file          – The uploaded file (PNG, JPG, JPEG, WEBP, GIF, PDF)
+ *   file          – The uploaded file (see the format table below)
  *   csrf_token    – CSRF token from the session
  *   global_rag    – "1" for globally shareable RAG usage, else "0"
+ *   session_id    – Optional chat session ID; the upload is then attached to
+ *                   that conversation and usable inside it right away
  *
- * Requires an active user session with can_upload_documents = 1 (or is admin).
- * Returns JSON { ok, message, id? }.
+ * Supported formats:
+ *   Images (PNG/JPG/WEBP/GIF)  → vision model analysis
+ *   PDF                        → pages rendered to images (pdftoppm) and analysed
+ *                                page by page with the vision model; falls back
+ *                                to the pdftotext text layer
+ *   Office & text documents    → docconvert service (see api/doc_convert.php)
+ *
+ * Requires an active user session with can_upload_documents = 1.
+ * Returns JSON { ok, message, id?, chunk_count?, document? }.
  */
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -29,6 +38,11 @@ if (!isset($_SESSION['admin_id'])) {
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/embedding.php';
+require_once __DIR__ . '/doc_convert.php';
+require_once __DIR__ . '/pdf_render.php';
+require_once __DIR__ . '/vision.php';
+
+// ── Text helpers ──────────────────────────────────────────────────────────────
 
 function normalizeDocumentText(string $text): string
 {
@@ -87,7 +101,10 @@ function buildDocumentChunks(string $text, int $maxChars = 1800, int $overlapCha
         $chunks[] = $current;
     }
 
-    return array_values(array_filter(array_map(static fn($chunk) => trim($chunk), $chunks), static fn($chunk) => $chunk !== ''));
+    return array_values(array_filter(
+        array_map(static fn($chunk) => trim($chunk), $chunks),
+        static fn($chunk) => $chunk !== ''
+    ));
 }
 
 function persistDocumentChunks(PDO $db, int $uploadId, int $userId, array $chunks): int
@@ -97,51 +114,13 @@ function persistDocumentChunks(PDO $db, int $uploadId, int $userId, array $chunk
         return 0;
     }
 
-    function extractPdfText(string $pdfPath): array
-    {
-        if (!function_exists('proc_open')) {
-            return ['ok' => false, 'error' => 'PDF-Verarbeitung nicht verfügbar (proc_open deaktiviert).'];
-        }
-
-        $cmd = 'pdftotext -enc UTF-8 -q ' . escapeshellarg($pdfPath) . ' -';
-        $descriptorspec = [
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ];
-        $process = @proc_open($cmd, $descriptorspec, $pipes);
-        if (!is_resource($process)) {
-            return ['ok' => false, 'error' => 'PDF-Verarbeitung fehlgeschlagen (pdftotext nicht verfügbar).'];
-        }
-
-        $stdout = stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
-        fclose($pipes[2]);
-        $exitCode = proc_close($process);
-
-        if ($exitCode !== 0) {
-            $err = trim((string) $stderr);
-            if ($err === '') {
-                $err = 'PDF konnte nicht gelesen werden.';
-            }
-            return ['ok' => false, 'error' => $err];
-        }
-
-        $text = normalizeDocumentText((string) $stdout);
-        if ($text === '') {
-            return ['ok' => false, 'error' => 'PDF enthält keinen auslesbaren Text.'];
-        }
-
-        return ['ok' => true, 'text' => $text];
-    }
-
     $insert = $db->prepare(
         'INSERT INTO document_chunks (document_upload_id, user_id, chunk_index, chunk_text, created_at)
          VALUES (?, ?, ?, ?, NOW(3))'
     );
 
     $count = 0;
-    foreach ($chunks as $index => $chunkText) {
+    foreach (array_values($chunks) as $index => $chunkText) {
         $insert->execute([$uploadId, $userId, $index, $chunkText]);
         $count++;
     }
@@ -149,10 +128,305 @@ function persistDocumentChunks(PDO $db, int $uploadId, int $userId, array $chunk
     return $count;
 }
 
+/**
+ * Extract the text layer of a PDF using poppler's pdftotext.
+ *
+ * @return array{ok:bool,text?:string,error?:string}
+ */
+function extractPdfText(string $pdfPath): array
+{
+    if (!function_exists('proc_open')) {
+        return ['ok' => false, 'error' => 'PDF-Verarbeitung nicht verfügbar (proc_open deaktiviert).'];
+    }
+
+    $cmd = 'pdftotext -enc UTF-8 -q ' . escapeshellarg($pdfPath) . ' -';
+    $descriptorspec = [
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $process = @proc_open($cmd, $descriptorspec, $pipes);
+    if (!is_resource($process)) {
+        return ['ok' => false, 'error' => 'PDF-Verarbeitung fehlgeschlagen (pdftotext nicht verfügbar).'];
+    }
+
+    $stdout = stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($process);
+
+    if ($exitCode !== 0) {
+        $err = trim((string) $stderr);
+        if ($err === '') {
+            $err = 'PDF konnte nicht gelesen werden.';
+        }
+        return ['ok' => false, 'error' => $err];
+    }
+
+    $text = normalizeDocumentText((string) $stdout);
+    if ($text === '') {
+        return ['ok' => false, 'error' => 'PDF enthält keinen auslesbaren Text.'];
+    }
+
+    return ['ok' => true, 'text' => $text];
+}
+
+/**
+ * Convert a PDF into page images and let the vision model read every page.
+ *
+ * Scanned PDFs and PDFs whose layout carries the meaning (tables, forms,
+ * diagrams) cannot be handled by pdftotext, so each page is rasterised with
+ * pdftoppm and sent to the vision model individually. The text layer of a page
+ * – when present – is used as a fallback whenever the vision call fails, so a
+ * single failing page never loses the whole document.
+ *
+ * @return array{ok:bool,text?:string,chunks?:string[],pages?:int,
+ *               analyzed?:int,truncated?:bool,error?:string}
+ */
+function analyzePdfWithVision(string $pdfPath): array
+{
+    if (!visionModelConfigured()) {
+        return ['ok' => false, 'error' => 'Kein Vision-Modell konfiguriert.'];
+    }
+
+    $render = renderPdfPagesToImages($pdfPath, pdfVisionMaxPages(), pdfVisionDpi());
+    if (!($render['ok'] ?? false)) {
+        return ['ok' => false, 'error' => (string) ($render['error'] ?? 'PDF-Rendering fehlgeschlagen.')];
+    }
+
+    $dir        = (string) $render['dir'];
+    $pages      = (array) $render['pages'];
+    $totalPages = (int) $render['total_pages'];
+    $truncated  = (bool) ($render['truncated'] ?? false);
+
+    $sections   = [];
+    $chunks     = [];
+    $analyzed   = 0;
+    $lastError  = '';
+
+    try {
+        foreach ($pages as $entry) {
+            $pageNo = (int) $entry['page'];
+            $label  = 'Seite ' . $pageNo . ' von ' . $totalPages;
+
+            $prompt = 'Dies ist ' . $label . ' eines PDF-Dokuments. '
+                    . 'Gib den gesamten Inhalt dieser Seite vollständig und strukturiert wieder: '
+                    . 'sämtlichen Text wortgetreu, Tabellen als Markdown-Tabelle, '
+                    . 'Diagramme und Abbildungen als sachliche Beschreibung inklusive aller ablesbaren Werte. '
+                    . 'Erfinde nichts und kommentiere nicht. Verwende Deutsch.';
+
+            $result = analyzeImageWithVision($entry['path'], 'image/jpeg', $prompt);
+
+            if ($result['ok'] ?? false) {
+                $pageText = normalizeDocumentText((string) ($result['text'] ?? ''));
+                $analyzed++;
+            } else {
+                $lastError = (string) ($result['error'] ?? 'Vision-Analyse fehlgeschlagen.');
+                writeLog('warning', 'Vision-Analyse für ' . $label . ' fehlgeschlagen: ' . $lastError);
+                // Fall back to the embedded text layer of this page.
+                $pageText = normalizeDocumentText(extractPdfPageText($pdfPath, $pageNo));
+                if ($pageText !== '') {
+                    $pageText = "(Vision-Analyse nicht möglich – Textebene der Seite)\n" . $pageText;
+                }
+            }
+
+            if ($pageText === '') {
+                continue;
+            }
+
+            $sections[] = '[' . $label . ']' . "\n" . $pageText;
+
+            // One or more chunks per page, each carrying its page reference so
+            // the source stays visible in RAG answers.
+            foreach (buildDocumentChunks($pageText) as $chunk) {
+                $chunks[] = '[' . $label . ']' . "\n" . $chunk;
+            }
+        }
+    } finally {
+        cleanupPdfRenderDir($dir);
+    }
+
+    if (empty($sections)) {
+        return [
+            'ok'    => false,
+            'error' => $lastError !== ''
+                ? 'PDF-Analyse fehlgeschlagen: ' . $lastError
+                : 'Aus dem PDF konnten keine Inhalte gewonnen werden.',
+        ];
+    }
+
+    $text = implode("\n\n", $sections);
+    if ($truncated) {
+        $text .= "\n\n[Hinweis: Es wurden nur die ersten " . count($pages) . ' von ' . $totalPages
+               . ' Seiten analysiert (Limit im Adminbereich konfigurierbar).]';
+    }
+
+    return [
+        'ok'        => true,
+        'text'      => $text,
+        'chunks'    => $chunks,
+        'pages'     => $totalPages,
+        'analyzed'  => $analyzed,
+        'truncated' => $truncated,
+    ];
+}
+
+/**
+ * Decide how an upload has to be processed.
+ *
+ * finfo reports many text-based formats as text/plain, so for everything the
+ * converter handles the original file name decides; the detected MIME type is
+ * used as a plausibility check and as a fallback.
+ *
+ * @return array{ok:bool,kind?:string,ext?:string,message?:string}
+ */
+function resolveUploadKind(string $mimeType, string $originalName): array
+{
+    $imageMimes = [
+        'image/png'  => 'png',
+        'image/jpeg' => 'jpg',
+        'image/jpg'  => 'jpg',
+        'image/webp' => 'webp',
+        'image/gif'  => 'gif',
+    ];
+
+    if (isset($imageMimes[$mimeType])) {
+        return ['ok' => true, 'kind' => 'image', 'ext' => $imageMimes[$mimeType]];
+    }
+    if ($mimeType === 'application/pdf') {
+        return ['ok' => true, 'kind' => 'pdf', 'ext' => 'pdf'];
+    }
+
+    $nameExt   = strtolower((string) pathinfo($originalName, PATHINFO_EXTENSION));
+    $mimeMap   = docConvertMimeMap();
+    $knownExts = docConvertExtensions();
+
+    // Generic container types that legitimately carry Office or text payloads.
+    $genericMimes = [
+        'application/zip',
+        'application/octet-stream',
+        'application/x-ole-storage',
+        'application/vnd.ms-office',
+        'application/CDFV2',
+    ];
+
+    $mimeIsPlausible = isset($mimeMap[$mimeType])
+        || str_starts_with($mimeType, 'text/')
+        || in_array($mimeType, $genericMimes, true);
+
+    if (in_array($nameExt, $knownExts, true) && $mimeIsPlausible) {
+        return ['ok' => true, 'kind' => 'document', 'ext' => $nameExt];
+    }
+
+    if (isset($mimeMap[$mimeType])) {
+        return ['ok' => true, 'kind' => 'document', 'ext' => $mimeMap[$mimeType]];
+    }
+
+    if ($nameExt === 'doc' || $nameExt === 'ppt') {
+        return [
+            'ok'      => false,
+            'message' => 'Alte Office-Formate (.doc/.ppt) werden nicht unterstützt. '
+                       . 'Bitte als .docx/.pptx oder PDF speichern.',
+        ];
+    }
+
+    return [
+        'ok'      => false,
+        'message' => 'Nicht unterstütztes Dateiformat. Erlaubt sind: PNG, JPG, WEBP, GIF, PDF, '
+                   . 'DOCX, XLSX, XLS, PPTX, ODT, ODS, ODP, RTF, CSV, TSV, TXT, MD, JSON, XML, HTML, YAML.',
+    ];
+}
+
+/**
+ * Mark an upload as failed and answer the request.
+ */
+function failUpload(PDO $db, int $uploadId, string $message): void
+{
+    $db->prepare(
+        "UPDATE document_uploads
+            SET status = 'error',
+                error_message = ?,
+                processed_at = NOW(3)
+          WHERE id = ?"
+    )->execute([$message, $uploadId]);
+
+    writeLog('warning', 'Dokument-Upload ' . $uploadId . ' fehlgeschlagen: ' . $message);
+
+    echo json_encode(['ok' => false, 'id' => $uploadId, 'message' => $message], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/**
+ * Store extracted text + chunks, kick off embeddings and answer the request.
+ *
+ * @param string[] $chunks Chunks provided by the converter; when empty, the
+ *                         local paragraph chunker is used.
+ */
+function finishUpload(PDO $db, int $uploadId, int $userId, string $text, array $chunks, string $message): void
+{
+    $text = normalizeDocumentText($text);
+    if (empty($chunks)) {
+        $chunks = buildDocumentChunks($text);
+    }
+
+    if ($text === '' && empty($chunks)) {
+        failUpload($db, $uploadId, 'Die Datei enthält keinen auslesbaren Text.');
+    }
+
+    $chunkCount = 0;
+    try {
+        $chunkCount = persistDocumentChunks($db, $uploadId, $userId, $chunks);
+    } catch (Throwable $e) {
+        writeLog('warning', 'Chunks konnten nicht gespeichert werden (Upload ' . $uploadId . '): ' . $e->getMessage());
+        $chunkCount = 0;
+    }
+
+    $db->prepare(
+        "UPDATE document_uploads
+            SET status = 'done',
+                extracted_text = ?,
+                chunk_count = ?,
+                error_message = NULL,
+                processed_at = NOW(3)
+          WHERE id = ?"
+    )->execute([$text, $chunkCount, $uploadId]);
+
+    // Embeddings are best-effort: an unavailable embedding server must never
+    // make the upload itself fail (BM25 search still works).
+    try {
+        generateAndStoreChunkEmbeddings($db, $uploadId);
+    } catch (Throwable $e) {
+        writeLog('warning', 'Embedding-Erzeugung nach Upload fehlgeschlagen: ' . $e->getMessage());
+    }
+
+    $row = null;
+    try {
+        $stmt = $db->prepare(
+            'SELECT id, original_name, mime_type, file_size, status, chunk_count, is_global_rag,
+                    chat_session_id, error_message, uploaded_at, processed_at
+               FROM document_uploads WHERE id = ? LIMIT 1'
+        );
+        $stmt->execute([$uploadId]);
+        $row = $stmt->fetch() ?: null;
+    } catch (Throwable $e) {
+        $row = null;
+    }
+
+    echo json_encode([
+        'ok'          => true,
+        'id'          => $uploadId,
+        'message'     => $message,
+        'chunk_count' => $chunkCount,
+        'document'    => $row,
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+// ── Request validation ────────────────────────────────────────────────────────
+
 $userId = (int) $_SESSION['admin_id'];
 $db     = getDb();
 
-// Check permission.
 $stmt = $db->prepare('SELECT can_upload_documents FROM users WHERE id = ? LIMIT 1');
 $stmt->execute([$userId]);
 $user = $stmt->fetch();
@@ -163,15 +437,13 @@ if (!$user || !(int) ($user['can_upload_documents'] ?? 0)) {
     exit;
 }
 
-// CSRF check.
 $csrf = $_POST['csrf_token'] ?? '';
-if (empty($_SESSION['csrf_token']) || $csrf !== $_SESSION['csrf_token']) {
+if (empty($_SESSION['csrf_token']) || !hash_equals((string) $_SESSION['csrf_token'], (string) $csrf)) {
     http_response_code(403);
     echo json_encode(['ok' => false, 'message' => 'Ungültiger CSRF-Token.']);
     exit;
 }
 
-// File upload check.
 if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
     $errCode = $_FILES['file']['error'] ?? -1;
     $errMsg  = match ($errCode) {
@@ -189,39 +461,50 @@ $tmpPath      = $file['tmp_name'];
 $fileSize     = (int) $file['size'];
 $globalRag    = isset($_POST['global_rag']) && (string) $_POST['global_rag'] === '1' ? 1 : 0;
 
-// Allowed MIME types.
-$allowedMimes = [
-    'image/png'       => 'png',
-    'image/jpeg'      => 'jpg',
-    'image/jpg'       => 'jpg',
-    'image/webp'      => 'webp',
-    'image/gif'       => 'gif',
-    'application/pdf' => 'pdf',
-];
+// Optional chat session the document is attached to, so it can be used inside
+// that conversation immediately (see queryDocuments() in api/chat.php).
+$chatSessionId = null;
+if (isset($_POST['session_id']) && is_string($_POST['session_id'])
+    && preg_match('/^[a-f0-9]{8,128}$/', $_POST['session_id'])) {
+    $chatSessionId = $_POST['session_id'];
+}
 
-// Detect MIME type from file content (more reliable than client-reported).
+// Detect the MIME type from the file content (more reliable than client-reported).
 $finfo    = new finfo(FILEINFO_MIME_TYPE);
-$mimeType = $finfo->file($tmpPath);
+$mimeType = (string) $finfo->file($tmpPath);
 
-if (!isset($allowedMimes[$mimeType])) {
-    echo json_encode(['ok' => false, 'message' => 'Nicht unterstütztes Dateiformat. Erlaubt sind: PNG, JPG, WEBP, GIF, PDF.']);
+$kind = resolveUploadKind($mimeType, $originalName);
+if (!($kind['ok'] ?? false)) {
+    echo json_encode(['ok' => false, 'message' => (string) $kind['message']], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-// Size limit: 20 MB.
-if ($fileSize > 20 * 1024 * 1024) {
-    echo json_encode(['ok' => false, 'message' => 'Die Datei ist zu groß (max. 20 MB).']);
+if ($kind['kind'] === 'document' && !docConvertEnabled()
+    && !in_array($kind['ext'], docConvertLocalFallbackExtensions(), true)) {
+    echo json_encode([
+        'ok'      => false,
+        'message' => 'Der Dokumentkonverter ist nicht konfiguriert. Office-Dokumente können derzeit nicht verarbeitet werden.',
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-// Store file.
-$uploadDir  = __DIR__ . '/../doc_uploads';
+$maxBytes = max(1, (int) getSetting('upload_max_mb', '20')) * 1024 * 1024;
+if ($fileSize > $maxBytes) {
+    echo json_encode([
+        'ok'      => false,
+        'message' => 'Die Datei ist zu groß (max. ' . (int) ($maxBytes / 1024 / 1024) . ' MB).',
+    ]);
+    exit;
+}
+
+// ── Store the file ────────────────────────────────────────────────────────────
+
+$uploadDir = __DIR__ . '/../doc_uploads';
 if (!is_dir($uploadDir)) {
     mkdir($uploadDir, 0755, true);
 }
 
-$ext        = $allowedMimes[$mimeType];
-$storedName = 'doc_' . bin2hex(random_bytes(16)) . '.' . $ext;
+$storedName = 'doc_' . bin2hex(random_bytes(16)) . '.' . $kind['ext'];
 $storedPath = $uploadDir . '/' . $storedName;
 
 if (!move_uploaded_file($tmpPath, $storedPath)) {
@@ -229,260 +512,102 @@ if (!move_uploaded_file($tmpPath, $storedPath)) {
     exit;
 }
 
-// Create DB record with status 'processing'.
 $db->prepare(
-    "INSERT INTO document_uploads (user_id, original_name, stored_name, mime_type, file_size, is_global_rag, status, uploaded_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'processing', NOW(3))"
-)->execute([$userId, $originalName, $storedName, $mimeType, $fileSize, $globalRag]);
+    "INSERT INTO document_uploads
+        (user_id, original_name, stored_name, mime_type, file_size, is_global_rag, chat_session_id, status, uploaded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', NOW(3))"
+)->execute([$userId, $originalName, $storedName, $mimeType, $fileSize, $globalRag, $chatSessionId]);
 
 $uploadId = (int) $db->lastInsertId();
 
-// Release session lock so other requests are not blocked during analysis.
+// Release the session lock so other requests are not blocked during analysis.
 session_write_close();
 
-if ($mimeType === 'application/pdf') {
-    $pdfResult = extractPdfText($storedPath);
-    if (!($pdfResult['ok'] ?? false)) {
-        $db->prepare(
-            "UPDATE document_uploads
-                SET status = 'error',
-                    error_message = ?,
-                    processed_at = NOW(3)
-              WHERE id = ?"
-        )->execute([(string) ($pdfResult['error'] ?? 'PDF-Verarbeitung fehlgeschlagen.'), $uploadId]);
+// ── Office & text documents ───────────────────────────────────────────────────
 
-        echo json_encode([
-            'ok'      => false,
-            'id'      => $uploadId,
-            'message' => (string) ($pdfResult['error'] ?? 'PDF-Verarbeitung fehlgeschlagen.'),
-        ]);
-        exit;
+if ($kind['kind'] === 'document') {
+    $result = ['ok' => false, 'message' => 'Der Dokumentkonverter ist nicht konfiguriert.'];
+    if (docConvertEnabled()) {
+        $result = convertDocumentViaService($storedPath, $originalName, $mimeType);
     }
 
-    $content = (string) ($pdfResult['text'] ?? '');
-    $chunks = buildDocumentChunks($content);
-    $chunkCount = 0;
-    try {
-        $chunkCount = persistDocumentChunks($db, $uploadId, $userId, $chunks);
-    } catch (Throwable $_e) {
-        $chunkCount = 0;
-    }
-
-    $db->prepare(
-        "UPDATE document_uploads
-            SET status = 'done',
-                extracted_text = ?,
-                chunk_count = ?,
-                processed_at = NOW(3)
-          WHERE id = ?"
-    )->execute([$content, $chunkCount, $uploadId]);
-
-    // Generate embeddings asynchronously (errors must not abort the upload).
-    try {
-        generateAndStoreChunkEmbeddings($db, $uploadId);
-    } catch (Throwable $_e) {
-        writeLog('warning', 'Embedding-Erzeugung nach PDF-Upload fehlgeschlagen: ' . $_e->getMessage());
-    }
-
-    echo json_encode([
-        'ok'      => true,
-        'id'      => $uploadId,
-        'message' => 'PDF erfolgreich verarbeitet.',
-    ]);
-    exit;
-}
-
-// ── Vision model analysis ─────────────────────────────────────────────────────
-
-$visionModel = trim(getSetting('vision_model', ''));
-
-if ($visionModel === '') {
-    // No vision model configured – store file but skip analysis.
-    $db->prepare(
-        "UPDATE document_uploads
-            SET status = 'error',
-                error_message = 'Kein Vision-Modell konfiguriert. Bitte im Adminbereich unter Anfragenhandling ein Vision-Modell auswählen.',
-                processed_at = NOW(3)
-          WHERE id = ?"
-    )->execute([$uploadId]);
-
-    echo json_encode([
-        'ok'      => false,
-        'id'      => $uploadId,
-        'message' => 'Kein Vision-Modell konfiguriert. Bitte im Adminbereich unter Anfragenhandling ein Vision-Modell auswählen.',
-    ]);
-    exit;
-}
-
-// Pick an endpoint that serves the vision model.
-require_once __DIR__ . '/balancer.php';
-
-try {
-    $slot = pickEndpointForModel($visionModel);
-} catch (Throwable $e) {
-    $slot = null;
-}
-
-if ($slot === null) {
-    $db->prepare(
-        "UPDATE document_uploads
-            SET status = 'error',
-                error_message = 'Kein aktiver Endpunkt für das Vision-Modell verfügbar.',
-                processed_at = NOW(3)
-          WHERE id = ?"
-    )->execute([$uploadId]);
-
-    echo json_encode([
-        'ok'      => false,
-        'id'      => $uploadId,
-        'message' => 'Kein aktiver Endpunkt für das Vision-Modell verfügbar.',
-    ]);
-    exit;
-}
-
-$endpoint  = $slot['endpoint'];
-$taskId    = $slot['task_id'];
-$baseUrl   = rtrim($endpoint['base_url'], '/');
-$epTimeout = max(60, (int) $endpoint['timeout']);
-
-// Encode image as base64.
-$imageData   = file_get_contents($storedPath);
-$imageBase64 = base64_encode($imageData);
-$dataUrl     = 'data:' . $mimeType . ';base64,' . $imageBase64;
-
-$visionPayload = [
-    'model'      => $endpoint['default_model'] !== '' ? $endpoint['default_model'] : $visionModel,
-    'stream'     => false,
-    'messages'   => [
-        [
-            'role'    => 'user',
-            'content' => [
-                [
-                    'type'      => 'image_url',
-                    'image_url' => ['url' => $dataUrl],
-                ],
-                [
-                    'type' => 'text',
-                    'text' => 'Extrahiere alle in diesem Dokument enthaltenen Informationen vollständig und strukturiert. '
-                            . 'Gib den vollständigen Textinhalt wieder und liste alle relevanten Daten, Fakten und Details auf. '
-                            . 'Verwende Deutsch.',
-                ],
-            ],
-        ],
-    ],
-    'temperature' => 0.1,
-    'max_tokens'  => -1,
-];
-
-$url = $baseUrl . '/chat/completions';
-$ch  = curl_init($url);
-curl_setopt_array($ch, [
-    CURLOPT_POST           => true,
-    CURLOPT_POSTFIELDS     => json_encode($visionPayload),
-    CURLOPT_HTTPHEADER     => [
-        'Content-Type: application/json',
-        'Accept: application/json',
-    ],
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_TIMEOUT        => $epTimeout,
-]);
-
-$body     = curl_exec($ch);
-$httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-$curlErr  = curl_error($ch);
-curl_close($ch);
-
-if ($curlErr !== '') {
-    try { completeTask($taskId, 'error'); } catch (Throwable $_e) {}
-    $db->prepare(
-        "UPDATE document_uploads
-            SET status = 'error',
-                error_message = ?,
-                processed_at = NOW(3)
-          WHERE id = ?"
-    )->execute(['Verbindungsfehler: ' . $curlErr, $uploadId]);
-
-    echo json_encode([
-        'ok'      => false,
-        'id'      => $uploadId,
-        'message' => 'Vision-Modell nicht erreichbar: ' . $curlErr,
-    ]);
-    exit;
-}
-
-$data = json_decode((string) $body, true);
-
-if ($httpCode !== 200 || !is_array($data)) {
-    $errMsg = isset($data['error']['message'])
-        ? (string) $data['error']['message']
-        : 'Vision-Modell Fehler (HTTP ' . $httpCode . ')';
-    try { completeTask($taskId, 'error'); } catch (Throwable $_e) {}
-    $db->prepare(
-        "UPDATE document_uploads
-            SET status = 'error',
-                error_message = ?,
-                processed_at = NOW(3)
-          WHERE id = ?"
-    )->execute([$errMsg, $uploadId]);
-
-    echo json_encode([
-        'ok'      => false,
-        'id'      => $uploadId,
-        'message' => $errMsg,
-    ]);
-    exit;
-}
-
-// Extract text from response.
-$content = '';
-$msgContent = $data['choices'][0]['message']['content'] ?? '';
-if (is_string($msgContent)) {
-    $content = $msgContent;
-} elseif (is_array($msgContent)) {
-    foreach ($msgContent as $part) {
-        if (is_array($part) && ($part['type'] ?? '') === 'text' && isset($part['text'])) {
-            $content .= $part['text'];
+    if (!($result['ok'] ?? false)) {
+        // Plain-text formats can still be handled without the converter service.
+        $fallback = convertPlainTextLocally($storedPath, (string) $kind['ext']);
+        if ($fallback['ok'] ?? false) {
+            writeLog('info', 'Dokument "' . $originalName . '" über den lokalen Text-Fallback verarbeitet.');
+            finishUpload($db, $uploadId, $userId, (string) $fallback['text'], [], 'Dokument erfolgreich verarbeitet.');
         }
+        failUpload($db, $uploadId, (string) ($result['message'] ?? 'Konvertierung fehlgeschlagen.'));
     }
+
+    $label = trim((string) ($result['label'] ?? ''));
+    finishUpload(
+        $db,
+        $uploadId,
+        $userId,
+        (string) ($result['text'] ?? ''),
+        (array) ($result['chunks'] ?? []),
+        ($label !== '' ? $label : 'Dokument') . ' erfolgreich verarbeitet.'
+    );
 }
 
-// Update task usage.
-$promptTokens     = (int) ($data['usage']['prompt_tokens']     ?? 0);
-$completionTokens = (int) ($data['usage']['completion_tokens'] ?? 0);
-$totalTokens      = (int) ($data['usage']['total_tokens']      ?? 0);
-try {
-    completeTask($taskId, 'done', $promptTokens, $completionTokens, $totalTokens);
-} catch (Throwable $_e) {}
+// ── PDF: rendered to page images and read by the vision model ─────────────────
 
-// Save result.
-$content = normalizeDocumentText($content);
-$chunks = buildDocumentChunks($content);
-$chunkCount = 0;
+if ($kind['kind'] === 'pdf') {
+    // Analysing many pages with a vision model takes minutes rather than
+    // seconds – the request must not be cut short halfway through.
+    @set_time_limit(0);
 
-try {
-    $chunkCount = persistDocumentChunks($db, $uploadId, $userId, $chunks);
-} catch (Throwable $_e) {
-    $chunkCount = 0;
+    $visionOk = pdfVisionEnabled() && visionModelConfigured() && pdfRenderAvailable();
+
+    if ($visionOk) {
+        $pdfResult = analyzePdfWithVision($storedPath);
+
+        if ($pdfResult['ok'] ?? false) {
+            $message = 'PDF erfolgreich analysiert ('
+                     . (int) ($pdfResult['analyzed'] ?? 0) . ' von '
+                     . (int) ($pdfResult['pages'] ?? 0) . ' Seiten per Vision-Modell).';
+
+            finishUpload(
+                $db,
+                $uploadId,
+                $userId,
+                (string) ($pdfResult['text'] ?? ''),
+                (array) ($pdfResult['chunks'] ?? []),
+                $message
+            );
+        }
+
+        writeLog(
+            'warning',
+            'PDF-Vision-Analyse fehlgeschlagen, Rückfall auf pdftotext: '
+            . (string) ($pdfResult['error'] ?? 'unbekannter Fehler')
+        );
+    }
+
+    // Fallback: plain text layer (also used when no vision model is configured
+    // or PDF rendering is unavailable in this installation).
+    $textResult = extractPdfText($storedPath);
+    if (!($textResult['ok'] ?? false)) {
+        $reason = (string) ($textResult['error'] ?? 'PDF-Verarbeitung fehlgeschlagen.');
+        if ($visionOk && isset($pdfResult['error'])) {
+            $reason = (string) $pdfResult['error'];
+        }
+        failUpload($db, $uploadId, $reason);
+    }
+
+    finishUpload($db, $uploadId, $userId, (string) ($textResult['text'] ?? ''), [], 'PDF erfolgreich verarbeitet.');
 }
 
-$db->prepare(
-    "UPDATE document_uploads
-        SET status = 'done',
-            extracted_text = ?,
-            chunk_count = ?,
-            processed_at = NOW(3)
-      WHERE id = ?"
-)->execute([$content, $chunkCount, $uploadId]);
+// ── Images: vision model analysis ─────────────────────────────────────────────
 
-// Generate embeddings (errors must not abort the upload response).
-try {
-    generateAndStoreChunkEmbeddings($db, $uploadId);
-} catch (Throwable $_e) {
-    writeLog('warning', 'Embedding-Erzeugung nach Dokument-Upload fehlgeschlagen: ' . $_e->getMessage());
+$visionResult = analyzeImageWithVision($storedPath, $mimeType);
+
+if (!($visionResult['ok'] ?? false)) {
+    failUpload($db, $uploadId, (string) ($visionResult['error'] ?? 'Vision-Analyse fehlgeschlagen.'));
 }
 
-echo json_encode([
-    'ok'      => true,
-    'id'      => $uploadId,
-    'message' => 'Dokument erfolgreich analysiert.',
-]);
+finishUpload($db, $uploadId, $userId, (string) ($visionResult['text'] ?? ''), [], 'Dokument erfolgreich analysiert.');
+
+

@@ -45,7 +45,7 @@ Weitere Dokumente im Repository:
 - **Reasoning auf Abruf:** Thinking/Reasoning ist standardmäßig deaktiviert und wird mit dem Präfix `!!` für den jeweiligen Prompt eingeschaltet (Anzeige als 💡-Pille in der Eingabezeile).
 - **Prompt-Funktionen:** Präfixe wie `/table`, `/tldr` oder `/eli5` schalten für den jeweiligen Prompt eine feste Systemprompt-Ergänzung frei (z. B. Tabellenformat, Kurz-Zusammenfassung, kindgerechte Erklärung); Anzeige als eigene Pille je aktiver Funktion, mehrere Funktionen lassen sich kombinieren.
 - **Intelligence Upgrade:** beantwortet einfache Anfragen zunächst ressourcenschonend und bietet bei freier Kapazität optional ein leistungsfähigeres Modell für eine erneute Bearbeitung an.
-- **Hybrid-RAG:** Dokument-Upload mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
+- **Hybrid-RAG:** Dokument-Upload (Office, PDF, Text, Bilder) mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
 - **Chat-Tools:** Websuche mit SearXNG (`search_web`) inklusive Nachladen ganzer Seiteninhalte (`web_fetch`), Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
 - **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO.
 - **OpenAI-kompatible API:** Modellliste und Chat Completions, wahlweise mit den Chat-Tools.
@@ -68,7 +68,7 @@ Wichtige Komponenten:
 - `api/sd_balancer.php` und `api/comfy_balancer.php` wenden dieselben Balancer-Grundsätze auf die Bildgenerierung an.
 - `lib/balancer_engine.php` bündelt Circuit Breaker, Backoff, Fallback-Ketten, verwaiste Tasks und die konfigurierbaren Balancer-Einstellungen.
 - `api/embedding.php` erstellt Embeddings, führt Ähnlichkeitssuche und optionales Reranking aus.
-- `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an.
+- `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an; `api/doc_convert.php`, `api/pdf_render.php` und `api/vision.php` kapseln Konverter-Dienst, PDF-Rendering und Vision-Analyse.
 - `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
 - `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
 
@@ -87,6 +87,7 @@ Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Bu
 | `lib/` | Balancer-Engine, Prompt Security, OpenAI-Hilfsfunktionen, LDAP-Anbindung, SMTP-Client, Routing-Prompt |
 | `admin/` | Administration, Dashboard-Livedaten, SSH-Systemmetriken, API-Keys, Prompt Security |
 | `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth |
+| `docconvert/` | Python/FastAPI-Container zur Konvertierung von Office- und Textdateien in strukturierte Chunks |
 | `doc_uploads/`, `sd_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
 | `assets/`, `docs/`, `ressources/` | Bilder der Oberfläche, Diagramme der Dokumentation, Beispiel-Systemprompt |
 
@@ -390,7 +391,16 @@ Endpunkte mit demselben `default_model` bilden einen Pool. Das Routing kann eine
 
 ## Hybrid-RAG
 
-Dokumente werden über `api/upload_document.php` hochgeladen. Unterstützt werden Text- und Markdown-Dateien, PDFs sowie PNG, JPG, WEBP und GIF. PDFs werden mit `pdftotext` extrahiert; Bilddateien können über ein konfiguriertes Vision-Modell analysiert werden.
+Dokumente werden über `api/upload_document.php` hochgeladen – entweder über den Upload-Dialog oder direkt im Chat über das Büroklammer-Symbol neben dem Bild-Upload. Unterstützt werden:
+
+- **Office-Dokumente:** Word (`.docx`), Excel (`.xlsx`, `.xlsm`, `.xls`), PowerPoint (`.pptx`) und OpenDocument (`.odt`, `.ods`, `.odp`).
+- **Textformate:** `.txt`, `.md`, `.rtf`, `.csv`, `.tsv`, `.json`, `.xml`, `.html`, `.yaml`, `.log`, `.ini`, `.conf`.
+- **PDF:** Jede Seite wird mit `pdftoppm` in ein Bild umgewandelt und einzeln vom Vision-Modell gelesen, sodass auch Scans, Tabellen, Formulare und Diagramme erfasst werden. Als Rückfallweg dient die Textebene (`pdftotext`).
+- **Bilder:** PNG, JPG, WEBP und GIF werden vom konfigurierten Vision-Modell beschrieben.
+
+Office- und Textdateien konvertiert der separate Container `docconvert` (Python/FastAPI). Er liefert strukturierten Text und strukturbewusste Chunks mit Quellenangabe (Kapitel, Tabellenblatt und Zeilenbereich, Foliennummer) und hält Ergebnisse per Content-Hash in einem temporären TTL-Cache vor. Ist der Dienst nicht erreichbar, verarbeitet ein PHP-Fallback zumindest die reinen Textformate.
+
+Im Chat hochgeladene Dateien werden an die Chat-Sitzung gebunden, als Chip über dem Eingabefeld angezeigt und bei der RAG-Suche bevorzugt. Ein Fortschrittsbalken zeigt Upload und anschließende Verarbeitung an. Große Zwischenablage-Inhalte (mehr als 100 Zeilen) werden beim Einfügen mit Strg+V automatisch als Datei „Eingefügter Text“ angehängt, damit nichts verloren geht. Datei- und Bildanhänge stehen ausschließlich angemeldeten Benutzern zur Verfügung.
 
 Die Pipeline speichert Chunks in `document_chunks` und kann sie für teamweiten Kontext global freigeben. Bei aktivierten Embeddings wird nach dem Chunking eine OpenAI-kompatible Embedding-API aufgerufen. Die Suche kombiniert dann:
 
@@ -399,7 +409,7 @@ Die Pipeline speichert Chunks in `document_chunks` und kann sie für teamweiten 
 3. Reciprocal Rank Fusion
 4. optionales Reranking
 
-Ist ein Embedding-Endpunkt oder Reranker nicht erreichbar, fällt die Anwendung auf die vorherige Suchstufe zurück. Relevante Einstellungen sind `embedding_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`, `embedding_cache_enabled`, `reranker_enabled`, `reranker_endpoint` und `reranker_top_k`.
+Ist ein Embedding-Endpunkt oder Reranker nicht erreichbar, fällt die Anwendung auf die vorherige Suchstufe zurück. Relevante Einstellungen sind `embedding_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`, `embedding_cache_enabled`, `reranker_enabled`, `reranker_endpoint` und `reranker_top_k`. Für den Upload selbst kommen `vision_model`, `pdf_vision_enabled`, `pdf_vision_dpi`, `pdf_vision_max_pages` und `upload_max_mb` hinzu.
 
 ## Prompt Security
 

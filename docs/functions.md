@@ -23,6 +23,9 @@ kompakte Navigationshilfe siehe [`agent_index.md`](agent_index.md).
 - [api/balancer.php](#apibalancerphp)
 - [api/embedding.php](#apiembeddingphp)
 - [api/upload_document.php](#apiupload_documentphp)
+- [api/doc_convert.php](#apidoc_convertphp)
+- [api/pdf_render.php](#apipdf_renderphp)
+- [api/vision.php](#apivisionphp)
 - [api/sd_balancer.php](#apisd_balancerphp)
 - [api/comfy_balancer.php](#apicomfy_balancerphp)
 - [api/heartbeat.php](#apiheartbeatphp)
@@ -229,8 +232,10 @@ Zentrale Chat-Pipeline (~3.300 Zeilen). Funktionen sind thematisch gruppiert.
 | `tokenizeQueryTerms` | `tokenizeQueryTerms(string $query): array` | Zerlegt eine Anfrage in Kleinbuchstaben-Terme, filtert Terme < 2 Zeichen. |
 | `buildRagSnippet` | `buildRagSnippet(string $text, array $terms, int $maxLen = 1200): string` | Extrahiert ein Textausschnitt um den ersten Treffer-Term mit Trunkierungsmarkern. |
 | `scoreRagChunk` | `scoreRagChunk(string $chunkText, string $query, array $terms): float` | Berechnet einen BM25-artigen Relevanz-Score für einen Chunk. |
-| `hasDocumentUploads` | `hasDocumentUploads(?int $userId): bool` | Prüft, ob analysierte Uploads für den Benutzer (eigene oder global) vorliegen. |
-| `queryDocuments` | `queryDocuments(string $query, ?int $userId): array` | Durchsucht Dokument-Chunks per Hybrid-RAG (BM25 + Embeddings + RRF + optionalem Reranking). |
+| `hasDocumentUploads` | `hasDocumentUploads(?int $userId, string $chatSessionId = ''): bool` | Prüft, ob analysierte Uploads für den Benutzer (eigene, global oder an den Chat angehängte) vorliegen. |
+| `listChatSessionDocuments` | `listChatSessionDocuments(?int $userId, string $chatSessionId): array` | Liefert die an eine Chat-Sitzung angehängten Uploads. |
+| `buildChatDocumentSystemPrompt` | `buildChatDocumentSystemPrompt(array $documents, bool $useDocQueryTool): string` | Erzeugt den Systemhinweis auf die angehängten Dateien; ohne Tool-Unterstützung wird der Text direkt eingebettet. |
+| `queryDocuments` | `queryDocuments(string $query, ?int $userId, string $chatSessionId = ''): array` | Durchsucht Dokument-Chunks per Hybrid-RAG (BM25 + Embeddings + RRF + optionalem Reranking); an den Chat angehängte Dateien werden bevorzugt. |
 
 ### Token-Abrechnung
 
@@ -248,6 +253,7 @@ Zentrale Chat-Pipeline (~3.300 Zeilen). Funktionen sind thematisch gruppiert.
 | `normalizeAssistantContent` | `normalizeAssistantContent(mixed $content): string` | Wandelt Nachrichteninhalt (String oder Teile-Array) in einen reinen Textstring um. |
 | `mergeSystemMessages` | `mergeSystemMessages(array $messages): array` | Fasst alle Systemnachrichten zu einer einzigen am Anfang zusammen (Jinja-Template-Kompatibilität). |
 | `messageContentHasImage` | `messageContentHasImage(mixed $content): bool` | Prüft, ob der Nachrichteninhalt einen `image_url`-Teil enthält. |
+| `stripImageContentParts` | `stripImageContentParts(array $messages): array` | Entfernt alle `image_url`-Teile – Bildanhänge sind angemeldeten Nutzern vorbehalten. |
 | `payloadMessagesHaveImage` | `payloadMessagesHaveImage(array $messages): bool` | Prüft, ob irgendeine Nachricht im Payload ein Bild enthält. |
 
 ### Kontextlimits
@@ -325,9 +331,48 @@ Zentrale Chat-Pipeline (~3.300 Zeilen). Funktionen sind thematisch gruppiert.
 | `normalizeDocumentText` | `normalizeDocumentText(string $text): string` | Normalisiert Dokumenttext (entfernt überflüssige Leerzeichen/Leerzeilen). |
 | `buildDocumentChunks` | `buildDocumentChunks(string $text, int $maxChars = 1800, int $overlapChars = 250): array` | Teilt Text in überlappende Chunks für RAG-Embedding und Suche. |
 | `persistDocumentChunks` | `persistDocumentChunks(PDO $db, int $uploadId, int $userId, array $chunks): int` | Speichert Dokument-Chunks in der Datenbank, liefert die Anzahl gespeicherter Chunks. |
+| `extractPdfText` | `extractPdfText(string $pdfPath): array` | Liest die Textebene eines PDFs mit `pdftotext`; Rückfallweg, wenn die Vision-Auswertung nicht möglich ist. |
+| `analyzePdfWithVision` | `analyzePdfWithVision(string $pdfPath): array` | Rastert die PDF-Seiten zu JPEGs und lässt jede Seite einzeln vom Vision-Modell lesen; erzeugt Chunks mit Seitenreferenz und fällt pro Seite auf die Textebene zurück. |
+| `resolveUploadKind` | `resolveUploadKind(string $mimeType, string $originalName): array` | Entscheidet anhand von Dateiendung und MIME-Typ zwischen `image`, `pdf` und `document`. |
+| `failUpload` | `failUpload(PDO $db, int $uploadId, string $message): void` | Markiert einen Upload als fehlerhaft und beendet die Anfrage mit JSON-Fehler. |
+| `finishUpload` | `finishUpload(PDO $db, int $uploadId, int $userId, string $text, array $chunks, string $message): void` | Speichert Text und Chunks, stößt die Embedding-Erzeugung an und antwortet mit dem Upload-Datensatz. |
 
-> Enthält außerdem eine lokal definierte `extractPdfText`-Funktion innerhalb der
-> Verarbeitungslogik, die Text aus PDF-Dateien via `pdftotext` extrahiert.
+## api/doc_convert.php
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `docConvertMimeMap` | `docConvertMimeMap(): array` | Zuordnung Dateiendung → erwarteter MIME-Typ der unterstützten Office-/Textformate. |
+| `docConvertExtensions` | `docConvertExtensions(): array` | Liste aller vom Konverter unterstützten Dateiendungen. |
+| `docConvertLocalFallbackExtensions` | `docConvertLocalFallbackExtensions(): array` | Endungen, die auch ohne den Dienst rein in PHP gelesen werden können. |
+| `docConvertBaseUrl` | `docConvertBaseUrl(): string` | Basis-URL des Konverter-Dienstes (`DOCCONVERT_URL`). |
+| `docConvertToken` | `docConvertToken(): string` | Optionales Shared Secret für den `X-Auth-Token`-Header. |
+| `docConvertTimeout` | `docConvertTimeout(): int` | Timeout einer Konvertierungsanfrage in Sekunden. |
+| `docConvertEnabled` | `docConvertEnabled(): bool` | Ob der Konverter konfiguriert ist (reine Konfigurationsprüfung, ohne Netzwerkzugriff). |
+| `docConvertHealth` | `docConvertHealth(): array` | Fragt `GET /health` des Dienstes ab. |
+| `convertDocumentViaService` | `convertDocumentViaService(string $path, string $originalName, string $mimeType): array` | Lädt die Datei zum Dienst hoch und liefert Text plus strukturbewusste Chunks. |
+| `convertPlainTextLocally` | `convertPlainTextLocally(string $path, string $ext): array` | PHP-Fallback für reine Textformate (BOM-Entfernung, cp1252→UTF-8, HTML-Bereinigung). |
+
+## api/pdf_render.php
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `pdfRunCommand` | `pdfRunCommand(string $cmd): array` | Führt ein externes Kommando aus und liefert Exit-Code, stdout und stderr. |
+| `pdfRenderAvailable` | `pdfRenderAvailable(): bool` | Prüft, ob `pdftoppm` vorhanden ist. |
+| `pdfVisionEnabled` | `pdfVisionEnabled(): bool` | Admin-Einstellung `pdf_vision_enabled`. |
+| `pdfVisionDpi` | `pdfVisionDpi(): int` | Render-Auflösung (`pdf_vision_dpi`, 72–300). |
+| `pdfVisionMaxPages` | `pdfVisionMaxPages(): int` | Maximal analysierte Seiten (`pdf_vision_max_pages`, 1–200). |
+| `pdfPageCount` | `pdfPageCount(string $pdfPath): int` | Seitenzahl über `pdfinfo`. |
+| `extractPdfPageText` | `extractPdfPageText(string $pdfPath, int $page): string` | Textebene einer einzelnen Seite. |
+| `renderPdfPagesToImages` | `renderPdfPagesToImages(string $pdfPath, int $maxPages, int $dpi): array` | Rastert Seiten mit `pdftoppm` in ein temporäres Verzeichnis. |
+| `cleanupPdfRenderDir` | `cleanupPdfRenderDir(string $dir): void` | Löscht ein temporäres Render-Verzeichnis samt Seitenbildern. |
+
+## api/vision.php
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `visionModelName` | `visionModelName(): string` | Im Adminbereich konfiguriertes Vision-Modell. |
+| `visionModelConfigured` | `visionModelConfigured(): bool` | Ob ein Vision-Modell hinterlegt ist. |
+| `analyzeImageWithVision` | `analyzeImageWithVision(string $imagePath, string $mimeType, string $prompt = VISION_DEFAULT_PROMPT): array` | Schickt ein Bild an das Vision-Modell (inkl. Endpunktwahl über den Balancer und Task-Abrechnung) und liefert den extrahierten Text. |
 
 ## api/sd_balancer.php
 
@@ -377,7 +422,8 @@ Diese Dateien enthalten ausschließlich prozeduralen Code (kein top-level `funct
 | `api/chat_sessions.php` | Sitzungsverwaltung: `action=list\|load\|delete` |
 | `api/comfy_checkpoints.php` | Proxy für verfügbare ComfyUI-Checkpoints |
 | `api/comfy_generate.php` | Bildgenerierung via ComfyUI (Workflow-Queueing/Polling) |
-| `api/document_status.php` | Upload-Status als JSON |
+| `api/document_status.php` | Upload-Status als JSON (optional per `session_id` auf einen Chat gefiltert) |
+| `api/document_delete.php` | Entfernt einen Upload samt Datei und Chunks |
 | `api/healthcheck.php` | Ruft `isAnyLlmEndpointHealthy()` auf und liefert JSON |
 | `api/models.php` | Proxy für `GET /v1/models` eines Endpunkts |
 | `api/admin_user_action.php` | Admin-Benutzeraktionen (`create_user`, `send_password_reset`, `set_user_model`, `set_user_doc_permission`, `set_user_role`) |

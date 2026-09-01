@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -130,8 +130,18 @@ if ($loggedIn && $intelligenceGroupEnabled) {
     }
 }
 
-// Check if vision model is configured (upload only meaningful when it is).
+// Check if vision model is configured (image uploads need one).
 $visionModelConfigured = trim(getSetting('vision_model', '')) !== '';
+
+// Attaching images is reserved for logged-in users; anonymous visitors may only
+// chat with plain text (enforced again server-side in api/chat.php).
+$imageUploadEnabled = $loggedIn;
+
+// Office/text documents are converted by the docconvert service; when it is
+// configured the upload UI is offered even without a vision model.
+require_once __DIR__ . '/api/doc_convert.php';
+$docConvertAvailable = docConvertEnabled();
+$documentUploadEnabled = $loggedIn && $canUploadDocuments && ($visionModelConfigured || $docConvertAvailable);
 
 // Login banner settings.
 $loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
@@ -1006,6 +1016,117 @@ $csrfToken = $_SESSION['csrf_token'];
 
         #attach-detail-select.visible { display: inline-block; }
 
+        /* ── Document attachment (paperclip) in the composer ───────── */
+        #attach-doc-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: .95rem;
+            transition: background .15s, color .15s;
+        }
+
+        #attach-doc-btn:hover:not(:disabled) { background: var(--surface-alt); color: var(--text); }
+        #attach-doc-btn.has-docs { color: var(--accent); }
+        #attach-doc-btn:disabled { opacity: .5; cursor: progress; }
+
+        /* Chip strip listing the documents attached to the current chat */
+        #doc-attach-strip {
+            display: none;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            padding: 0 2px 8px;
+        }
+
+        #doc-attach-strip.visible { display: flex; }
+
+        .doc-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            max-width: 260px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: var(--surface-alt);
+            font-size: .74rem;
+            color: var(--text);
+        }
+
+        .doc-chip.is-error { border-color: var(--error); color: var(--error); }
+        .doc-chip.is-pending { opacity: .75; }
+
+        .doc-chip-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .doc-chip-meta { color: var(--text-muted); flex-shrink: 0; }
+
+        .doc-chip-remove {
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: .8rem;
+            line-height: 1;
+            padding: 0;
+            flex-shrink: 0;
+        }
+
+        .doc-chip-remove:hover { color: var(--error); }
+
+        /* Progress bar for large files / long conversions */
+        #doc-upload-progress {
+            display: none;
+            padding: 0 2px 8px;
+        }
+
+        #doc-upload-progress.visible { display: block; }
+
+        #doc-upload-bar {
+            height: 4px;
+            border-radius: 999px;
+            background: var(--surface-alt);
+            overflow: hidden;
+        }
+
+        #doc-upload-fill {
+            height: 100%;
+            width: 0;
+            background: var(--accent);
+            transition: width .2s ease;
+        }
+
+        /* Indeterminate phase: file transferred, server still converting. */
+        #doc-upload-fill.indeterminate {
+            width: 40% !important;
+            animation: doc-upload-slide 1.2s ease-in-out infinite;
+        }
+
+        @keyframes doc-upload-slide {
+            0%   { margin-left: -40%; }
+            100% { margin-left: 100%; }
+        }
+
+        #doc-upload-label {
+            margin-top: 4px;
+            font-size: .72rem;
+            color: var(--text-muted);
+        }
+
+        #doc-upload-label.error { color: var(--error); }
+        #doc-upload-label.ok    { color: var(--success, #3fb950); }
+
         /* ── Attached-image preview strip (shown above the input box) ─ */
         #attach-preview {
             display: none;
@@ -1582,7 +1703,7 @@ $csrfToken = $_SESSION['csrf_token'];
     <div style="display:flex;align-items:center;gap:8px">
 <?php if ($loggedIn): ?>
         <span style="font-size:.8rem;color:var(--text-muted)">👤 <?= $loggedUser ?></span>
-<?php if ($canUploadDocuments && $visionModelConfigured): ?>
+<?php if ($documentUploadEnabled): ?>
         <!-- Document upload button -->
         <button class="header-icon-btn" id="upload-btn" title="Dokument hochladen">
             📎
@@ -1602,7 +1723,7 @@ $csrfToken = $_SESSION['csrf_token'];
     </div>
 </header>
 
-<?php if ($canUploadDocuments && $visionModelConfigured): ?>
+<?php if ($documentUploadEnabled): ?>
 <!-- ── Notification panel (document status) ────────────────── -->
 <div id="notif-panel">
     <div id="notif-panel-header">
@@ -1625,10 +1746,13 @@ $csrfToken = $_SESSION['csrf_token'];
         <div id="upload-drop-zone">
             <div class="drop-icon">📄</div>
             <div>Datei hier ablegen oder <strong>klicken zum Auswählen</strong></div>
-            <div style="font-size:.76rem;margin-top:6px">PNG, JPG, WEBP, GIF, PDF · max. 20 MB</div>
+            <div style="font-size:.76rem;margin-top:6px">
+                PDF, Word, Excel, PowerPoint, OpenDocument, Text/CSV/JSON/XML/HTML, Bilder ·
+                max. <?= (int) max(1, (int) getSetting('upload_max_mb', '20')) ?> MB
+            </div>
         </div>
         <input type="file" id="upload-file-input"
-               accept="image/png,image/jpeg,image/webp,image/gif,application/pdf">
+               accept=".pdf,.docx,.xlsx,.xlsm,.xls,.pptx,.odt,.ods,.odp,.rtf,.csv,.tsv,.txt,.md,.json,.xml,.html,.htm,.yaml,.yml,.log,.ini,.conf,.png,.jpg,.jpeg,.webp,.gif">
 
         <div id="upload-preview"></div>
         <div id="upload-global-wrap">
@@ -1688,7 +1812,20 @@ $csrfToken = $_SESSION['csrf_token'];
         </div>
 
         <!-- Attached-image preview strip -->
+<?php if ($imageUploadEnabled): ?>
         <div id="attach-preview"></div>
+<?php endif; ?>
+
+<?php if ($documentUploadEnabled): ?>
+        <!-- Documents attached to the current chat (paperclip upload) -->
+        <div id="doc-attach-strip"></div>
+
+        <!-- Upload/conversion progress for large files -->
+        <div id="doc-upload-progress">
+            <div id="doc-upload-bar"><div id="doc-upload-fill"></div></div>
+            <div id="doc-upload-label"></div>
+        </div>
+<?php endif; ?>
 
         <!-- Main input container -->
         <div id="input-box">
@@ -1704,6 +1841,7 @@ $csrfToken = $_SESSION['csrf_token'];
             <span id="cmd-pills"></span>
             <textarea id="user-input" rows="1"
                       placeholder="Nachricht schreiben … (Enter = Senden, Shift+Enter = Zeilenumbruch)"></textarea>
+<?php if ($imageUploadEnabled): ?>
             <input type="file" id="attach-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none">
             <select id="attach-detail-select" title="Bild-Detailgrad (Vision-API)" aria-label="Bild-Detailgrad">
                 <option value="auto">Detail: Auto</option>
@@ -1711,6 +1849,13 @@ $csrfToken = $_SESSION['csrf_token'];
                 <option value="high">Detail: Hoch</option>
             </select>
             <button id="attach-image-btn" title="Bild anhängen">🖼</button>
+<?php endif; ?>
+<?php if ($documentUploadEnabled): ?>
+            <input type="file" id="attach-doc-input"
+                   accept=".pdf,.docx,.xlsx,.xlsm,.xls,.pptx,.odt,.ods,.odp,.rtf,.csv,.tsv,.txt,.md,.json,.xml,.html,.htm,.yaml,.yml,.png,.jpg,.jpeg,.webp,.gif"
+                   multiple style="display:none">
+            <button id="attach-doc-btn" title="Dokument anhängen (PDF, Word, Excel, PowerPoint, Text …)">📎</button>
+<?php endif; ?>
             <button id="clear-btn" title="Verlauf löschen">🗑</button>
             <button id="send-btn" title="Senden">↑</button>
         </div>
@@ -2218,6 +2363,8 @@ $csrfToken = $_SESSION['csrf_token'];
     function applyLoadedSession(sid, data) {
         sessionId = sid;
         sessionStorage.setItem('chat_session_id', sessionId);
+        // Reload the document chips of the conversation being opened.
+        if (window.refreshChatDocuments) window.refreshChatDocuments();
 
         // Restore the intelligence group of the loaded chat.
         activeGroup  = (intelligenceGroupEnabled && typeof data.intelligence_group === 'string') ? data.intelligence_group : '';
@@ -2320,6 +2467,7 @@ $csrfToken = $_SESSION['csrf_token'];
         if (typeof renderAttachPreview === 'function') renderAttachPreview();
         sessionId = generateSessionId();
         sessionStorage.setItem('chat_session_id', sessionId);
+        if (window.refreshChatDocuments) window.refreshChatDocuments();
         showWelcome();
         setStatus('Neuer Chat gestartet.', 'info');
         // Deselect sidebar items.
@@ -2343,6 +2491,10 @@ $csrfToken = $_SESSION['csrf_token'];
         statusBar.textContent = msg;
         statusBar.className   = type;
     }
+
+    // Exposed so the separate document-upload script can report into the
+    // same status bar.
+    window.setChatStatus = setStatus;
 
     /* Auto-follow is paused as soon as the user scrolls up (e.g. to re-read
        older text while an answer is still being generated) and resumes once
@@ -2784,9 +2936,12 @@ $csrfToken = $_SESSION['csrf_token'];
     /* ── Attach-image button (next to "Chatverlauf löschen") ─────── */
 
     function renderAttachPreview() {
+        if (!attachPreview) return;
         attachPreview.innerHTML = '';
         attachPreview.classList.toggle('visible', pendingImages.length > 0);
-        attachImageBtn.classList.toggle('has-images', pendingImages.length > 0);
+        if (attachImageBtn) {
+            attachImageBtn.classList.toggle('has-images', pendingImages.length > 0);
+        }
         if (attachDetailSelect) {
             attachDetailSelect.classList.toggle('visible', pendingImages.length > 0);
         }
@@ -2856,38 +3011,130 @@ $csrfToken = $_SESSION['csrf_token'];
         });
     }
 
+    /** Attach image files to the next message (shared by the 🖼 button,
+     *  drag & drop and Strg+V). */
+    async function attachImageFiles(files) {
+        let added = false;
+
+        for (const file of files) {
+            if (pendingImages.length >= MAX_ATTACH_IMAGES) {
+                setStatus(`Maximal ${MAX_ATTACH_IMAGES} Bilder pro Nachricht.`, 'error');
+                break;
+            }
+            if (!file.type.startsWith('image/')) {
+                setStatus('Nur Bilddateien können angehängt werden.', 'error');
+                continue;
+            }
+            if (file.size > MAX_ATTACH_FILE_MB * 1024 * 1024) {
+                setStatus(`Bild "${file.name}" ist zu groß (max. ${MAX_ATTACH_FILE_MB} MB).`, 'error');
+                continue;
+            }
+            try {
+                const rawDataUrl = await readFileAsDataUrl(file);
+                const { dataUrl, mimeType } = await downscaleImageDataUrl(rawDataUrl, file.type, MAX_ATTACH_DIMENSION);
+                pendingImages.push({ dataUrl, mimeType, name: file.name || 'Bild' });
+                added = true;
+            } catch (_) {
+                setStatus(`Bild "${file.name}" konnte nicht gelesen werden.`, 'error');
+            }
+        }
+
+        renderAttachPreview();
+        return added;
+    }
+
     if (attachImageBtn && attachImageInput) {
         attachImageBtn.addEventListener('click', () => attachImageInput.click());
 
         attachImageInput.addEventListener('change', async () => {
             const files = Array.from(attachImageInput.files || []);
             attachImageInput.value = ''; // allow re-selecting the same file
-
-            for (const file of files) {
-                if (pendingImages.length >= MAX_ATTACH_IMAGES) {
-                    setStatus(`Maximal ${MAX_ATTACH_IMAGES} Bilder pro Nachricht.`, 'error');
-                    break;
-                }
-                if (!file.type.startsWith('image/')) {
-                    setStatus('Nur Bilddateien können angehängt werden.', 'error');
-                    continue;
-                }
-                if (file.size > MAX_ATTACH_FILE_MB * 1024 * 1024) {
-                    setStatus(`Bild "${file.name}" ist zu groß (max. ${MAX_ATTACH_FILE_MB} MB).`, 'error');
-                    continue;
-                }
-                try {
-                    const rawDataUrl = await readFileAsDataUrl(file);
-                    const { dataUrl, mimeType } = await downscaleImageDataUrl(rawDataUrl, file.type, MAX_ATTACH_DIMENSION);
-                    pendingImages.push({ dataUrl, mimeType, name: file.name });
-                } catch (_) {
-                    setStatus(`Bild "${file.name}" konnte nicht gelesen werden.`, 'error');
-                }
-            }
-
-            renderAttachPreview();
+            await attachImageFiles(files);
         });
     }
+
+    /* ── Strg+V with files in the clipboard ──────────────────
+       Pasted images become inline attachments for the next message (same as
+       the 🖼 button); every other pasted file is uploaded as a chat document
+       through the paperclip flow. Very long pasted text is turned into a text
+       file as well, so nothing gets truncated inside the input box. */
+
+    /* Pasted text with at least this many lines is uploaded as a file instead
+       of being inserted into the composer. */
+    const PASTE_AS_FILE_MIN_LINES = 100;
+    let pastedTextCount = 0;
+
+    /** Wrap long clipboard text in a .txt file named "Eingefügter Text". */
+    function buildPastedTextFile(text) {
+        pastedTextCount++;
+        const suffix = pastedTextCount > 1 ? ' (' + pastedTextCount + ')' : '';
+        const name   = 'Eingefügter Text' + suffix + '.txt';
+        try {
+            return new File([text], name, { type: 'text/plain' });
+        } catch (_) {
+            // Older browsers without the File constructor.
+            const blob = new Blob([text], { type: 'text/plain' });
+            blob.name = name;
+            return blob;
+        }
+    }
+
+    function handlePastedFiles(event) {
+        const clipboard = event.clipboardData;
+        if (!clipboard) return;
+
+        let files = Array.from(clipboard.files || []);
+        if (files.length === 0 && clipboard.items) {
+            // Screenshots arrive as items without a populated files list in
+            // some browsers.
+            files = Array.from(clipboard.items)
+                .filter(item => item.kind === 'file')
+                .map(item => item.getAsFile())
+                .filter(Boolean);
+        }
+
+        const canAttachImages = !!(attachImageBtn && attachImageInput);
+        const canUploadDocs   = typeof window.uploadChatDocuments === 'function';
+
+        if (files.length === 0) {
+            // No files – check whether a very long text was pasted.
+            if (!canUploadDocs) return;
+
+            const text = clipboard.getData('text/plain') || '';
+            if (text === '') return;
+
+            const lineCount = text.split(/\r\n|\r|\n/).length;
+            if (lineCount <= PASTE_AS_FILE_MIN_LINES) return;
+
+            event.preventDefault();
+            const file = buildPastedTextFile(text);
+            window.uploadChatDocuments([file]);
+            setStatus(`Eingefügter Text (${lineCount} Zeilen) wird als Datei angehängt.`, 'info');
+            return;
+        }
+
+        if (!canAttachImages && !canUploadDocs) return;
+
+        // Images go to the inline attachment strip; if that is unavailable they
+        // are uploaded as documents instead.
+        const images = canAttachImages ? files.filter(f => f.type.startsWith('image/')) : [];
+        const docs   = files.filter(f => !images.includes(f));
+
+        if (images.length === 0 && docs.length > 0 && !canUploadDocs) return;
+
+        event.preventDefault();
+
+        if (images.length > 0) {
+            attachImageFiles(images).then(added => {
+                if (added) setStatus(`${images.length} Bild(er) aus der Zwischenablage angehängt.`, 'ok');
+            });
+        }
+        if (docs.length > 0 && canUploadDocs) {
+            window.uploadChatDocuments(docs);
+        }
+    }
+
+    userInput.addEventListener('paste', handlePastedFiles);
 
     /* ── Render a message bubble ─────────────────────────── */
 
@@ -3634,7 +3881,292 @@ $csrfToken = $_SESSION['csrf_token'];
 })();
 </script>
 
-<?php if ($canUploadDocuments && $visionModelConfigured): ?>
+<?php if ($documentUploadEnabled): ?>
+<script>
+/* ─────────────────────────────────────────────────────────────
+   Paperclip upload in the chat composer
+
+   Uploads are attached to the current chat session, so the model can use
+   them straight away (see queryDocuments() in api/chat.php). Large files get
+   a real upload progress bar; while the server converts, chunks and embeds
+   the document the bar switches to an indeterminate animation.
+   ─────────────────────────────────────────────────────────────*/
+(function () {
+    'use strict';
+
+    const CSRF_TOKEN = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+    const MAX_BYTES  = <?= (int) (max(1, (int) getSetting('upload_max_mb', '20')) * 1024 * 1024) ?>;
+    const GLOBAL_RAG_DEFAULT = false;
+
+    const docBtn      = document.getElementById('attach-doc-btn');
+    const docInput    = document.getElementById('attach-doc-input');
+    const docStrip    = document.getElementById('doc-attach-strip');
+    const progressBox = document.getElementById('doc-upload-progress');
+    const progressFill = document.getElementById('doc-upload-fill');
+    const progressLabel = document.getElementById('doc-upload-label');
+
+    if (!docBtn || !docInput || !docStrip) return;
+
+    let attached = [];
+    let busy = false;
+
+    function currentSessionId() {
+        return sessionStorage.getItem('chat_session_id') || '';
+    }
+
+    function formatBytes(b) {
+        if (b < 1024) return b + ' B';
+        if (b < 1024 * 1024) return Math.round(b / 1024) + ' KB';
+        return (b / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    // ── Progress bar ──────────────────────────────────────────
+    function showProgress(text) {
+        if (!progressBox) return;
+        progressBox.classList.add('visible');
+        progressFill.classList.remove('indeterminate');
+        progressFill.style.width = '0%';
+        setProgressLabel(text, '');
+    }
+
+    function setProgressPercent(percent) {
+        if (!progressFill) return;
+        progressFill.classList.remove('indeterminate');
+        progressFill.style.width = Math.max(0, Math.min(100, percent)) + '%';
+    }
+
+    /** Server-side phase: transfer done, duration unknown → animate. */
+    function setProgressIndeterminate() {
+        if (!progressFill) return;
+        progressFill.classList.add('indeterminate');
+    }
+
+    function setProgressLabel(text, cls) {
+        if (!progressLabel) return;
+        progressLabel.textContent = text;
+        progressLabel.className = cls || '';
+    }
+
+    function hideProgress(delay) {
+        if (!progressBox) return;
+        window.setTimeout(function () {
+            progressBox.classList.remove('visible');
+            progressFill.classList.remove('indeterminate');
+            progressFill.style.width = '0%';
+            setProgressLabel('', '');
+        }, delay || 0);
+    }
+
+    // ── Chips ─────────────────────────────────────────────────
+    function renderChips() {
+        docStrip.innerHTML = '';
+        docStrip.classList.toggle('visible', attached.length > 0);
+        docBtn.classList.toggle('has-docs', attached.length > 0);
+
+        attached.forEach(function (doc) {
+            const chip = document.createElement('span');
+            chip.className = 'doc-chip';
+            if (doc.status === 'error') chip.classList.add('is-error');
+            if (doc.status === 'processing' || doc.status === 'pending') chip.classList.add('is-pending');
+            chip.title = doc.status === 'error'
+                ? (doc.error_message || 'Verarbeitung fehlgeschlagen.')
+                : (doc.chunk_count || 0) + ' Chunk(s) im Chat verfügbar';
+
+            const icon = document.createElement('span');
+            icon.textContent = doc.status === 'error' ? '⚠' : (doc.status === 'done' ? '📄' : '⏳');
+            chip.appendChild(icon);
+
+            const name = document.createElement('span');
+            name.className = 'doc-chip-name';
+            name.textContent = doc.original_name || 'Dokument';
+            chip.appendChild(name);
+
+            if (doc.status === 'done') {
+                const meta = document.createElement('span');
+                meta.className = 'doc-chip-meta';
+                meta.textContent = (doc.chunk_count || 0) + ' Chunks';
+                chip.appendChild(meta);
+            }
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'doc-chip-remove';
+            remove.title = 'Dokument aus dem Chat entfernen';
+            remove.setAttribute('aria-label', 'Dokument entfernen');
+            remove.textContent = '×';
+            remove.addEventListener('click', function () { removeDocument(doc.id); });
+            chip.appendChild(remove);
+
+            docStrip.appendChild(chip);
+        });
+    }
+
+    /** Reload the documents attached to the currently open conversation. */
+    async function refreshChatDocuments() {
+        const sid = currentSessionId();
+        if (!sid) { attached = []; renderChips(); return; }
+        try {
+            const res = await fetch('api/document_status.php?session_id=' + encodeURIComponent(sid));
+            if (!res.ok) return;
+            const data = await res.json();
+            attached = (data && data.ok && Array.isArray(data.uploads)) ? data.uploads : [];
+        } catch (_) {
+            attached = [];
+        }
+        renderChips();
+    }
+
+    async function removeDocument(id) {
+        try {
+            const res = await fetch('api/document_delete.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id, csrf_token: CSRF_TOKEN }),
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                setProgressLabel('✗ ' + (data.message || 'Löschen fehlgeschlagen.'), 'error');
+                if (progressBox) progressBox.classList.add('visible');
+                hideProgress(3000);
+                return;
+            }
+        } catch (_) { /* fall through to the refresh below */ }
+        await refreshChatDocuments();
+    }
+
+    // ── Upload ────────────────────────────────────────────────
+    function uploadFile(file) {
+        return new Promise(function (resolve) {
+            const fd = new FormData();
+            fd.append('file', file, file.name);
+            fd.append('csrf_token', CSRF_TOKEN);
+            fd.append('global_rag', GLOBAL_RAG_DEFAULT ? '1' : '0');
+            fd.append('session_id', currentSessionId());
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', 'api/upload_document.php');
+
+            xhr.upload.addEventListener('progress', function (event) {
+                if (!event.lengthComputable) return;
+                // The transfer is only the first half of the job; the second
+                // half (conversion + embeddings) has no measurable progress.
+                const percent = (event.loaded / event.total) * 90;
+                setProgressPercent(percent);
+                setProgressLabel(
+                    '📎 ' + file.name + ' wird hochgeladen … ' + Math.round((event.loaded / event.total) * 100) + ' %',
+                    ''
+                );
+            });
+
+            xhr.upload.addEventListener('load', function () {
+                setProgressIndeterminate();
+                setProgressLabel('⚙ ' + file.name + ' wird verarbeitet (Text, Chunks, Embeddings) …', '');
+            });
+
+            xhr.addEventListener('load', function () {
+                let data = null;
+                try { data = JSON.parse(xhr.responseText); } catch (_) { data = null; }
+                if (!data) {
+                    resolve({ ok: false, message: 'Unerwartete Serverantwort (HTTP ' + xhr.status + ').' });
+                    return;
+                }
+                resolve(data);
+            });
+
+            xhr.addEventListener('error', function () {
+                resolve({ ok: false, message: 'Netzwerkfehler beim Upload.' });
+            });
+            xhr.addEventListener('abort', function () {
+                resolve({ ok: false, message: 'Upload abgebrochen.' });
+            });
+
+            xhr.send(fd);
+        });
+    }
+
+    async function handleFiles(files) {
+        if (busy || !files || !files.length) return;
+
+        busy = true;
+        docBtn.disabled = true;
+
+        let failed = 0;
+        let succeeded = 0;
+
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const prefix = files.length > 1 ? '(' + (i + 1) + '/' + files.length + ') ' : '';
+
+            showProgress(prefix + '📎 ' + file.name + ' wird hochgeladen …');
+
+            if (file.size > MAX_BYTES) {
+                setProgressLabel('✗ ' + file.name + ' ist zu groß (max. ' + formatBytes(MAX_BYTES) + ').', 'error');
+                failed++;
+                await new Promise(r => window.setTimeout(r, 2500));
+                continue;
+            }
+
+            const result = await uploadFile(file);
+
+            if (result.ok) {
+                succeeded++;
+                setProgressPercent(100);
+                setProgressLabel('✓ ' + file.name + ' bereit (' + (result.chunk_count || 0) + ' Chunks).', 'ok');
+            } else {
+                failed++;
+                setProgressPercent(100);
+                setProgressLabel('✗ ' + (result.message || 'Upload fehlgeschlagen.'), 'error');
+                await new Promise(r => window.setTimeout(r, 2500));
+            }
+        }
+
+        await refreshChatDocuments();
+
+        busy = false;
+        docBtn.disabled = false;
+        docInput.value = '';
+
+        // Errors stay readable a bit longer than successes.
+        hideProgress(failed > 0 ? 4000 : 1500);
+
+        if (succeeded > 0 && typeof window.setChatStatus === 'function') {
+            window.setChatStatus(succeeded + ' Dokument(e) für diesen Chat bereit.', 'ok');
+        }
+    }
+
+    docBtn.addEventListener('click', function () {
+        if (busy) return;
+        docInput.click();
+    });
+
+    docInput.addEventListener('change', function () {
+        handleFiles(Array.from(this.files || []));
+    });
+
+    // Drag & drop straight onto the composer.
+    const inputBox = document.getElementById('input-box');
+    if (inputBox) {
+        inputBox.addEventListener('dragover', function (e) {
+            if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
+            e.preventDefault();
+        });
+        inputBox.addEventListener('drop', function (e) {
+            if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+            e.preventDefault();
+            handleFiles(Array.from(e.dataTransfer.files));
+        });
+    }
+
+    // Exposed so the chat script can refresh the chips when the conversation
+    // is switched or a new chat is started, and so pasted files (Strg+V) can be
+    // routed into the same upload flow.
+    window.refreshChatDocuments = refreshChatDocuments;
+    window.uploadChatDocuments  = handleFiles;
+
+    refreshChatDocuments();
+})();
+</script>
+
 <script>
 /* ─────────────────────────────────────────────────────────────
    Document upload & notification panel
@@ -3810,6 +4342,9 @@ $csrfToken = $_SESSION['csrf_token'];
 
     // ── Upload modal ──────────────────────────────────────────
 
+    const UPLOAD_MAX_MB    = <?= (int) max(1, (int) getSetting('upload_max_mb', '20')) ?>;
+    const UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024;
+
     function openUploadModal() {
         if (!uploadModal) return;
         resetUpload();
@@ -3873,19 +4408,27 @@ $csrfToken = $_SESSION['csrf_token'];
     }
 
     function setFile(f) {
-        const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif', 'application/pdf'];
-        if (!allowed.includes(f.type)) {
+        // finfo on the server has the final say; the browser only knows the
+        // file name reliably (many text formats report as text/plain or as
+        // application/zip for OOXML), so the extension is checked here.
+        const allowedExt = [
+            'pdf', 'docx', 'xlsx', 'xlsm', 'xls', 'pptx', 'odt', 'ods', 'odp', 'rtf',
+            'csv', 'tsv', 'txt', 'md', 'json', 'xml', 'html', 'htm', 'yaml', 'yml',
+            'log', 'ini', 'conf', 'png', 'jpg', 'jpeg', 'webp', 'gif',
+        ];
+        const ext = (f.name.split('.').pop() || '').toLowerCase();
+        if (!allowedExt.includes(ext)) {
             if (uploadPreview) {
                 uploadPreview.style.color = 'var(--error)';
-                uploadPreview.textContent = '✗ Nicht unterstütztes Format. Erlaubt: PNG, JPG, WEBP, GIF, PDF.';
+                uploadPreview.textContent = '✗ Nicht unterstütztes Format (.' + ext + ').';
             }
             if (submitBtn) submitBtn.disabled = true;
             return;
         }
-        if (f.size > 20 * 1024 * 1024) {
+        if (f.size > UPLOAD_MAX_BYTES) {
             if (uploadPreview) {
                 uploadPreview.style.color = 'var(--error)';
-                uploadPreview.textContent = '✗ Datei zu groß (max. 20 MB).';
+                uploadPreview.textContent = '✗ Datei zu groß (max. ' + UPLOAD_MAX_MB + ' MB).';
             }
             if (submitBtn) submitBtn.disabled = true;
             return;
