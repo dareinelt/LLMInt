@@ -4,10 +4,86 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/lib/ldap_auth.php';
+require_once __DIR__ . '/lib/healthcheck.php';
 
 // ── SSO redirect: if REMOTE_USER is set and SSO is enabled, let login.php handle it ──
 if (!isset($_SESSION['admin_user']) && ldapSsoEnabled() && ldapSsoUsername() !== '') {
     header('Location: login.php');
+    exit;
+}
+
+// ── Maintenance mode: show a fallback page instead of the chat UI when no
+//    active LLM endpoint currently responds to a health probe ─────────────────
+if (!isAnyLlmEndpointHealthy()) {
+    http_response_code(503);
+    header('Retry-After: 30');
+    ?>
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KHWF KI – Wartungsmodus</title>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #14161a;
+            color: #e8e8ec;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        .maintenance-box {
+            max-width: 480px;
+            margin: 24px;
+            padding: 32px 36px;
+            border-radius: 12px;
+            background: #1d2026;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+            text-align: center;
+        }
+        .maintenance-box h1 {
+            margin: 0 0 12px;
+            font-size: 1.4rem;
+        }
+        .maintenance-box p {
+            margin: 0 0 8px;
+            color: #b7bac2;
+            line-height: 1.5;
+        }
+        .maintenance-icon {
+            font-size: 2.5rem;
+            margin-bottom: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="maintenance-box">
+        <div class="maintenance-icon">🛠️</div>
+        <h1>Wartungsmodus</h1>
+        <p>Der KI-Dienst ist derzeit nicht erreichbar. Bitte versuchen Sie es in Kürze erneut.</p>
+        <p id="maintenance-status">Diese Seite lädt automatisch neu, sobald der Dienst wieder verfügbar ist.</p>
+    </div>
+    <script>
+        (function () {
+            function poll() {
+                fetch('api/healthcheck.php', { cache: 'no-store' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (data && data.available) {
+                            window.location.reload();
+                        }
+                    })
+                    .catch(function () { /* ignore, retry on next interval */ });
+            }
+            setInterval(poll, 15000);
+        })();
+    </script>
+</body>
+</html>
+    <?php
     exit;
 }
 
