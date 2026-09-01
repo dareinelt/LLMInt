@@ -110,7 +110,8 @@ $db->exec("
         finished_at       TIMESTAMP(3)    NULL,
         PRIMARY KEY (id),
         KEY idx_endpoint_status (endpoint_id, status),
-        KEY idx_model_started   (model, started_at)
+        KEY idx_model_started   (model, started_at),
+        KEY idx_tasks_endpoint_started (endpoint_id, started_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 
@@ -160,7 +161,8 @@ $db->exec("
         finished_at TIMESTAMP(3)    NULL,
         PRIMARY KEY (id),
         KEY idx_sd_ep_status    (endpoint_id, status),
-        KEY idx_sd_status_start (status, started_at)
+        KEY idx_sd_status_start (status, started_at),
+        KEY idx_sd_endpoint_started (endpoint_id, started_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 
@@ -190,7 +192,8 @@ $db->exec("
         finished_at TIMESTAMP(3)    NULL,
         PRIMARY KEY (id),
         KEY idx_comfy_ep_status    (endpoint_id, status),
-        KEY idx_comfy_status_start (status, started_at)
+        KEY idx_comfy_status_start (status, started_at),
+        KEY idx_comfy_endpoint_started (endpoint_id, started_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 

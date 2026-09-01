@@ -112,6 +112,9 @@ Gemeinsame Balancer-Logik für LLM-, AUTOMATIC1111- und ComfyUI-Endpunkte.
 | `getBalancerCircuitFailThreshold` | `getBalancerCircuitFailThreshold(): int` | Liefert die Anzahl aufeinanderfolgender Fehlschläge, bevor der Circuit öffnet (Standard 3). |
 | `getBalancerCircuitCooldownSeconds` | `getBalancerCircuitCooldownSeconds(): int` | Liefert die Sekunden, die ein offener Circuit bis zur Half-Open-Probe geschlossen bleibt (Standard 30). |
 | `getBalancerOrphanTimeoutSeconds` | `getBalancerOrphanTimeoutSeconds(): int` | Liefert die Sekunden, nach denen laufende Tasks als verwaist gelten (Standard 300). |
+| `getBalancerFairnessWindowSeconds` | `getBalancerFairnessWindowSeconds(): int` | Liefert die Länge des Fairness-Fensters in Sekunden, über das die Zuweisungen je Endpunkt gezählt werden (Standard 900). |
+| `balancerLoadJoinSql` | `balancerLoadJoinSql(string $tasksTable): string` | Liefert den `LEFT JOIN` mit laufender Auslastung, Fair-Share-Zähler und letzter Zuweisung je Endpunkt. |
+| `balancerFairnessOrderBySql` | `balancerFairnessOrderBySql(): string` | Liefert die gemeinsame `ORDER BY`-Liste: Auslastung, Fair-Share, Round-Robin, Endpunkt-ID (ohne Latenz). |
 | `computeBackoffDelayMs` | `computeBackoffDelayMs(int $attempt): int` | Berechnet die exponentielle Backoff-Verzögerung inkl. optionalem Jitter für einen Versuch. |
 | `backoffSleep` | `backoffSleep(int $attempt): void` | Wartet die berechnete Backoff-Verzögerung für einen Wiederholungsversuch ab. |
 | `getFallbackChain` | `getFallbackChain(string $model): array` | Liefert die geordnete Liste der Fallback-Modelle für ein Modell. |

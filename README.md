@@ -40,7 +40,7 @@ Weitere Dokumente im Repository:
 ## Funktionen
 
 - **Chat mit Streaming:** Server-Sent Events und persistente Chat-Sitzungen pro Benutzer.
-- **Routing und Lastverteilung:** optionale semantische Klassifikation, kategoriebasierte Modellwahl und konfigurierbare Fallback-Ketten; gesunde Endpunkte werden anhand von Auslastung, Kapazität, Latenz, Kosten und Fairness ausgewählt.
+- **Routing und Lastverteilung:** optionale semantische Klassifikation, kategoriebasierte Modellwahl und konfigurierbare Fallback-Ketten; gesunde Endpunkte werden anhand von Auslastung, Kapazität und Fair-Share ausgewählt.
 - **Direkte Modellwahl:** angemeldete Benutzer sprechen mit dem Präfix `@@35b` eine Intelligenzgruppe direkt an; die Auswahl überschreibt Benutzer- und Standardmodelle und bleibt im Chat aktiv.
 - **Reasoning auf Abruf:** Thinking/Reasoning ist standardmäßig deaktiviert und wird mit dem Präfix `!!` für den jeweiligen Prompt eingeschaltet (Anzeige als 💡-Pille in der Eingabezeile).
 - **Prompt-Funktionen:** Präfixe wie `/table`, `/tldr` oder `/eli5` schalten für den jeweiligen Prompt eine feste Systemprompt-Ergänzung frei (z. B. Tabellenformat, Kurz-Zusammenfassung, kindgerechte Erklärung); Anzeige als eigene Pille je aktiver Funktion, mehrere Funktionen lassen sich kombinieren.
@@ -110,7 +110,7 @@ flowchart TD
     F --> G{Routing-Regel für<br/>Kategorie vorhanden?}
     G -- Nein --> H
     G -- Ja --> I[Zugeordnetes Zielmodell auswählen]
-    H --> J[Gesunden Endpunkt des Modells<br/>nach Kapazität, Latenz und Kosten wählen]
+    H --> J[Gesunden Endpunkt des Modells<br/>nach Kapazität und Fair-Share wählen]
     I --> J
     J --> K{Verarbeitung erfolgreich?}
     K -- Ja --> L[Antwort ausgeben]
@@ -219,8 +219,10 @@ Die Auswahl erfolgt in einer festen Prioritätsfolge:
 1. Nur aktive Endpunkte der benötigten Modellgruppe beziehungsweise Bild-Engine werden berücksichtigt.
 2. Endpunkte mit offenem Circuit Breaker oder ohne freien Task-Slot werden ausgeschlossen.
 3. Die laufenden Tasks je Endpunkt werden verglichen; weniger ausgelastete Endpunkte werden bevorzugt.
-4. Bei gleicher Auslastung entscheidet die geglättete Latenz.
+4. Bei gleicher Auslastung entscheidet der Fair-Share: Der Endpunkt mit den wenigsten Zuweisungen innerhalb des Fairness-Fensters (`balancer_fairness_window_seconds`, Standard 15 Minuten) erhält die Aufgabe.
 5. Bei Gleichstand entsteht durch die älteste letzte Zuweisung ein Round-Robin-Effekt; noch nie verwendete Endpunkte kommen zuerst.
+
+Die gemessene Latenz fließt bewusst **nicht** in die Auswahl ein: Alle Endpunkte liegen im selben Subnetz, `avg_latency_ms` ist daher ein rein statistischer Wert für Monitoring und Admin-Ansicht.
 
 ![Faktoren der Endpunkt-Auswahl](docs/images/load-balancing-factors.svg)
 
@@ -230,8 +232,8 @@ flowchart TD
     B --> C[Aktive Kandidaten mit passendem Modell,<br/>geschlossenem Circuit und freiem Slot ermitteln]
     C --> D{Kandidat vorhanden?}
     D -- Nein --> E[Transaktion zurückrollen<br/>Kein Endpunkt verfügbar]
-    D -- Ja --> F[Nach normalisierter Last,<br/>Latenz und Kosten priorisieren]
-    F --> G[Fairness als Tie-Breaker:<br/>älteste Zuweisung zuerst]
+    D -- Ja --> F[Nach laufender Last und Fair-Share<br/>im Fairness-Fenster priorisieren]
+    F --> G[Round-Robin als Tie-Breaker:<br/>älteste Zuweisung zuerst]
     G --> H[Kandidatenzeile sperren<br/>und freie Kapazität erneut prüfen]
     H --> I{Slot weiterhin frei?}
     I -- Nein --> J[Nächsten Kandidaten prüfen]
@@ -271,6 +273,7 @@ Die Parameter werden unter **Administration → Balancer & Routing** gepflegt:
 | `balancer_backoff_base_ms` / `balancer_backoff_max_ms` | `200` / `8000` | Grenzen des exponentiellen Backoffs |
 | `balancer_backoff_jitter` | aktiv | zufällige Verteilung der Retry-Verzögerung |
 | `balancer_orphan_timeout_seconds` | `300` | Timeout für verwaiste Tasks |
+| `balancer_fairness_window_seconds` | `900` | Zeitfenster für den Fair-Share-Vergleich je Endpunkt |
 | `balancer_fallback_chains` | `{}` | geordnete Ersatzmodelle als JSON-Objekt |
 
 ## Voraussetzungen

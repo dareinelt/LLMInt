@@ -74,6 +74,11 @@ const BALANCER_SETTING_DEFAULTS = [
     // JSON object mapping a requested model name to an ordered array of
     // fallback model names, e.g. {"big-model:70b": ["big-model:34b", "big-model:8b"]}
     'balancer_fallback_chains'         => '{}',
+    // Sliding window (seconds) over which already dispatched tasks are counted
+    // per endpoint to determine each endpoint's fair share. Endpoints that
+    // handled fewer tasks inside this window are preferred, which prevents a
+    // single endpoint from absorbing nearly all traffic.
+    'balancer_fairness_window_seconds' => '900',
 ];
 
 /**
@@ -111,6 +116,76 @@ function getBalancerOrphanTimeoutSeconds(): int
 {
     $value = (int) getBalancerSetting('balancer_orphan_timeout_seconds');
     return $value > 0 ? $value : 300;
+}
+
+/**
+ * Length (seconds) of the sliding window used to count how many tasks each
+ * endpoint already received. Drives the fair-share ordering of the router.
+ */
+function getBalancerFairnessWindowSeconds(): int
+{
+    $value = (int) getBalancerSetting('balancer_fairness_window_seconds');
+    return $value > 0 ? $value : 900;
+}
+
+/**
+ * Builds the LEFT JOIN that provides the per-endpoint routing statistics used
+ * by every balancer:
+ *   - running_count     : tasks currently in flight (capacity check),
+ *   - recent_task_count : tasks started inside the fairness window
+ *                         (fair-share check),
+ *   - last_task_at      : most recent dispatch (round-robin / LRU check).
+ *
+ * The subquery is restricted to running tasks plus tasks started inside the
+ * fairness window, so it stays cheap even with a large task history
+ * (covered by the idx_*_endpoint_started indexes).
+ *
+ * The joined alias is `r`; the endpoint table must be aliased `e`.
+ */
+function balancerLoadJoinSql(string $tasksTable): string
+{
+    if (!in_array($tasksTable, ['tasks', 'sd_tasks', 'comfy_tasks'], true)) {
+        throw new InvalidArgumentException('Unknown tasks table: ' . $tasksTable);
+    }
+    $windowSeconds = getBalancerFairnessWindowSeconds();
+
+    return "
+            LEFT JOIN (
+                SELECT endpoint_id,
+                       SUM(status = 'running') AS running_count,
+                       SUM(started_at >= DATE_SUB(NOW(3), INTERVAL {$windowSeconds} SECOND)) AS recent_task_count,
+                       MAX(started_at) AS last_task_at
+                  FROM {$tasksTable}
+                 WHERE status = 'running'
+                    OR started_at >= DATE_SUB(NOW(3), INTERVAL {$windowSeconds} SECOND)
+                 GROUP BY endpoint_id
+            ) r ON r.endpoint_id = e.id";
+}
+
+/**
+ * Ordering used to pick the best endpoint among the eligible candidates
+ * (endpoint table aliased `e`, statistics joined as `r`, see
+ * balancerLoadJoinSql()):
+ *
+ *   1. fewest tasks currently running     → spread the instantaneous load,
+ *   2. fewest tasks in the fairness window → equalise the long-term share,
+ *   3. least recently used                → round-robin between equals,
+ *   4. endpoint id                        → stable, deterministic tie-break.
+ *
+ * Latency is deliberately *not* part of the ordering: all endpoints live in
+ * the same subnet, so `avg_latency_ms` is a purely statistical value (kept for
+ * monitoring only). Ranking by it made the order fully deterministic for idle
+ * endpoints, so the endpoint with the marginally best average received every
+ * request while equally capable endpoints stayed idle.
+ */
+function balancerFairnessOrderBySql(): string
+{
+    return "
+                COALESCE(r.running_count, 0) ASC,
+                COALESCE(r.recent_task_count, 0) ASC,
+                CASE WHEN r.last_task_at IS NULL THEN 0 ELSE 1 END ASC,
+                r.last_task_at ASC,
+                e.id ASC";
 }
 
 /**

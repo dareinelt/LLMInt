@@ -340,6 +340,16 @@ function ensureRuntimeSchema(PDO $pdo): void
         // index already exists
     }
 
+    // Index supporting the balancer's fair-share window query, which aggregates
+    // recently started tasks per endpoint (see lib/balancer_engine.php).
+    foreach ([
+        "ALTER TABLE tasks       ADD KEY idx_tasks_endpoint_started (endpoint_id, started_at)",
+        "ALTER TABLE sd_tasks    ADD KEY idx_sd_endpoint_started (endpoint_id, started_at)",
+        "ALTER TABLE comfy_tasks ADD KEY idx_comfy_endpoint_started (endpoint_id, started_at)",
+    ] as $balancerIndex) {
+        try { $pdo->exec($balancerIndex); } catch (Throwable $_e) { /* index already exists */ }
+    }
+
 
     // External API keys for OpenAI-compatible endpoints.
     $pdo->exec("
