@@ -28,6 +28,7 @@ Quick-reference for coding agents to navigate the codebase without reading all f
 | **db.php** | 1,774 | PDO singleton, `ensureRuntimeSchema()` (idempotent migrations), settings, logging, routing, chat sessions, intelligence groups |
 | **config.php** | 27 | `LMSTUDIO_BASE_URL`, `LMSTUDIO_TIMEOUT` from active endpoint or settings |
 | **lib/balancer_engine.php** | 468 | Shared balancer logic (LLM, SD, ComfyUI): circuit breaker, fallbacks, health, orphan cleanup |
+| **lib/healthcheck.php** | ~110 | Active `/models` probing of LLM endpoints; drives `index.php` maintenance-mode fallback |
 | **lib/prompt_security.php** | 499 | Prompt injection detection: rules, normalization, scoring, AI evaluation, logging |
 | **lib/openai_api.php** | 209 | OpenAI API key handling, payload normalization, error formatting |
 | **lib/ldap_auth.php** | 320 | LDAP bind, user sync, Kerberos SSO |
@@ -74,6 +75,11 @@ Quick-reference for coding agents to navigate the codebase without reading all f
 - `maybeHalfOpenCircuit(table, endpointId): void`
 - `cleanupOrphanedTasks(tasksTable, force): int`
 - `getUpgradeModelSuggestionForRequestedModel(requested, category): ?array`
+
+### Healthcheck / Maintenance Mode (`lib/healthcheck.php`, `api/healthcheck.php`)
+- `probeLlmEndpoints(timeoutSeconds): array` – active parallel `GET /models` probe of all active endpoints
+- `isAnyLlmEndpointHealthy(): bool` – cached (10 s TTL, via `settings`) aggregate availability
+- `index.php` renders a maintenance page (HTTP 503, auto-polls `api/healthcheck.php`) instead of the chat UI when this returns `false`
 
 ### Embeddings (`api/embedding.php`)
 - `generateEmbeddingAuto(text, type): ?array`
