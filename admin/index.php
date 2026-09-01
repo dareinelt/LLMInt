@@ -5115,13 +5115,26 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     let treeX = 0, treeY = 0;     // top-left corner of the diagram (may be negative)
     let vpX = 0, vpY = 0, vpW = 600, vpH = 400; // current viewport (SVG coords)
 
+    // True as soon as the user has panned or zoomed manually. In that case the
+    // auto-refresh must keep the current detail view instead of resetting the
+    // diagram to the full overview.
+    let viewAdjusted = false;
+
     function applyViewBox() {
         svg.setAttribute('viewBox', `${vpX} ${vpY} ${vpW} ${vpH}`);
     }
 
     function resetView() {
         vpX = treeX; vpY = treeY; vpW = treeW; vpH = treeH;
+        viewAdjusted = false;
         applyViewBox();
+    }
+
+    // Called after every (re-)render: restore the user's current detail view,
+    // fall back to the full view if it was never changed.
+    function restoreViewAfterRender() {
+        if (viewAdjusted) applyViewBox();
+        else              resetView();
     }
 
     // Mouse pan
@@ -5143,6 +5156,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const scaleY = vpH / Math.max(1, rect.height);
         vpX = dStartVpX - (e.clientX - dStartX) * scaleX;
         vpY = dStartVpY - (e.clientY - dStartY) * scaleY;
+        viewAdjusted = true;
         applyViewBox();
     });
 
@@ -5165,6 +5179,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         vpX = cx - mx * newW;
         vpY = cy - my * newH;
         vpW = newW; vpH = newH;
+        viewAdjusted = true;
         applyViewBox();
     }, { passive: false });
 
@@ -5194,6 +5209,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const scaleY = vpH / Math.max(1, rect.height);
             vpX = touchStartVpX - (e.touches[0].clientX - touchStartX) * scaleX;
             vpY = touchStartVpY - (e.touches[0].clientY - touchStartY) * scaleY;
+            viewAdjusted = true;
             applyViewBox();
         } else if (e.touches.length === 2) {
             const dist = Math.hypot(
@@ -5209,6 +5225,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 vpX = cx - newW / 2;
                 vpY = cy - newH / 2;
                 vpW = newW; vpH = newH;
+                viewAdjusted = true;
                 applyViewBox();
             }
             lastTouchDist = dist;
@@ -5392,7 +5409,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 'font-size': 13,
                 'font-family': 'sans-serif',
             });
-            resetView();
+            restoreViewAfterRender();
             return;
         }
 
@@ -5581,7 +5598,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         treeY = minY;
         treeW = maxX - minX;
         treeH = maxY - minY;
-        resetView();
+        restoreViewAfterRender();
 
         // ── Connector curves ──────────────────────────────────────────────────
 
