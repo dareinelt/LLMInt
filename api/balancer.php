@@ -20,7 +20,7 @@
  *      (configurable via the `balancer_max_concurrent` setting; previously
  *      hard-coded to 4).
  *   4. Prefer the endpoint with the best routing score, combining current
- *      load (capacity headroom), average latency and relative cost.
+ *      load (running task count) and average latency.
  *   5. Among equally-scored endpoints, prefer the one that received a task
  *      least recently (round-robin effect). Endpoints that have never
  *      received a task sort before used ones.
@@ -90,7 +90,7 @@ function pickEndpointForModel(
             SELECT e.id, e.alias, e.base_url, e.timeout, e.default_model,
                    e.supports_tool_calling, e.is_llamacpp, e.reasoning_effort, e.supports_vision,
                    e.circuit_state, e.cooldown_until,
-                   e.avg_latency_ms, e.cost_weight, e.capacity_weight,
+                   e.avg_latency_ms,
                    e.max_context, e.context_limit_per_slot,
                    COALESCE(r.running_count, 0) AS running_count,
                    r.last_task_at
@@ -110,9 +110,8 @@ function pickEndpointForModel(
               {$toolCallingWhere}
               {$visionWhere}
             ORDER BY
-                (COALESCE(r.running_count, 0) / GREATEST(e.capacity_weight, 0.0001)) ASC,
-                COALESCE(e.avg_latency_ms, 999999) * ? ASC,
-                e.cost_weight * ? ASC,
+                COALESCE(r.running_count, 0) ASC,
+                COALESCE(e.avg_latency_ms, 999999) ASC,
                 CASE WHEN r.last_task_at IS NULL THEN 0 ELSE 1 END ASC,
                 r.last_task_at ASC
             LIMIT 8
@@ -120,8 +119,6 @@ function pickEndpointForModel(
         $stmt->execute([
             ...$modelPool,
             $maxConcurrent,
-            (float) getBalancerSetting('balancer_weight_latency'),
-            (float) getBalancerSetting('balancer_weight_cost'),
         ]);
         $candidates = $stmt->fetchAll();
 

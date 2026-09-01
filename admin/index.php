@@ -42,9 +42,6 @@ $balancerOrphanTimeoutSecs    = getBalancerOrphanTimeoutSeconds();
 $balancerBackoffBaseMs        = (int) getBalancerSetting('balancer_backoff_base_ms');
 $balancerBackoffMaxMs         = (int) getBalancerSetting('balancer_backoff_max_ms');
 $balancerBackoffJitter        = getBalancerSetting('balancer_backoff_jitter') === '1';
-$balancerWeightLatency        = (float) getBalancerSetting('balancer_weight_latency');
-$balancerWeightCost           = (float) getBalancerSetting('balancer_weight_cost');
-$balancerWeightCapacity       = (float) getBalancerSetting('balancer_weight_capacity');
 $balancerFallbackChainsJson   = getBalancerSetting('balancer_fallback_chains');
 $routingCategories = loadRoutingCategories();
 $routingCategoriesData = loadRoutingCategoriesFromDb();
@@ -135,8 +132,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $reasoningEffort = 'high';
             }
             $supportsVision      = isset($_POST['ep_supports_vision']) ? 1 : 0;
-            $costWeight          = max(0.0001, min(1000, (float) ($_POST['ep_cost_weight'] ?? 1.0)));
-            $capacityWeight      = max(0.0001, min(1000, (float) ($_POST['ep_capacity_weight'] ?? 1.0)));
 
             if (strlen($newAlias) > 120) {
                 $flashError = 'Alias darf maximal 120 Zeichen lang sein.';
@@ -156,13 +151,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'INSERT INTO endpoints (alias, base_url, timeout, max_context, context_limit_per_slot,
                                             default_model, specialized_for_category,
                                             supports_tool_calling, is_llamacpp, reasoning_effort, supports_vision, is_active, sort_order,
-                                            ssh_host, ssh_port, ssh_user, ssh_password, cost_weight, capacity_weight)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                                            ssh_host, ssh_port, ssh_user, ssh_password)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
                 )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
                             $newModel, $specializedFor,
                             $supportsToolCalling, $isLlamacpp, $reasoningEffort, $supportsVision, $isActive, $maxOrder + 1,
-                            $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null,
-                            $costWeight, $capacityWeight]);
+                            $sshHost, $sshPort, $sshUser, $sshPassword !== '' ? $sshPassword : null]);
                 $endpointLabel = $newAlias !== '' ? $newAlias : rtrim($newUrl, '/');
                 writeLog('info', 'Neuer Modellendpunkt erfolgreich registriert (' . $endpointLabel . ', Modell: ' . $newModel . ').');
                 $flashOk = 'Endpunkt hinzugefügt.';
@@ -190,8 +184,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $reasoningEffort = 'high';
             }
             $supportsVision      = isset($_POST['ep_supports_vision']) ? 1 : 0;
-            $costWeight          = max(0.0001, min(1000, (float) ($_POST['ep_cost_weight'] ?? 1.0)));
-            $capacityWeight      = max(0.0001, min(1000, (float) ($_POST['ep_capacity_weight'] ?? 1.0)));
 
             if ($epId <= 0) {
                 $flashError = 'Ungültige Endpunkt-ID.';
@@ -217,24 +209,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             SET alias = ?, base_url = ?, timeout = ?, max_context = ?, context_limit_per_slot = ?,
                                 default_model = ?,
                                 specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, reasoning_effort = ?, supports_vision = ?, is_active = ?,
-                                ssh_host = ?, ssh_port = ?, ssh_user = ?, cost_weight = ?, capacity_weight = ?
+                                ssh_host = ?, ssh_port = ?, ssh_user = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
                                 $newModel, $specializedFor,
                                 $supportsToolCalling, $isLlamacpp, $reasoningEffort, $supportsVision, $isActive, $sshHost, $sshPort, $sshUser,
-                                $costWeight, $capacityWeight, $epId]);
+                                $epId]);
                 } else {
                     $db->prepare(
                         'UPDATE endpoints
                             SET alias = ?, base_url = ?, timeout = ?, max_context = ?, context_limit_per_slot = ?,
                                 default_model = ?,
                                 specialized_for_category = ?, supports_tool_calling = ?, is_llamacpp = ?, reasoning_effort = ?, supports_vision = ?, is_active = ?,
-                                ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?, cost_weight = ?, capacity_weight = ?
+                                ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?
                           WHERE id = ?'
                     )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $newMaxContext, $newContextLimitSlot,
                                 $newModel, $specializedFor,
                                 $supportsToolCalling, $isLlamacpp, $reasoningEffort, $supportsVision, $isActive, $sshHost, $sshPort, $sshUser, $sshPassword,
-                                $costWeight, $capacityWeight, $epId]);
+                                $epId]);
                 }
                 if (is_array($previousEndpoint) && (int) ($previousEndpoint['is_active'] ?? 0) === 1 && $isActive !== 1) {
                     $endpointLabel = trim((string) ($previousEndpoint['alias'] ?? ''));
@@ -380,9 +372,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newBackoffBaseMs   = max(1, min(60000, (int) ($_POST['balancer_backoff_base_ms'] ?? 200)));
             $newBackoffMaxMs    = max($newBackoffBaseMs, min(600000, (int) ($_POST['balancer_backoff_max_ms'] ?? 8000)));
             $newBackoffJitter   = isset($_POST['balancer_backoff_jitter']);
-            $newWeightLatency   = max(0.0, min(1.0, (float) ($_POST['balancer_weight_latency'] ?? 0.35)));
-            $newWeightCost      = max(0.0, min(1.0, (float) ($_POST['balancer_weight_cost'] ?? 0.25)));
-            $newWeightCapacity  = max(0.0, min(1.0, (float) ($_POST['balancer_weight_capacity'] ?? 0.40)));
             $newFallbackChains  = trim($_POST['balancer_fallback_chains'] ?? '{}');
 
             $decodedFallback = json_decode($newFallbackChains === '' ? '{}' : $newFallbackChains, true);
@@ -396,9 +385,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 setSetting('balancer_backoff_base_ms', (string) $newBackoffBaseMs);
                 setSetting('balancer_backoff_max_ms', (string) $newBackoffMaxMs);
                 setSetting('balancer_backoff_jitter', $newBackoffJitter ? '1' : '0');
-                setSetting('balancer_weight_latency', (string) $newWeightLatency);
-                setSetting('balancer_weight_cost', (string) $newWeightCost);
-                setSetting('balancer_weight_capacity', (string) $newWeightCapacity);
                 saveFallbackChains($decodedFallback);
 
                 $balancerMaxConcurrent        = $newMaxConcurrent;
@@ -408,9 +394,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $balancerBackoffBaseMs        = $newBackoffBaseMs;
                 $balancerBackoffMaxMs         = $newBackoffMaxMs;
                 $balancerBackoffJitter        = $newBackoffJitter;
-                $balancerWeightLatency        = $newWeightLatency;
-                $balancerWeightCost           = $newWeightCost;
-                $balancerWeightCapacity       = $newWeightCapacity;
                 $balancerFallbackChainsJson   = getBalancerSetting('balancer_fallback_chains');
                 $flashOk = 'Balancer- und Routing-Einstellungen gespeichert.';
             }
@@ -2841,23 +2824,6 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     </p>
                 </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="ep-cost-weight">Relative Kosten (Routing-Gewichtung)</label>
-                        <input type="number" id="ep-cost-weight" name="ep_cost_weight"
-                               min="0.0001" max="1000" step="0.1"
-                               value="<?= $editEp ? htmlspecialchars((string) ($editEp['cost_weight'] ?? '1.0000')) : '1.0000' ?>">
-                        <p class="hint">Niedrigere Werte werden vom Router bevorzugt (z. B. günstigere Cloud-Instanz).</p>
-                    </div>
-                    <div class="form-group">
-                        <label for="ep-capacity-weight">Relative Kapazität (Routing-Gewichtung)</label>
-                        <input type="number" id="ep-capacity-weight" name="ep_capacity_weight"
-                               min="0.0001" max="1000" step="0.1"
-                               value="<?= $editEp ? htmlspecialchars((string) ($editEp['capacity_weight'] ?? '1.0000')) : '1.0000' ?>">
-                        <p class="hint">Höhere Werte (z. B. bei stärkerer Hardware) lassen den Endpunkt bei gleicher Auslastung relativ weniger belastet erscheinen.</p>
-                    </div>
-                </div>
-
                 <!-- ── SSH-Zugangsdaten (Systemmetriken) ──────────────────────── -->
                 <details id="ep-ssh-details"<?= ($editEp && trim((string) ($editEp['ssh_host'] ?? '')) !== '') ? ' open' : '' ?>>
                     <summary style="cursor:pointer;font-weight:600;margin:12px 0 8px;color:var(--text-muted)">
@@ -3162,23 +3128,6 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                       Zufälligen Jitter zum Backoff hinzufügen
                   </label>
                   <p class="hint">Vermeidet synchronisierte Wiederholungsversuche mehrerer gleichzeitiger Anfragen ("Retry-Storm").</p>
-              </div>
-
-              <div class="form-group">
-                  <label for="balancer-weight-latency">Routing-Gewicht: Latenz (0–1)</label>
-                  <input type="number" id="balancer-weight-latency" name="balancer_weight_latency"
-                         min="0" max="1" step="0.05" value="<?= htmlspecialchars((string) $balancerWeightLatency) ?>">
-              </div>
-              <div class="form-group">
-                  <label for="balancer-weight-cost">Routing-Gewicht: Kosten (0–1)</label>
-                  <input type="number" id="balancer-weight-cost" name="balancer_weight_cost"
-                         min="0" max="1" step="0.05" value="<?= htmlspecialchars((string) $balancerWeightCost) ?>">
-              </div>
-              <div class="form-group">
-                  <label for="balancer-weight-capacity">Routing-Gewicht: Kapazität (0–1)</label>
-                  <input type="number" id="balancer-weight-capacity" name="balancer_weight_capacity"
-                         min="0" max="1" step="0.05" value="<?= htmlspecialchars((string) $balancerWeightCapacity) ?>">
-                  <p class="hint">Bestimmt, wie stark Latenz, relative Kosten (siehe Endpunkt-Einstellungen) und freie Kapazität die Endpunkt-Auswahl beeinflussen.</p>
               </div>
 
               <div class="form-group">

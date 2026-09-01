@@ -214,8 +214,8 @@ Die Auswahl erfolgt in einer festen Prioritätsfolge:
 
 1. Nur aktive Endpunkte der benötigten Modellgruppe beziehungsweise Bild-Engine werden berücksichtigt.
 2. Endpunkte mit offenem Circuit Breaker oder ohne freien Task-Slot werden ausgeschlossen.
-3. Die laufenden Tasks werden durch das individuelle `capacity_weight` des Endpunkts normalisiert; leistungsfähigere Endpunkte können dadurch mehr Verkehr übernehmen.
-4. Danach fließen die geglättete Latenz und das relative `cost_weight` mit konfigurierbaren Gewichtungen ein.
+3. Die laufenden Tasks je Endpunkt werden verglichen; weniger ausgelastete Endpunkte werden bevorzugt.
+4. Bei gleicher Auslastung entscheidet die geglättete Latenz.
 5. Bei Gleichstand entsteht durch die älteste letzte Zuweisung ein Round-Robin-Effekt; noch nie verwendete Endpunkte kommen zuerst.
 
 ![Faktoren der Endpunkt-Auswahl](docs/images/load-balancing-factors.svg)
@@ -267,7 +267,6 @@ Die Parameter werden unter **Administration → Balancer & Routing** gepflegt:
 | `balancer_backoff_base_ms` / `balancer_backoff_max_ms` | `200` / `8000` | Grenzen des exponentiellen Backoffs |
 | `balancer_backoff_jitter` | aktiv | zufällige Verteilung der Retry-Verzögerung |
 | `balancer_orphan_timeout_seconds` | `300` | Timeout für verwaiste Tasks |
-| `balancer_weight_latency` / `balancer_weight_cost` / `balancer_weight_capacity` | `0,35` / `0,25` / `0,40` | Gewichtung der Auswahlfaktoren |
 | `balancer_fallback_chains` | `{}` | geordnete Ersatzmodelle als JSON-Objekt |
 
 ## Voraussetzungen
@@ -384,7 +383,7 @@ Nach der Anmeldung unter `/admin/login.php`:
 6. Optional Hybrid-Suche, Reranker und Prompt Security aktivieren.
 7. Verbindungs- und Funktionstests im Admin-Bereich ausführen.
 
-Endpunkte mit demselben `default_model` bilden einen Pool. Das Routing kann eine Nutzeranfrage zuerst einer Kategorie zuordnen und diese über `routing_rules` auf ein Zielmodell abbilden. Ist die Klassifikation nicht verfügbar, wird die ursprüngliche Modellauswahl verwendet. Unter **Balancer & Routing** lassen sich außerdem Kapazitätsgrenzen, Circuit Breaker, Retry-Verhalten, Auswahlgewichtungen und Fallback-Ketten konfigurieren.
+Endpunkte mit demselben `default_model` bilden einen Pool. Das Routing kann eine Nutzeranfrage zuerst einer Kategorie zuordnen und diese über `routing_rules` auf ein Zielmodell abbilden. Ist die Klassifikation nicht verfügbar, wird die ursprüngliche Modellauswahl verwendet. Unter **Balancer & Routing** lassen sich außerdem Kapazitätsgrenzen, Circuit Breaker, Retry-Verhalten und Fallback-Ketten konfigurieren.
 
 ## Hybrid-RAG
 
