@@ -235,6 +235,32 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    // Daily aggregate of the concurrent client count. client_count_log only
+    // keeps the samples of the current day, so the long-term usage statistics
+    // are rolled up here (one row per day).
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS client_count_daily (
+            day         DATE              NOT NULL,
+            max_cnt     SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+            sum_cnt     BIGINT UNSIGNED   NOT NULL DEFAULT 0,
+            samples     INT UNSIGNED      NOT NULL DEFAULT 0,
+            PRIMARY KEY (day)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // One row per successful login – basis for the \"angemeldete Nutzer\"
+    // series of the usage statistics.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS user_login_log (
+            id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id      INT             NOT NULL,
+            logged_in_at TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            KEY idx_ull_time (logged_in_at),
+            KEY idx_ull_user_time (user_id, logged_in_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     // AUTOMATIC1111 / Stable Diffusion endpoints.
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS sd_endpoints (
@@ -923,6 +949,29 @@ function renderRegistrationEmailTemplate(string $template, array $vars): string
         $replace[] = $val;
     }
     return str_replace($search, $replace, $template);
+}
+
+/**
+ * Record a successful login of $userId and refresh users.last_login.
+ *
+ * Feeds the "angemeldete Nutzer" series of the usage statistics. Failures are
+ * swallowed so that a logging problem can never block a valid login.
+ */
+function recordUserLogin(int $userId): void
+{
+    if ($userId <= 0) {
+        return;
+    }
+
+    try {
+        $db = getDb();
+        $db->prepare('INSERT INTO user_login_log (user_id, logged_in_at) VALUES (?, NOW(3))')
+           ->execute([$userId]);
+        $db->prepare('UPDATE users SET last_login = NOW() WHERE id = ?')
+           ->execute([$userId]);
+    } catch (Throwable $e) {
+        error_log('[usage-stats] recordUserLogin failed: ' . $e->getMessage());
+    }
 }
 
 /**

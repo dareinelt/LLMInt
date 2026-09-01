@@ -28,6 +28,7 @@ if (ldapSsoEnabled()) {
             $_SESSION['admin_user'] = $ssoUser;
             $_SESSION['admin_id']   = $userId;
             $_SESSION['requires_password_change'] = false;
+            recordUserLogin((int) $userId);
             header('Location: index.php');
             exit;
         }
@@ -55,6 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $error === '') {
                         $_SESSION['admin_user'] = $adInfo['username'];
                         $_SESSION['admin_id']   = $userId;
                         $_SESSION['requires_password_change'] = false;
+                        recordUserLogin((int) $userId);
                         header('Location: index.php');
                         exit;
                     }
@@ -83,8 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $error === '') {
                     $_SESSION['admin_id']   = (int) $user['id'];
                     $_SESSION['requires_password_change'] = !empty($user['requires_password_change']);
 
-                    getDb()->prepare('UPDATE users SET last_login = NOW() WHERE id = ?')
-                           ->execute([$user['id']]);
+                    recordUserLogin((int) $user['id']);
 
                     header('Location: index.php');
                     exit;

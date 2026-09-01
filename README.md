@@ -50,6 +50,7 @@ Weitere Dokumente im Repository:
 - **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO.
 - **OpenAI-kompatible API:** Modellliste und Chat Completions, wahlweise mit den Chat-Tools.
 - **Monitoring:** Endpunktlast, Tokenverbrauch, aktive Clients (als Wolke mit Hostname bzw. IP-Adresse rund um die Clients-Kachel), Such- und Generierungsjobs sowie optionale SSH-Systemmetriken. Die Lastverteilungs-Grafik lässt sich per **⛶ Vollbild** auf die volle Browserfenstergröße vergrößern (kein Browser-Vollbild, Beenden per Button oder Esc).
+- **Nutzungsstatistik:** Liniendiagramm im Adminbereich (retinatauglich, umschaltbar auf 3, 7, 14, 30, 90, 180 Tage oder ein Jahr) mit Clients, angemeldeten Nutzern, durchgeführten Tasks, Websuchen und fehlgeschlagenen Tasks je Tag.
 - **Prompt Security:** mehrstufige Prüfung von Chat-Eingaben mit konfigurierbaren Regeln, Bewertung und Protokollierung.
 
 ## Architektur
@@ -85,7 +86,7 @@ Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Bu
 | `setup.php` | Erstinstallation: Tabellen, Migrationen, Standardeinstellungen, Standardadministrator |
 | `api/` | JSON- und SSE-Endpunkte sowie die Bibliotheken für Balancer und Embeddings |
 | `lib/` | Balancer-Engine, Prompt Security, OpenAI-Hilfsfunktionen, LDAP-Anbindung, SMTP-Client, Routing-Prompt |
-| `admin/` | Administration, Dashboard-Livedaten, SSH-Systemmetriken, API-Keys, Prompt Security |
+| `admin/` | Administration, Dashboard-Livedaten, Nutzungsstatistik, SSH-Systemmetriken, API-Keys, Prompt Security |
 | `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth |
 | `docconvert/` | Python/FastAPI-Container zur Konvertierung von Office- und Textdateien in strukturierte Chunks |
 | `doc_uploads/`, `sd_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
@@ -466,6 +467,7 @@ print(response.choices[0].message.content)
 | Bildgenerierung | `api/sd_generate.php`, `api/sd_checkpoints.php`, `api/comfy_generate.php`, `api/comfy_checkpoints.php` |
 | Integrationen | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` |
 | Benutzer und Status | `api/verify_email.php`, `api/reset_password.php`, `api/admin_user_action.php`, `api/heartbeat.php` |
+| Administration | `admin/load_stats.php`, `admin/refresh_sys_stats.php`, `admin/usage_stats.php` (Nutzungsstatistik, Parameter `days`) |
 
 ### Anfrageformat von `api/chat.php`
 
@@ -505,7 +507,7 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 | Chat und Routing | `conversation_sessions`, `routing_categories`, `routing_rules`, `search_logs` |
 | Dokumente und Embeddings | `document_uploads`, `document_chunks`, `embedding_endpoints`, `embedding_cache`, `embedding_logs` |
 | Bildgenerierung | `sd_endpoints`, `sd_tasks`, `comfy_endpoints`, `comfy_tasks` |
-| Monitoring | `active_clients`, `client_count_log` |
+| Monitoring | `active_clients`, `client_count_log`, `client_count_daily`, `user_login_log` |
 | Sicherheit | `prompt_security_rules`, `prompt_security_logs` |
 
 ## Entwicklung
