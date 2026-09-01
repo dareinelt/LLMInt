@@ -141,7 +141,10 @@ Aufruf: `POST api/chat.php` mit JSON-Body. Antwort ist JSON oder – bei `stream
 1. Session starten, Payload prüfen.
 2. Prompt Security über `psEvaluate()`; bei `block` wird abgebrochen.
 3. Intelligenzgruppe auswerten (`extractIntelligenceGroupPrefix()`,
-   `resolveIntelligenceGroupModel()`, Persistenz per `setSessionIntelligenceGroup()`).
+   `resolveIntelligenceGroupModel()`, Persistenz per `setSessionIntelligenceGroup()`);
+   anschließend Reasoning-Präfix auswerten (`extractReasoningPrefix()`, alternativ das Feld
+   `reasoning` im Request). Ohne Aktivierung entfällt `reasoning_effort` im Forward-Payload
+   und `chat_template_kwargs.enable_thinking` wird auf `false` gesetzt.
 4. Optionales Routing: Entscheidungsmodell klassifiziert die letzte Nutzernachricht anhand
    von `buildRoutingPrompt()`; `loadRoutingRules()` bildet die Kategorie auf ein Modell ab.
 5. Endpunktauswahl über `pickEndpointForModel()`; solange kein Slot frei ist, wird bei
@@ -269,6 +272,8 @@ Verwaltung: `admin/prompt_security.php` (Dashboard, Regeln, Logs, Einstellungen)
   `api/chat_sessions.php?action=list|load|delete`.
 - Intelligenzgruppen: `applyGroupPrefixFromInput()`, `renderGroupPill()`, `setActiveGroup()`,
   `removeActiveGroup()`.
+- Reasoning: `applyReasoningPrefixFromInput()`, `renderReasoningPill()`; das `!!`-Präfix
+  aktiviert Reasoning für genau einen Prompt und wird als 💡-Pille dargestellt.
 - Dokumente: `openUploadModal()`, `setFile()`, Upload per `FormData` inklusive `csrf_token`
   an `api/upload_document.php`, Statusanzeige über `loadStatus()`/`renderUploads()`.
 - Präsenz: `sendHeartbeat()` gegen `api/heartbeat.php`.

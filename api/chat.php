@@ -2095,6 +2095,46 @@ if ($sessionUserId !== null && isIntelligenceGroupFeatureEnabled()) {
     }
 }
 
+// ── Reasoning prefix (e.g. "!! …") ───────────────────────────────────────────
+// Thinking/reasoning is disabled by default. A leading "!!" in the last user
+// message – or the "reasoning" flag sent by the web UI – switches it on for
+// this single request. The prefix itself is removed so it never reaches the
+// model or the stored conversation.
+$reasoningEnabled = isset($payload['reasoning']) && $payload['reasoning'] === true;
+
+// OpenAI-compatible clients express the same wish with "reasoning_effort";
+// anything but "none" enables thinking for this request as well.
+if (!$reasoningEnabled && isset($payload['reasoning_effort']) && is_string($payload['reasoning_effort'])) {
+    $reasoningEnabled = normalizeReasoningEffort($payload['reasoning_effort']) !== null;
+}
+
+for ($idx = count($payload['messages']) - 1; $idx >= 0; $idx--) {
+    $msg = $payload['messages'][$idx];
+    if (($msg['role'] ?? '') !== 'user') {
+        continue;
+    }
+    if (is_string($msg['content'] ?? null)) {
+        [$hasPrefix, $stripped] = extractReasoningPrefix($msg['content']);
+        if ($hasPrefix) {
+            $payload['messages'][$idx]['content'] = $stripped;
+            $reasoningEnabled = true;
+        }
+    } elseif (is_array($msg['content'] ?? null)) {
+        foreach ($msg['content'] as $partIdx => $part) {
+            if (!is_array($part) || ($part['type'] ?? '') !== 'text' || !is_string($part['text'] ?? null)) {
+                continue;
+            }
+            [$hasPrefix, $stripped] = extractReasoningPrefix($part['text']);
+            if ($hasPrefix) {
+                $payload['messages'][$idx]['content'][$partIdx]['text'] = $stripped;
+                $reasoningEnabled = true;
+            }
+            break;
+        }
+    }
+    break;
+}
+
 // ── Prompt Security check ─────────────────────────────────────────────────────
 // Every chat request is evaluated before reaching the LLM pipeline.
 {
@@ -2419,7 +2459,8 @@ $forwardPayload = [];
 $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     &$model, $userSlotMax, $requiresVision,
     &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries, &$responseDetails,
-    &$upgradeFailoverTried, &$intelligenceUpgrade, &$forwardPayload, &$payload, $detectedCategory
+    &$upgradeFailoverTried, &$intelligenceUpgrade, &$forwardPayload, &$payload, $detectedCategory,
+    &$reasoningEnabled
 ): bool {
     if ($endpointRetries <= 0) {
         return false;
@@ -2500,10 +2541,15 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     // Keep the reasoning effort and the llama.cpp payload adjustments in sync
     // with the new endpoint.
     $newReasoningEffort = normalizeReasoningEffort($endpoint['reasoning_effort'] ?? null);
-    if ($newReasoningEffort !== null) {
+    if ($reasoningEnabled && $newReasoningEffort !== null) {
         $forwardPayload['reasoning_effort'] = $newReasoningEffort;
     } else {
         unset($forwardPayload['reasoning_effort']);
+    }
+    if ($reasoningEnabled) {
+        unset($forwardPayload['chat_template_kwargs']);
+    } else {
+        $forwardPayload['chat_template_kwargs'] = ['enable_thinking' => false];
     }
     if (!empty($endpoint['is_llamacpp'])) {
         if (array_key_exists('stop', $forwardPayload) && $forwardPayload['stop'] === null) {
@@ -2595,9 +2641,17 @@ if ($stream) {
 // OpenAI-compatible backends (LM Studio, vLLM, Ollama, …) can honour it as
 // well. Endpoints configured with "none" get no "reasoning_effort" field at
 // all, which is the right choice for backends that reject unknown fields.
+//
+// Without an explicit "!!" prefix (or "reasoning": true) thinking stays off:
+// the endpoint's reasoning effort is not forwarded and hybrid-reasoning chat
+// templates (Qwen3 and friends) are told to skip the thinking block.
 $endpointReasoningEffort = normalizeReasoningEffort($endpoint['reasoning_effort'] ?? null);
-if ($endpointReasoningEffort !== null) {
-    $forwardPayload['reasoning_effort'] = $endpointReasoningEffort;
+if ($reasoningEnabled) {
+    if ($endpointReasoningEffort !== null) {
+        $forwardPayload['reasoning_effort'] = $endpointReasoningEffort;
+    }
+} else {
+    $forwardPayload['chat_template_kwargs'] = ['enable_thinking' => false];
 }
 
 // Direct llama.cpp instances additionally need a payload without

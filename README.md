@@ -18,6 +18,7 @@ Weitere Dokumente im Repository:
 - [Modellrouting und Entscheidungsfindung](#modellrouting-und-entscheidungsfindung)
 - [Intelligence Upgrade](#intelligence-upgrade)
 - [Intelligenzgruppe direkt ansprechen](#intelligenzgruppe-direkt-ansprechen)
+- [Reasoning per Prompt aktivieren](#reasoning-per-prompt-aktivieren)
 - [Lastverteilung](#lastverteilung)
 - [Voraussetzungen](#voraussetzungen)
 - [Schnellstart mit Docker](#schnellstart-mit-docker)
@@ -37,6 +38,7 @@ Weitere Dokumente im Repository:
 - **Chat mit Streaming:** Server-Sent Events und persistente Chat-Sitzungen pro Benutzer.
 - **Routing und Lastverteilung:** optionale semantische Klassifikation, kategoriebasierte Modellwahl und konfigurierbare Fallback-Ketten; gesunde Endpunkte werden anhand von Auslastung, Kapazität, Latenz, Kosten und Fairness ausgewählt.
 - **Direkte Modellwahl:** angemeldete Benutzer sprechen mit dem Präfix `@@35b` eine Intelligenzgruppe direkt an; die Auswahl überschreibt Benutzer- und Standardmodelle und bleibt im Chat aktiv.
+- **Reasoning auf Abruf:** Thinking/Reasoning ist standardmäßig deaktiviert und wird mit dem Präfix `!!` für den jeweiligen Prompt eingeschaltet (Anzeige als 💡-Pille in der Eingabezeile).
 - **Intelligence Upgrade:** beantwortet einfache Anfragen zunächst ressourcenschonend und bietet bei freier Kapazität optional ein leistungsfähigeres Modell für eine erneute Bearbeitung an.
 - **Hybrid-RAG:** Dokument-Upload mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
 - **Chat-Tools:** Websuche mit SearXNG (`search_web`) inklusive Nachladen ganzer Seiteninhalte (`web_fetch`), Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
@@ -160,6 +162,15 @@ Angemeldete Benutzer können in der Chat-Eingabezeile mit dem Präfix `@@` eine 
 - Die Gruppe bleibt für den aktuellen Chat aktiv, bis sie entfernt oder ein neuer Chat gestartet wird.
 - Existiert zur angegebenen Gruppe kein Modell auf einem aktiven Endpunkt, wird die Anfrage mit einem Hinweis auf die verfügbaren Gruppen abgewiesen.
 - Das Feature lässt sich in der Administration unter **Anfragenhandling** mit der Option **Direkte Modellwahl über Intelligenzgruppen aktivieren** ein- und ausschalten (Standard: aktiviert). Ist es deaktiviert, wird das Präfix nicht ausgewertet und bleibt Teil der Nachricht.
+
+## Reasoning per Prompt aktivieren
+
+Thinking/Reasoning ist standardmäßig deaktiviert: Anfragen werden ohne Denkschritte an das Modell geschickt (der am Endpunkt konfigurierte `reasoning_effort` wird nicht übertragen, hybride Chat-Templates erhalten `chat_template_kwargs.enable_thinking = false`), und eventuell dennoch gelieferte Reasoning-Tokens werden nicht angezeigt.
+
+- Beginnt ein Prompt mit `!!`, wird das Reasoning für genau diesen Prompt aktiviert, zum Beispiel `!! Wie viele Möglichkeiten gibt es?`.
+- Das Präfix wird – analog zur direkten Modellwahl per `@@` – sofort durch eine Pille mit dem Symbol einer eingeschalteten Glühlampe (💡) ersetzt, die sich mit `×` wieder entfernen lässt.
+- Nach dem Absenden wird die Aktivierung automatisch zurückgesetzt; der nächste Prompt läuft wieder ohne Reasoning.
+- Das Präfix wird serverseitig aus der Nachricht entfernt und erreicht das Modell nicht.
 
 ## Lastverteilung
 
