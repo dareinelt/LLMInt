@@ -97,7 +97,7 @@ try {
     )->fetchColumn();
 
     // 4. Record a count sample – at most once per 30 s
-    $db->prepare(
+    $sampleStmt = $db->prepare(
         "INSERT INTO client_count_log (cnt, recorded_at)
          SELECT ?, NOW(3)
          FROM DUAL
@@ -105,9 +105,22 @@ try {
              SELECT 1 FROM client_count_log
              WHERE recorded_at > DATE_SUB(NOW(), INTERVAL 30 SECOND)
          )"
-    )->execute([$count]);
+    );
+    $sampleStmt->execute([$count]);
 
-    // 5. Purge samples older than today
+    // 5. Roll the sample up into the daily aggregate. client_count_log only
+    //    keeps the current day, client_count_daily feeds the usage statistics.
+    if ($sampleStmt->rowCount() > 0) {
+        $db->prepare(
+            "INSERT INTO client_count_daily (day, max_cnt, sum_cnt, samples)
+             VALUES (CURDATE(), ?, ?, 1)
+             ON DUPLICATE KEY UPDATE max_cnt = GREATEST(max_cnt, VALUES(max_cnt)),
+                                     sum_cnt = sum_cnt + VALUES(sum_cnt),
+                                     samples = samples + 1"
+        )->execute([$count, $count]);
+    }
+
+    // 6. Purge samples older than today
     $db->exec(
         "DELETE FROM client_count_log WHERE DATE(recorded_at) < CURDATE()"
     );
