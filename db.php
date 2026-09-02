@@ -366,6 +366,22 @@ function ensureRuntimeSchema(PDO $pdo): void
         // index already exists
     }
 
+    // Retention flag: only documents the user explicitly kept ("Wissensdatenbank")
+    // stay available for later RAG searches. Files uploaded inside a chat are
+    // ephemeral by default and only usable within that conversation.
+    try {
+        $pdo->exec("ALTER TABLE document_uploads ADD COLUMN is_library TINYINT(1) NOT NULL DEFAULT 0 AFTER is_global_rag");
+        // Documents that existed before this feature keep their previous
+        // behaviour and remain part of the knowledge base.
+        $pdo->exec("UPDATE document_uploads SET is_library = 1");
+    } catch (Throwable $_e) { /* column already exists */ }
+
+    try {
+        $pdo->exec("ALTER TABLE document_uploads ADD KEY idx_du_library (is_library, user_id)");
+    } catch (Throwable $_e) {
+        // index already exists
+    }
+
     // Index supporting the balancer's fair-share window query, which aggregates
     // recently started tasks per endpoint (see lib/balancer_engine.php).
     foreach ([
@@ -410,6 +426,7 @@ function ensureRuntimeSchema(PDO $pdo): void
             extracted_text MEDIUMTEXT      NULL,
             chunk_count    INT UNSIGNED    NOT NULL DEFAULT 0,
             is_global_rag  TINYINT(1)      NOT NULL DEFAULT 1,
+            is_library     TINYINT(1)      NOT NULL DEFAULT 0,
             chat_session_id VARCHAR(128)   NULL,
             error_message  TEXT            NULL,
             uploaded_at    TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -417,7 +434,8 @@ function ensureRuntimeSchema(PDO $pdo): void
             PRIMARY KEY (id),
             KEY idx_du_user_status (user_id, status),
             KEY idx_du_chat_session (chat_session_id),
-            KEY idx_du_status (status)
+            KEY idx_du_status (status),
+            KEY idx_du_library (is_library, user_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 

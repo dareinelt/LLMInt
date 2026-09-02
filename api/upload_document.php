@@ -9,6 +9,11 @@
  *   file          – The uploaded file (see the format table below)
  *   csrf_token    – CSRF token from the session
  *   global_rag    – "1" for globally shareable RAG usage, else "0"
+ *   retain        – "1" to keep the file in the knowledge base ("Bibliothek")
+ *                   for later RAG searches. Uploads attached to a chat session
+ *                   default to "0": they are processed for the running
+ *                   conversation only and the stored file is discarded right
+ *                   after the analysis.
  *   session_id    – Optional chat session ID; the upload is then attached to
  *                   that conversation and usable inside it right away
  *
@@ -338,6 +343,30 @@ function resolveUploadKind(string $mimeType, string $originalName): array
 }
 
 /**
+ * Remove the stored file of an ephemeral upload (chat attachments that the
+ * user did not add to the knowledge base). The extracted text and chunks stay
+ * available for the running conversation.
+ */
+function discardStoredFileIfEphemeral(PDO $db, int $uploadId): void
+{
+    global $retainFile, $storedPath;
+
+    if (!empty($retainFile)) {
+        return;
+    }
+
+    if (is_string($storedPath) && $storedPath !== '' && is_file($storedPath)) {
+        @unlink($storedPath);
+    }
+
+    try {
+        $db->prepare("UPDATE document_uploads SET stored_name = '' WHERE id = ?")->execute([$uploadId]);
+    } catch (Throwable $e) {
+        // Best-effort: the row stays usable even when the update fails.
+    }
+}
+
+/**
  * Mark an upload as failed and answer the request.
  */
 function failUpload(PDO $db, int $uploadId, string $message): void
@@ -349,6 +378,8 @@ function failUpload(PDO $db, int $uploadId, string $message): void
                 processed_at = NOW(3)
           WHERE id = ?"
     )->execute([$message, $uploadId]);
+
+    discardStoredFileIfEphemeral($db, $uploadId);
 
     writeLog('warning', 'Dokument-Upload ' . $uploadId . ' fehlgeschlagen: ' . $message);
 
@@ -391,6 +422,8 @@ function finishUpload(PDO $db, int $uploadId, int $userId, string $text, array $
           WHERE id = ?"
     )->execute([$text, $chunkCount, $uploadId]);
 
+    discardStoredFileIfEphemeral($db, $uploadId);
+
     // Embeddings are best-effort: an unavailable embedding server must never
     // make the upload itself fail (BM25 search still works).
     try {
@@ -403,7 +436,7 @@ function finishUpload(PDO $db, int $uploadId, int $userId, string $text, array $
     try {
         $stmt = $db->prepare(
             'SELECT id, original_name, mime_type, file_size, status, chunk_count, is_global_rag,
-                    chat_session_id, error_message, uploaded_at, processed_at
+                    is_library, chat_session_id, error_message, uploaded_at, processed_at
                FROM document_uploads WHERE id = ? LIMIT 1'
         );
         $stmt->execute([$uploadId]);
@@ -461,6 +494,19 @@ $tmpPath      = $file['tmp_name'];
 $fileSize     = (int) $file['size'];
 $globalRag    = isset($_POST['global_rag']) && (string) $_POST['global_rag'] === '1' ? 1 : 0;
 
+// Whether the document is kept in the knowledge base for later searches.
+// Chat attachments are ephemeral unless the user explicitly opts in; uploads
+// from the dedicated upload dialog (RAG workflow) are always retained.
+$isChatUpload = isset($_POST['session_id']) && (string) $_POST['session_id'] !== '';
+$retainFile   = $isChatUpload
+    ? (isset($_POST['retain']) && (string) $_POST['retain'] === '1')
+    : true;
+
+if (!$retainFile) {
+    // Ephemeral documents must never leak into other conversations.
+    $globalRag = 0;
+}
+
 // Optional chat session the document is attached to, so it can be used inside
 // that conversation immediately (see queryDocuments() in api/chat.php).
 $chatSessionId = null;
@@ -514,9 +560,9 @@ if (!move_uploaded_file($tmpPath, $storedPath)) {
 
 $db->prepare(
     "INSERT INTO document_uploads
-        (user_id, original_name, stored_name, mime_type, file_size, is_global_rag, chat_session_id, status, uploaded_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', NOW(3))"
-)->execute([$userId, $originalName, $storedName, $mimeType, $fileSize, $globalRag, $chatSessionId]);
+        (user_id, original_name, stored_name, mime_type, file_size, is_global_rag, is_library, chat_session_id, status, uploaded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processing', NOW(3))"
+)->execute([$userId, $originalName, $storedName, $mimeType, $fileSize, $globalRag, $retainFile ? 1 : 0, $chatSessionId]);
 
 $uploadId = (int) $db->lastInsertId();
 

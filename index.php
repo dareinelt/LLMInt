@@ -1163,6 +1163,8 @@ $csrfToken = $_SESSION['csrf_token'];
             color: var(--text);
         }
 
+        .doc-chip.is-clickable { cursor: pointer; }
+        .doc-chip.is-clickable:hover { border-color: var(--accent); }
         .doc-chip.is-error { border-color: var(--error); color: var(--error); }
         .doc-chip.is-pending { opacity: .75; }
 
@@ -1748,6 +1750,272 @@ $csrfToken = $_SESSION['csrf_token'];
         #upload-submit-btn:hover:not(:disabled) { background: var(--accent-dark); }
         #upload-submit-btn:disabled { opacity: .4; cursor: default; }
 
+        /* ── Shared overlay shell (retention + library) ─────── */
+        .doc-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 650;
+            background: rgba(0,0,0,.55);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+
+        .doc-overlay.open { display: flex; }
+
+        .doc-overlay-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 24px 60px rgba(0,0,0,.6);
+            width: 100%;
+            max-width: 460px;
+            max-height: min(86vh, 760px);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .doc-overlay-box.wide { max-width: 780px; }
+
+        .doc-overlay-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .doc-overlay-head h3 {
+            font-size: .98rem;
+            font-weight: 600;
+            margin: 0;
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .doc-overlay-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.15rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .doc-overlay-close:hover { color: var(--text); }
+
+        .doc-overlay-body {
+            padding: 18px 20px;
+            overflow-y: auto;
+        }
+
+        .doc-overlay-foot {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 14px 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        .doc-overlay-btn {
+            padding: 8px 16px;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text);
+            font-size: .85rem;
+            cursor: pointer;
+            transition: background .15s, border-color .15s;
+        }
+
+        .doc-overlay-btn:hover:not(:disabled) { background: var(--surface-alt); }
+
+        .doc-overlay-btn.primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+            font-weight: 500;
+        }
+
+        .doc-overlay-btn.primary:hover:not(:disabled) { background: var(--accent-dark); }
+        .doc-overlay-btn:disabled { opacity: .45; cursor: default; }
+
+        /* ── Retention overlay (click on a chat attachment) ─── */
+        #doc-retention-meta {
+            font-size: .78rem;
+            color: var(--text-muted);
+            margin-bottom: 14px;
+            line-height: 1.5;
+        }
+
+        .doc-retention-option {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface-alt);
+            font-size: .84rem;
+            line-height: 1.4;
+            cursor: pointer;
+        }
+
+        .doc-retention-option input { margin-top: 2px; accent-color: var(--accent); }
+
+        #doc-retention-scope {
+            margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            opacity: .45;
+            pointer-events: none;
+            transition: opacity .15s;
+        }
+
+        #doc-retention-scope.enabled { opacity: 1; pointer-events: auto; }
+
+        #doc-retention-scope label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: .84rem;
+            padding: 9px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            cursor: pointer;
+        }
+
+        #doc-retention-scope input { accent-color: var(--accent); }
+
+        #doc-retention-msg { font-size: .8rem; margin-top: 12px; }
+        #doc-retention-msg.ok    { color: var(--success); }
+        #doc-retention-msg.error { color: var(--error); }
+
+        /* ── Library overlay ───────────────────────────────── */
+        #library-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+
+        #library-search {
+            flex: 1;
+            min-width: 160px;
+            padding: 8px 12px;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: var(--surface-alt);
+            color: var(--text);
+            font-size: .84rem;
+        }
+
+        #library-search:focus { outline: none; border-color: var(--accent); }
+
+        .library-filter {
+            display: flex;
+            gap: 4px;
+            background: var(--surface-alt);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 3px;
+        }
+
+        .library-filter button {
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: .78rem;
+            padding: 5px 10px;
+            border-radius: calc(var(--radius) - 2px);
+            cursor: pointer;
+        }
+
+        .library-filter button.active { background: var(--accent); color: #fff; }
+
+        #library-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 12px;
+        }
+
+        .library-card {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface-alt);
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: border-color .15s, transform .15s;
+        }
+
+        .library-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+
+        .library-card-top {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .library-card-icon { font-size: 1.1rem; flex-shrink: 0; }
+
+        .library-card-name {
+            font-size: .85rem;
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .library-card-meta { font-size: .74rem; color: var(--text-muted); line-height: 1.5; }
+
+        .library-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+
+        .library-badge {
+            font-size: .68rem;
+            padding: 3px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+
+        .library-badge.public { border-color: var(--accent); color: var(--accent); }
+        .library-badge.private { border-color: var(--border); }
+        .library-badge.foreign { border-color: var(--border); font-style: italic; }
+
+        .library-card-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: auto; }
+
+        .library-card-actions button {
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            font-size: .74rem;
+            padding: 4px 9px;
+            border-radius: var(--radius);
+            cursor: pointer;
+        }
+
+        .library-card-actions button:hover { color: var(--text); background: var(--surface); }
+        .library-card-actions button.danger:hover { color: var(--error); border-color: var(--error); }
+
+        #library-empty {
+            padding: 32px 12px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: .84rem;
+        }
+
         /* ── Login banner overlay ──────────────────────────── */
         #login-banner-overlay {
             display: none;
@@ -1809,6 +2077,10 @@ $csrfToken = $_SESSION['csrf_token'];
         <!-- Document upload button -->
         <button class="header-icon-btn" id="upload-btn" title="Dokument hochladen">
             📎
+        </button>
+        <!-- Knowledge base library -->
+        <button class="header-icon-btn" id="library-btn" title="Bibliothek aufbewahrter Dateien">
+            📚
         </button>
         <!-- Notification bell -->
         <button class="header-icon-btn" id="notif-btn" title="Dokument-Analysestatus">
@@ -1872,6 +2144,65 @@ $csrfToken = $_SESSION['csrf_token'];
         </div>
 
         <button id="upload-submit-btn" disabled>📤 Hochladen & Analysieren</button>
+    </div>
+</div>
+
+<!-- ── Retention overlay (click on a file attached in the chat) ── -->
+<div id="doc-retention-overlay" class="doc-overlay" role="dialog" aria-modal="true" aria-labelledby="doc-retention-title">
+    <div class="doc-overlay-box">
+        <div class="doc-overlay-head">
+            <span>📄</span>
+            <h3 id="doc-retention-title">Datei</h3>
+            <button class="doc-overlay-close" id="doc-retention-close" title="Schließen" aria-label="Schließen">✕</button>
+        </div>
+        <div class="doc-overlay-body">
+            <div id="doc-retention-meta"></div>
+
+            <label class="doc-retention-option" for="doc-retention-keep">
+                <input type="checkbox" id="doc-retention-keep">
+                <span>Diese Datei in die Wissensdatenbank aufnehmen und für spätere Informationssuche aufbewahren</span>
+            </label>
+
+            <div id="doc-retention-scope">
+                <label for="doc-retention-private">
+                    <input type="radio" name="doc-retention-scope" id="doc-retention-private" value="private" checked>
+                    🔒 Nur für mich
+                </label>
+                <label for="doc-retention-global">
+                    <input type="radio" name="doc-retention-scope" id="doc-retention-global" value="global">
+                    🌐 Für alle Nutzer
+                </label>
+            </div>
+
+            <div id="doc-retention-msg"></div>
+        </div>
+        <div class="doc-overlay-foot">
+            <button class="doc-overlay-btn" id="doc-retention-cancel">Abbrechen</button>
+            <button class="doc-overlay-btn primary" id="doc-retention-save">Speichern</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── Library overlay (retained documents) ─────────────────── -->
+<div id="library-overlay" class="doc-overlay" role="dialog" aria-modal="true" aria-labelledby="library-title">
+    <div class="doc-overlay-box wide">
+        <div class="doc-overlay-head">
+            <span>📚</span>
+            <h3 id="library-title">Bibliothek</h3>
+            <button class="doc-overlay-close" id="library-close" title="Schließen" aria-label="Schließen">✕</button>
+        </div>
+        <div class="doc-overlay-body">
+            <div id="library-toolbar">
+                <input type="search" id="library-search" placeholder="Dateien durchsuchen …" aria-label="Dateien durchsuchen">
+                <div class="library-filter" role="group" aria-label="Filter">
+                    <button type="button" data-filter="all" class="active">Alle</button>
+                    <button type="button" data-filter="private">🔒 Privat</button>
+                    <button type="button" data-filter="public">🌐 Öffentlich</button>
+                </div>
+            </div>
+            <div id="library-grid"></div>
+            <div id="library-empty" style="display:none"></div>
+        </div>
     </div>
 </div>
 <?php endif; ?>
@@ -4173,7 +4504,19 @@ $csrfToken = $_SESSION['csrf_token'];
             if (doc.status === 'processing' || doc.status === 'pending') chip.classList.add('is-pending');
             chip.title = doc.status === 'error'
                 ? (doc.error_message || 'Verarbeitung fehlgeschlagen.')
-                : (doc.chunk_count || 0) + ' Chunk(s) im Chat verfügbar';
+                : (doc.chunk_count || 0) + ' Chunk(s) im Chat verfügbar · Klicken zum Aufbewahren';
+            chip.classList.add('is-clickable');
+            chip.setAttribute('role', 'button');
+            chip.tabIndex = 0;
+            chip.addEventListener('click', function (e) {
+                if (e.target.classList.contains('doc-chip-remove')) return;
+                if (typeof window.openDocRetention === 'function') window.openDocRetention(doc);
+            });
+            chip.addEventListener('keydown', function (e) {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                if (typeof window.openDocRetention === 'function') window.openDocRetention(doc);
+            });
 
             const icon = document.createElement('span');
             icon.textContent = doc.status === 'error' ? '⚠' : (doc.status === 'done' ? '📄' : '⏳');
@@ -4191,6 +4534,15 @@ $csrfToken = $_SESSION['csrf_token'];
                 meta.textContent = 'Unterteilt in ' + chunkCount + (chunkCount === 1 ? ' Abschnitt' : ' Abschnitte');
                 chip.appendChild(meta);
             }
+
+            // Retention marker: files are session-only unless the user opted in.
+            const keep = document.createElement('span');
+            keep.className = 'doc-chip-meta';
+            const isKept = parseInt(doc.is_library, 10) === 1;
+            keep.textContent = isKept
+                ? (parseInt(doc.is_global_rag, 10) === 1 ? '🌐 aufbewahrt' : '🔒 aufbewahrt')
+                : '⏳ nur diese Sitzung';
+            chip.appendChild(keep);
 
             const remove = document.createElement('button');
             remove.type = 'button';
@@ -4245,6 +4597,9 @@ $csrfToken = $_SESSION['csrf_token'];
             fd.append('file', file, file.name);
             fd.append('csrf_token', CSRF_TOKEN);
             fd.append('global_rag', GLOBAL_RAG_DEFAULT ? '1' : '0');
+            // Chat uploads are processed for this conversation only; the user
+            // can opt into permanent storage via the file overlay.
+            fd.append('retain', '0');
             fd.append('session_id', currentSessionId());
 
             const xhr = new XMLHttpRequest();
@@ -4452,7 +4807,10 @@ $csrfToken = $_SESSION['csrf_token'];
             const name = u.original_name || 'Unbekannt';
             const date = formatDate(u.uploaded_at);
             const size = formatBytes(parseInt(u.file_size) || 0);
-            const globalScope = parseInt(u.is_global_rag, 10) === 1 ? 'Global' : 'Privat';
+            const kept = parseInt(u.is_library, 10) === 1;
+            const globalScope = kept
+                ? (parseInt(u.is_global_rag, 10) === 1 ? '🌐 Bibliothek (alle Nutzer)' : '🔒 Bibliothek (nur für mich)')
+                : 'Nur für diese Chat-Sitzung';
 
             let extra = '';
             if (u.status === 'error' && u.error_message) {
@@ -4685,6 +5043,295 @@ $csrfToken = $_SESSION['csrf_token'];
             }
         });
     }
+})();
+</script>
+
+<script>
+/* ─────────────────────────────────────────────────────────────
+   Retention overlay + knowledge base library
+
+   Files uploaded inside a chat are analysed for the running conversation
+   only. Clicking a file chip opens an overlay where the user can add the
+   document to the knowledge base ("Bibliothek") and choose whether it stays
+   private or is shared with all users.
+   ─────────────────────────────────────────────────────────────*/
+(function () {
+    'use strict';
+
+    const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    const overlay     = document.getElementById('doc-retention-overlay');
+    const titleEl     = document.getElementById('doc-retention-title');
+    const metaEl      = document.getElementById('doc-retention-meta');
+    const keepCb      = document.getElementById('doc-retention-keep');
+    const scopeWrap   = document.getElementById('doc-retention-scope');
+    const scopePriv   = document.getElementById('doc-retention-private');
+    const scopeGlob   = document.getElementById('doc-retention-global');
+    const msgEl       = document.getElementById('doc-retention-msg');
+    const saveBtn     = document.getElementById('doc-retention-save');
+    const cancelBtn   = document.getElementById('doc-retention-cancel');
+    const closeBtn    = document.getElementById('doc-retention-close');
+
+    const libBtn      = document.getElementById('library-btn');
+    const libOverlay  = document.getElementById('library-overlay');
+    const libClose    = document.getElementById('library-close');
+    const libGrid     = document.getElementById('library-grid');
+    const libEmpty    = document.getElementById('library-empty');
+    const libSearch   = document.getElementById('library-search');
+    const libFilters  = document.querySelectorAll('.library-filter button');
+
+    let currentDoc = null;
+    let libraryItems = [];
+    let libraryFilter = 'all';
+
+    function esc(s) {
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function formatBytes(b) {
+        b = parseInt(b, 10) || 0;
+        if (b < 1024) return b + ' B';
+        if (b < 1024 * 1024) return Math.round(b / 1024) + ' KB';
+        return (b / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    function formatDate(ts) {
+        if (!ts) return '';
+        try {
+            const d = new Date(String(ts).replace(' ', 'T'));
+            return d.toLocaleString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+        } catch (_) { return String(ts); }
+    }
+
+    // ── Retention overlay ─────────────────────────────────────
+    function syncScopeState() {
+        if (!scopeWrap || !keepCb) return;
+        scopeWrap.classList.toggle('enabled', keepCb.checked);
+    }
+
+    function openRetention(doc) {
+        if (!overlay || !doc) return;
+        currentDoc = doc;
+
+        if (titleEl) titleEl.textContent = doc.original_name || 'Datei';
+        if (metaEl) {
+            const parts = [];
+            if (doc.file_size) parts.push(formatBytes(doc.file_size));
+            if (doc.chunk_count) parts.push(doc.chunk_count + (parseInt(doc.chunk_count, 10) === 1 ? ' Abschnitt' : ' Abschnitte'));
+            parts.push(formatDate(doc.uploaded_at));
+            metaEl.innerHTML = esc(parts.filter(Boolean).join(' · '))
+                + '<br>Standardmäßig wird die Datei nur für diese Chat-Sitzung verarbeitet und nicht dauerhaft gespeichert.';
+        }
+
+        const kept = parseInt(doc.is_library, 10) === 1;
+        if (keepCb) keepCb.checked = kept;
+        if (scopeGlob) scopeGlob.checked = kept && parseInt(doc.is_global_rag, 10) === 1;
+        if (scopePriv) scopePriv.checked = !(scopeGlob && scopeGlob.checked);
+        if (msgEl) { msgEl.textContent = ''; msgEl.className = ''; }
+        if (saveBtn) saveBtn.disabled = false;
+        syncScopeState();
+
+        overlay.classList.add('open');
+    }
+
+    function closeRetention() {
+        if (overlay) overlay.classList.remove('open');
+        currentDoc = null;
+    }
+
+    if (keepCb) keepCb.addEventListener('change', syncScopeState);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeRetention);
+    if (closeBtn) closeBtn.addEventListener('click', closeRetention);
+    if (overlay) {
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeRetention();
+        });
+    }
+
+    if (saveBtn) {
+        saveBtn.addEventListener('click', async function () {
+            if (!currentDoc) return;
+            const retain = keepCb && keepCb.checked;
+            saveBtn.disabled = true;
+            if (msgEl) { msgEl.textContent = 'Wird gespeichert …'; msgEl.className = ''; }
+
+            try {
+                const res = await fetch('api/document_retention.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: currentDoc.id,
+                        retain: retain ? '1' : '0',
+                        scope: (scopeGlob && scopeGlob.checked) ? 'global' : 'private',
+                        csrf_token: CSRF,
+                    }),
+                });
+                const data = await res.json();
+                if (!data.ok) {
+                    if (msgEl) { msgEl.textContent = '✗ ' + (data.message || 'Speichern fehlgeschlagen.'); msgEl.className = 'error'; }
+                    saveBtn.disabled = false;
+                    return;
+                }
+                if (msgEl) { msgEl.textContent = '✓ ' + data.message; msgEl.className = 'ok'; }
+                if (typeof window.refreshChatDocuments === 'function') window.refreshChatDocuments();
+                window.setTimeout(closeRetention, 900);
+            } catch (e) {
+                if (msgEl) { msgEl.textContent = '✗ Netzwerkfehler: ' + e.message; msgEl.className = 'error'; }
+                saveBtn.disabled = false;
+            }
+        });
+    }
+
+    // ── Library overlay ───────────────────────────────────────
+    function renderLibrary() {
+        if (!libGrid) return;
+        const term = (libSearch && libSearch.value || '').trim().toLowerCase();
+
+        const items = libraryItems.filter(function (u) {
+            const isPublic = parseInt(u.is_global_rag, 10) === 1;
+            if (libraryFilter === 'public' && !isPublic) return false;
+            if (libraryFilter === 'private' && isPublic) return false;
+            if (term && String(u.original_name || '').toLowerCase().indexOf(term) === -1) return false;
+            return true;
+        });
+
+        if (!items.length) {
+            libGrid.innerHTML = '';
+            if (libEmpty) {
+                libEmpty.style.display = 'block';
+                libEmpty.textContent = libraryItems.length
+                    ? 'Keine Dateien passen zum Filter.'
+                    : 'Noch keine Dateien aufbewahrt. Klicke im Chat auf eine hochgeladene Datei, um sie in die Wissensdatenbank aufzunehmen.';
+            }
+            return;
+        }
+        if (libEmpty) libEmpty.style.display = 'none';
+
+        libGrid.innerHTML = items.map(function (u) {
+            const isPublic = parseInt(u.is_global_rag, 10) === 1;
+            const isOwn    = parseInt(u.is_own, 10) === 1;
+            const chunks   = parseInt(u.chunk_count, 10) || 0;
+            const badges   = [
+                isPublic
+                    ? '<span class="library-badge public">🌐 Für alle Nutzer</span>'
+                    : '<span class="library-badge private">🔒 Nur für mich</span>',
+            ];
+            if (!isOwn) badges.push('<span class="library-badge foreign">von anderen geteilt</span>');
+            if (u.status !== 'done') badges.push('<span class="library-badge">' + esc(u.status) + '</span>');
+
+            const actions = isOwn
+                ? '<div class="library-card-actions">'
+                    + '<button type="button" data-action="scope" data-id="' + esc(u.id) + '">'
+                    + (isPublic ? '🔒 Privat machen' : '🌐 Freigeben') + '</button>'
+                    + '<button type="button" class="danger" data-action="delete" data-id="' + esc(u.id) + '">🗑 Entfernen</button>'
+                  + '</div>'
+                : '';
+
+            return '<div class="library-card">'
+                + '<div class="library-card-top"><span class="library-card-icon">📄</span>'
+                + '<span class="library-card-name" title="' + esc(u.original_name || '') + '">' + esc(u.original_name || 'Dokument') + '</span></div>'
+                + '<div class="library-badges">' + badges.join('') + '</div>'
+                + '<div class="library-card-meta">' + esc(formatBytes(u.file_size)) + ' · '
+                + chunks + (chunks === 1 ? ' Abschnitt' : ' Abschnitte') + '<br>' + esc(formatDate(u.uploaded_at)) + '</div>'
+                + actions
+                + '</div>';
+        }).join('');
+    }
+
+    async function loadLibrary() {
+        if (libGrid) libGrid.innerHTML = '';
+        if (libEmpty) { libEmpty.style.display = 'block'; libEmpty.textContent = 'Lade …'; }
+        try {
+            const res = await fetch('api/document_status.php?scope=library');
+            const data = await res.json();
+            libraryItems = (data && data.ok && Array.isArray(data.uploads)) ? data.uploads : [];
+        } catch (_) {
+            libraryItems = [];
+        }
+        renderLibrary();
+    }
+
+    function openLibrary() {
+        if (!libOverlay) return;
+        libOverlay.classList.add('open');
+        if (libSearch) libSearch.value = '';
+        loadLibrary();
+    }
+
+    function closeLibrary() {
+        if (libOverlay) libOverlay.classList.remove('open');
+    }
+
+    if (libBtn) libBtn.addEventListener('click', openLibrary);
+    if (libClose) libClose.addEventListener('click', closeLibrary);
+    if (libOverlay) {
+        libOverlay.addEventListener('click', function (e) {
+            if (e.target === libOverlay) closeLibrary();
+        });
+    }
+    if (libSearch) libSearch.addEventListener('input', renderLibrary);
+
+    libFilters.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            libFilters.forEach(function (b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            libraryFilter = btn.getAttribute('data-filter') || 'all';
+            renderLibrary();
+        });
+    });
+
+    if (libGrid) {
+        libGrid.addEventListener('click', async function (e) {
+            const btn = e.target.closest('button[data-action]');
+            if (!btn) return;
+            const id = parseInt(btn.getAttribute('data-id'), 10);
+            const item = libraryItems.find(function (u) { return parseInt(u.id, 10) === id; });
+            if (!item) return;
+
+            btn.disabled = true;
+            try {
+                if (btn.getAttribute('data-action') === 'delete') {
+                    if (!window.confirm('„' + (item.original_name || 'Datei') + '“ endgültig aus der Wissensdatenbank entfernen?')) {
+                        btn.disabled = false;
+                        return;
+                    }
+                    await fetch('api/document_delete.php', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: id, csrf_token: CSRF }),
+                    });
+                } else {
+                    const makePublic = parseInt(item.is_global_rag, 10) !== 1;
+                    await fetch('api/document_retention.php', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            id: id,
+                            retain: '1',
+                            scope: makePublic ? 'global' : 'private',
+                            csrf_token: CSRF,
+                        }),
+                    });
+                }
+            } catch (_) { /* reload shows the actual state */ }
+
+            await loadLibrary();
+            if (typeof window.refreshChatDocuments === 'function') window.refreshChatDocuments();
+        });
+    }
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        if (overlay && overlay.classList.contains('open')) closeRetention();
+        if (libOverlay && libOverlay.classList.contains('open')) closeLibrary();
+    });
+
+    // Called by the chat attachment chips.
+    window.openDocRetention = openRetention;
 })();
 </script>
 <?php endif; ?>

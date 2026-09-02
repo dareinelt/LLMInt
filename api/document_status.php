@@ -10,6 +10,9 @@
  *   session_id – Optional chat session ID. When given, only documents attached
  *                to that conversation are returned (used by the paperclip
  *                upload chips in the chat composer).
+ *   scope      – "library" returns only the documents the user decided to keep
+ *                in the knowledge base (used by the library overlay), including
+ *                globally shared documents of other users.
  *
  * GET  → JSON { ok, uploads: [...] }
  *
@@ -41,10 +44,23 @@ if (isset($_GET['session_id']) && is_string($_GET['session_id'])
 }
 
 $columns = 'id, original_name, mime_type, file_size, status, chunk_count, is_global_rag,
-            chat_session_id, error_message, uploaded_at, processed_at';
+            is_library, chat_session_id, error_message, uploaded_at, processed_at';
+
+$libraryOnly = ($_GET['scope'] ?? '') === 'library';
 
 try {
-    if ($sessionId !== '') {
+    if ($libraryOnly) {
+        // Own retained documents plus everything other users shared globally.
+        $stmt = $db->prepare(
+            "SELECT {$columns}, (user_id = ?) AS is_own
+               FROM document_uploads
+              WHERE is_library = 1
+                AND (user_id = ? OR is_global_rag = 1)
+              ORDER BY uploaded_at DESC
+              LIMIT 200"
+        );
+        $stmt->execute([$userId, $userId]);
+    } elseif ($sessionId !== '') {
         $stmt = $db->prepare(
             "SELECT {$columns}
                FROM document_uploads

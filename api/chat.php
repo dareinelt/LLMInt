@@ -665,9 +665,10 @@ function hasDocumentUploads(?int $userId, string $chatSessionId = ''): bool
               WHERE status = 'done'
                 AND chunk_count > 0
                 AND (user_id = ? OR is_global_rag = 1)
+                AND (is_library = 1 OR chat_session_id = ?)
                 AND (chat_session_id IS NULL OR is_global_rag = 1 OR chat_session_id = ?)"
         );
-        $stmt->execute([$userId, $chatSessionId]);
+        $stmt->execute([$userId, $chatSessionId, $chatSessionId]);
         $count = (int) $stmt->fetchColumn();
         return $count > 0;
     } catch (Throwable $e) {
@@ -842,11 +843,12 @@ function queryDocuments(string $query, ?int $userId, string $chatSessionId = '')
                JOIN document_uploads du ON du.id = dc.document_upload_id
               WHERE du.status = 'done'
                 AND (du.user_id = ? OR du.is_global_rag = 1)
+                AND (du.is_library = 1 OR du.chat_session_id = ?)
                 AND (du.chat_session_id IS NULL OR du.is_global_rag = 1 OR du.chat_session_id = ?)
               ORDER BY is_session_document DESC, du.uploaded_at DESC, dc.chunk_index ASC
               LIMIT {$chunkLimit}"
         );
-        $stmt->execute([$chatSessionId, $userId, $chatSessionId]);
+        $stmt->execute([$chatSessionId, $userId, $chatSessionId, $chatSessionId]);
         $rows = $stmt->fetchAll();
 
         if (empty($rows)) {
