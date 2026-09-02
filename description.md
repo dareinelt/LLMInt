@@ -235,8 +235,13 @@ bzw. `pickComfyEndpoint()`/`completeComfyTask()`.
 - Suche: `queryDocuments()` in `api/chat.php` kombiniert BM25-artiges Scoring
   (`tokenizeQueryTerms()`, `scoreRagChunk()`, `buildRagSnippet()`) mit `cosineSimilarity()`,
   Reciprocal Rank Fusion und optionalem `rerankDocuments()`.
-- Statusabfrage im Frontend: `api/document_status.php`; Neuberechnung über
-  `api/rebuild_embeddings.php`.
+- Aufbewahrung: Chat-Uploads sind standardmäßig flüchtig (`document_uploads.is_library = 0`);
+  die gespeicherte Datei wird nach der Analyse gelöscht und die Chunks sind nur innerhalb der
+  eigenen Chat-Sitzung durchsuchbar. Über `api/document_retention.php` nimmt der Benutzer eine
+  Datei in die Wissensdatenbank auf und wählt „Nur für mich“ (`is_global_rag = 0`) oder
+  „Für alle Nutzer“ (`is_global_rag = 1`).
+- Statusabfrage im Frontend: `api/document_status.php` (`scope=library` liefert die Bibliothek);
+  Neuberechnung über `api/rebuild_embeddings.php`.
 
 Einstellungen: `embedding_enabled`, `embedding_model`, `embedding_timeout`,
 `embedding_cache_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`,
@@ -324,7 +329,9 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/models.php` | GET | – | Modelle eines Endpunkts abfragen |
 | `api/heartbeat.php` | POST | – | Präsenz-Token melden |
 | `api/document_status.php` | GET | Session | Upload-Status des Benutzers |
-| `api/upload_document.php` | POST | Session + CSRF | Dokument-Upload |
+| `api/upload_document.php` | POST | Session + CSRF | Dokument-Upload (`retain=1` bewahrt die Datei auf) |
+| `api/document_retention.php` | POST | Session + CSRF | Aufbewahrung in der Wissensdatenbank und Freigabe (privat/global) setzen |
+| `api/document_delete.php` | POST | Session + CSRF | Eigenes Dokument samt Chunks löschen |
 | `api/rebuild_embeddings.php` | POST | Admin + CSRF | Embeddings neu berechnen |
 | `api/sd_generate.php`, `api/comfy_generate.php` | POST | Session | Bildgenerierung |
 | `api/sd_checkpoints.php`, `api/comfy_checkpoints.php` | GET | – | verfügbare Checkpoints |

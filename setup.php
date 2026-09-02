@@ -213,6 +213,7 @@ $db->exec("
         extracted_text MEDIUMTEXT      NULL,
         chunk_count    INT UNSIGNED    NOT NULL DEFAULT 0,
         is_global_rag  TINYINT(1)      NOT NULL DEFAULT 1,
+        is_library     TINYINT(1)      NOT NULL DEFAULT 0,
         chat_session_id VARCHAR(128)   NULL,
         error_message  TEXT            NULL,
         uploaded_at    TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -220,7 +221,8 @@ $db->exec("
         PRIMARY KEY (id),
         KEY idx_du_user_status (user_id, status),
         KEY idx_du_chat_session (chat_session_id),
-        KEY idx_du_status (status)
+        KEY idx_du_status (status),
+        KEY idx_du_library (is_library, user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 
@@ -251,6 +253,21 @@ try {
 
 try {
     $db->exec("ALTER TABLE document_uploads ADD KEY idx_du_chat_session (chat_session_id)");
+} catch (Throwable $_e) {
+    // index already exists
+}
+
+// Retention flag: documents kept in the knowledge base ("Bibliothek").
+try {
+    $db->exec("ALTER TABLE document_uploads ADD COLUMN is_library TINYINT(1) NOT NULL DEFAULT 0 AFTER is_global_rag");
+    // Existing documents keep their previous behaviour.
+    $db->exec("UPDATE document_uploads SET is_library = 1");
+} catch (Throwable $_e) {
+    // column already exists
+}
+
+try {
+    $db->exec("ALTER TABLE document_uploads ADD KEY idx_du_library (is_library, user_id)");
 } catch (Throwable $_e) {
     // index already exists
 }
