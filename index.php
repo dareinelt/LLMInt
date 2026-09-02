@@ -3984,7 +3984,8 @@ $csrfToken = $_SESSION['csrf_token'];
             if (doc.status === 'done') {
                 const meta = document.createElement('span');
                 meta.className = 'doc-chip-meta';
-                meta.textContent = (doc.chunk_count || 0) + ' Chunks';
+                const chunkCount = doc.chunk_count || 0;
+                meta.textContent = 'Unterteilt in ' + chunkCount + (chunkCount === 1 ? ' Abschnitt' : ' Abschnitte');
                 chip.appendChild(meta);
             }
 
@@ -4111,7 +4112,8 @@ $csrfToken = $_SESSION['csrf_token'];
             if (result.ok) {
                 succeeded++;
                 setProgressPercent(100);
-                setProgressLabel('✓ ' + file.name + ' bereit (' + (result.chunk_count || 0) + ' Chunks).', 'ok');
+                const uploadedChunks = result.chunk_count || 0;
+                setProgressLabel('✓ ' + file.name + ' bereit (unterteilt in ' + uploadedChunks + (uploadedChunks === 1 ? ' Abschnitt' : ' Abschnitte') + ').', 'ok');
             } else {
                 failed++;
                 setProgressPercent(100);
