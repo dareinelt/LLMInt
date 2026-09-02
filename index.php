@@ -234,6 +234,71 @@ $csrfToken = $_SESSION['csrf_token'];
 
         header .admin-link:hover { background: var(--surface); color: var(--text); }
 
+        /* ── Register hint bubble (guests, once per chat session) ─── */
+        #register-hint {
+            display: none;
+            position: fixed;
+            z-index: 750;
+            max-width: 340px;
+            padding: 14px 34px 14px 16px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 18px 44px rgba(0,0,0,.5);
+            font-size: .84rem;
+            line-height: 1.55;
+            color: var(--text);
+            opacity: 0;
+            transform: translateY(-6px);
+            transition: opacity .25s ease, transform .25s ease;
+        }
+
+        #register-hint.open    { display: block; }
+        #register-hint.visible { opacity: 1; transform: translateY(0); }
+
+        /* Arrow pointing up to the "Registrieren" button */
+        #register-hint::before,
+        #register-hint::after {
+            content: "";
+            position: absolute;
+            bottom: 100%;
+            left: var(--arrow-left, 50%);
+            transform: translateX(-50%);
+            border: 9px solid transparent;
+        }
+
+        #register-hint::before { border-bottom-color: var(--border); }
+
+        #register-hint::after {
+            border-width: 8px;
+            border-bottom-color: var(--surface);
+            margin-bottom: -1px;
+        }
+
+        #register-hint a {
+            color: var(--accent);
+            font-weight: 600;
+            text-decoration: none;
+        }
+
+        #register-hint a:hover { text-decoration: underline; }
+
+        #register-hint-close {
+            position: absolute;
+            top: 6px;
+            right: 8px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: .95rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 6px;
+        }
+
+        #register-hint-close:hover { color: var(--text); background: var(--bg); }
+
         /* ── Config bar (hidden – keeps DOM refs for JS) ──────────── */
         #config-bar { display: none; }
 
@@ -1754,7 +1819,7 @@ $csrfToken = $_SESSION['csrf_token'];
         <a href="logout.php" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">Abmelden</a>
 <?php else: ?>
         <a href="login.php" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">🔐 Anmelden</a>
-        <a href="register.php" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">✍ Registrieren</a>
+        <a href="register.php" id="register-link" style="font-size:.8rem;color:var(--text-muted);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border);transition:background .12s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">✍ Registrieren</a>
 <?php endif; ?>
         <a class="admin-link" href="admin/login.php">⚙ Admin</a>
     </div>
@@ -4644,6 +4709,79 @@ $csrfToken = $_SESSION['csrf_token'];
                 sessionStorage.setItem(STORAGE_KEY, '1');
             });
         }
+    }
+})();
+</script>
+<?php endif; ?>
+
+<?php if (!$loggedIn): ?>
+<!-- ── Register hint bubble (guests, once per chat session) ─── -->
+<div id="register-hint" role="status">
+    <button id="register-hint-close" type="button" title="Schließen" aria-label="Schließen">✕</button>
+    <a href="register.php">Registrieren</a> Sie sich, um Dateien hochzuladen, Bilder analysieren zu lassen
+    und um später von diesem oder einem anderen Arbeitsplatz aus auf vorangegangene Chats zuzugreifen.
+</div>
+<script>
+(function () {
+    const STORAGE_KEY = 'register_hint_shown';
+    const bubble = document.getElementById('register-hint');
+    const link   = document.getElementById('register-link');
+    if (!bubble || !link) return;
+    if (sessionStorage.getItem(STORAGE_KEY)) return;
+
+    function place() {
+        const r  = link.getBoundingClientRect();
+        const bw = bubble.offsetWidth;
+        const margin = 8;
+        let left = r.left + r.width / 2 - bw / 2;
+        left = Math.min(Math.max(margin, left), window.innerWidth - bw - margin);
+        bubble.style.left = left + 'px';
+        bubble.style.top  = (r.bottom + 12) + 'px';
+        bubble.style.setProperty('--arrow-left', (r.left + r.width / 2 - left) + 'px');
+    }
+
+    function hide() {
+        bubble.classList.remove('visible');
+        window.removeEventListener('resize', place);
+        window.removeEventListener('scroll', place, true);
+        document.removeEventListener('click', onOutsideClick, true);
+        document.removeEventListener('keydown', onKeyDown);
+        setTimeout(() => bubble.classList.remove('open'), 250);
+    }
+
+    function onOutsideClick(e) {
+        if (!bubble.contains(e.target)) hide();
+    }
+
+    function onKeyDown(e) {
+        if (e.key === 'Escape') hide();
+    }
+
+    function show() {
+        sessionStorage.setItem(STORAGE_KEY, '1');
+        bubble.classList.add('open');
+        place();
+        requestAnimationFrame(() => bubble.classList.add('visible'));
+        window.addEventListener('resize', place);
+        window.addEventListener('scroll', place, true);
+        document.addEventListener('keydown', onKeyDown);
+        setTimeout(() => document.addEventListener('click', onOutsideClick, true), 0);
+        document.getElementById('register-hint-close')
+                .addEventListener('click', hide);
+    }
+
+    /* Wait for the login banner overlay (if any) to be dismissed first. */
+    const overlay = document.getElementById('login-banner-overlay');
+    if (overlay && overlay.classList.contains('open')) {
+        const observer = new MutationObserver(() => {
+            if (!overlay.classList.contains('open')) {
+                observer.disconnect();
+                setTimeout(show, 400);
+            }
+        });
+        observer.observe(overlay, { attributes: true, attributeFilter: ['class'] });
+    } else {
+        setTimeout(show, 600);
     }
 })();
 </script>
