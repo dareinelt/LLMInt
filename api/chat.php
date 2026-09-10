@@ -34,7 +34,7 @@ function buildSearxngSearchUrl(string $baseUrl, string $query): string
 {
     $parts = parse_url($baseUrl);
     if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
-        throw new RuntimeException('Ungültige SearXNG-URL.');
+        throw new RuntimeException('Ungültige URL zum Suchdienstanbieter.');
     }
 
     $path = rtrim((string) ($parts['path'] ?? ''), '/');
@@ -82,12 +82,12 @@ function runSearxngSearch(string $baseUrl, string $query, int $timeout = 15): ar
     curl_close($ch);
 
     if ($curlErr !== '') {
-        throw new RuntimeException('SearXNG nicht erreichbar: ' . $curlErr);
+        throw new RuntimeException('Suchdienstanbieter nicht erreichbar: ' . $curlErr);
     }
 
     $data = json_decode($body, true);
     if ($httpCode !== 200 || !is_array($data)) {
-        throw new RuntimeException('Unerwartete Antwort von SearXNG (HTTP ' . $httpCode . ').');
+        throw new RuntimeException('Unerwartete Antwort vom Suchdienstanbieter (HTTP ' . $httpCode . ').');
     }
 
     $results = [];
