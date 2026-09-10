@@ -3035,10 +3035,10 @@ if ($useTools) {
             $taskFinished = true;
             completeTask($taskId, 'error');
             if ($clientRequestedStream && headers_sent()) {
-                emitSseData(['error' => 'LM Studio nicht erreichbar: ' . $curlErr]);
+                emitSseData(['error' => 'KI-Endpunkt nicht erreichbar: ' . $curlErr]);
             } else {
                 http_response_code(502);
-                echo json_encode(['error' => 'LM Studio nicht erreichbar: ' . $curlErr]);
+                echo json_encode(['error' => 'KI-Endpunkt nicht erreichbar: ' . $curlErr]);
             }
             exit;
         }
@@ -3049,7 +3049,7 @@ if ($useTools) {
         if ($httpCode !== 200 || !is_array($data)) {
             $msg = isset($data['error']['message'])
                 ? $data['error']['message']
-                : 'LM Studio Fehler (HTTP ' . $httpCode . ')';
+                : 'Fehler bei KI-Endpunkt (HTTP ' . $httpCode . ')';
             // Only 5xx / server-side failures warrant an endpoint failover: retrying an
             // identical payload against another endpoint after a 4xx (client/payload)
             // rejection just repeats the same malformed request and wastes the retry budget.
@@ -3477,7 +3477,7 @@ if ($stream) {
             // Nothing sent yet – return a plain JSON error.
             http_response_code(502);
             header('Content-Type: application/json; charset=utf-8');
-            echo json_encode(['error' => 'LM Studio nicht erreichbar: ' . $streamCurlErr]);
+            echo json_encode(['error' => 'KI-Endpunkt nicht erreichbar: ' . $streamCurlErr]);
         }
     }
     exit;
@@ -3510,7 +3510,7 @@ do {
         $taskFinished = true;
         completeTask($taskId, 'error');
         http_response_code(502);
-        echo json_encode(['error' => 'LM Studio nicht erreichbar: ' . $curlErr]);
+        echo json_encode(['error' => 'KI-Endpunkt nicht erreichbar: ' . $curlErr]);
         exit;
     }
 
@@ -3518,7 +3518,7 @@ do {
         $data = json_decode($body, true);
         $msg  = isset($data['error']['message'])
             ? $data['error']['message']
-            : 'LM Studio Fehler (HTTP ' . $httpCode . ')';
+            : 'Fehler bei KI-Endpunkt (HTTP ' . $httpCode . ')';
         // Only failover to another endpoint on server-side (5xx) failures. A 4xx means
         // the request payload itself was rejected, so resending it unchanged elsewhere
         // would just reproduce the same error and burn through the retry budget.
