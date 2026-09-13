@@ -2133,6 +2133,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <a href="#users-card">👤 Benutzerkonten</a>
     <a href="api_keys.php">🗝️ API-Keys</a>
     <a href="#password-card">🔑 Passwort ändern</a>
+    <a href="endpoint_tech.php">🛠️ Endpunkte technische Verwaltung</a>
 </aside>
 
 <main>

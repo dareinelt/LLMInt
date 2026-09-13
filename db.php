@@ -133,6 +133,17 @@ function ensureRuntimeSchema(PDO $pdo): void
         try { $pdo->exec($sshAlter); } catch (Throwable $_e) { /* column already exists */ }
     }
 
+    // quickinfo pairing (https://github.com/dareinelt/quickinfo): base URL of the
+    // monitoring instance, its Management-Board API key and whether the TLS
+    // certificate must be valid (quickinfo ships self-signed certificates).
+    foreach ([
+        "ALTER TABLE endpoints ADD COLUMN quickinfo_url        VARCHAR(500) NOT NULL DEFAULT '' AFTER ssh_password",
+        "ALTER TABLE endpoints ADD COLUMN quickinfo_api_key    TEXT NULL AFTER quickinfo_url",
+        "ALTER TABLE endpoints ADD COLUMN quickinfo_verify_tls TINYINT(1) NOT NULL DEFAULT 0 AFTER quickinfo_api_key",
+    ] as $qiAlter) {
+        try { $pdo->exec($qiAlter); } catch (Throwable $_e) { /* column already exists */ }
+    }
+
     // Context-window limits: the endpoint's total context size (e.g. the
     // model's n_ctx) and an optional per-user-slot cap so a single session
     // cannot consume the whole endpoint context on its own. 0 = unbegrenzt

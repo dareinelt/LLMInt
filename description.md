@@ -45,6 +45,9 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `admin/load_stats.php` | 317 | JSON-Livedaten für das Dashboard |
 | `admin/refresh_sys_stats.php` | 211 | SSH-Abfrage von RAM/CPU/Temperatur je Endpunkt |
 | `admin/api_keys.php` | 196 | API-Keys für die OpenAI-kompatible API |
+| `admin/endpoint_tech.php` | – | Endpunkte technische Verwaltung: quickinfo-Pairing je Endpunkt und Live-Übersicht (CPU/GPU/RAM/VRAM, Temperaturen) |
+| `admin/quickinfo_stats.php` | – | JSON-Livedaten aller gekoppelten quickinfo-Instanzen (parallel per curl_multi) |
+| `lib/quickinfo.php` | – | Client für die quickinfo Management-Board-API (`/api/v1/status`, `info`, `history`) |
 | `lib/balancer_engine.php` | 468 | Gemeinsame Balancer-Logik für LLM, AUTOMATIC1111 und ComfyUI |
 | `lib/prompt_security.php` | 499 | Regelwerk, Normalisierung, Scoring, Entscheidung, Logging |
 | `lib/openai_api.php` | 209 | API-Key-Handling, Payload-Normalisierung, Fehlerformat |
@@ -86,7 +89,7 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `settings` | Key-Value-Konfiguration (`setting_key`, `setting_value`) |
 | `users` | Konten: `username`, `password_hash`, `email`, `email_verified`, `email_verification_token`, `password_reset_token`, `default_model`, `requires_password_change`, `can_upload_documents`, `role` (`user`/`admin`), `auth_source` (`local`/`ldap`), `ldap_dn`, `last_login` |
 | `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer |
-| `endpoints` | LLM-Endpunkte: `base_url`, `default_model`, `timeout`, `is_active`, Fähigkeiten (Tool Calling, Vision), Balancer-Gesundheit (`circuit_state`, `consecutive_failures`, `cooldown_until`, `avg_latency_ms`) |
+| `endpoints` | LLM-Endpunkte: `base_url`, `default_model`, `timeout`, `is_active`, Fähigkeiten (Tool Calling, Vision), Balancer-Gesundheit (`circuit_state`, `consecutive_failures`, `cooldown_until`, `avg_latency_ms`), SSH-Zugang (`ssh_*`), quickinfo-Pairing (`quickinfo_url`, `quickinfo_api_key`, `quickinfo_verify_tls`) |
 | `tasks` | Lebenszyklus jeder LLM-Anfrage: `endpoint_id`, `status` (`running`/`done`/`error`), Tokenzähler, `tokens_per_second` |
 | `endpoint_sys_stats` | per SSH gelesene Systemmetriken je Endpunkt |
 | `search_logs` | SearXNG-Suchen mit Status und Ergebnissen |
@@ -316,6 +319,7 @@ Die Oberfläche ist in Karten mit stabilen IDs gegliedert, unter anderem `dashbo
 
 Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 `admin/refresh_sys_stats.php` (SSH-Metriken), `admin/api_keys.php` (API-Keys),
+`admin/endpoint_tech.php` + `admin/quickinfo_stats.php` (quickinfo-Pairing und technische Endpunktübersicht),
 `admin/prompt_security.php` (Sicherheitsmodul).
 
 ---

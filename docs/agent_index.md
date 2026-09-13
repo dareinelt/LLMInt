@@ -54,6 +54,9 @@ Ollama) with multi-model routing, load balancing, hybrid RAG, image generation
 | `admin/load_stats.php` | Live dashboard stats (JSON) |
 | `admin/refresh_sys_stats.php` | SSH system metrics per endpoint |
 | `admin/api_keys.php` | OpenAI-compatible API key management |
+| `admin/endpoint_tech.php` | quickinfo pairing per endpoint + live technical overview (CPU/GPU/RAM/VRAM, temps) |
+| `admin/quickinfo_stats.php` | JSON live metrics of all paired quickinfo instances |
+| `lib/quickinfo.php` | Client for the quickinfo Management-Board API (`/api/v1/*`) |
 
 Full function-level detail for every file above: [`functions.md`](functions.md).
 
@@ -230,6 +233,8 @@ Legacy keys: `lmstudio_base_url`, `lmstudio_timeout`, `endpoints_bootstrapped`.
 │   ├── load_stats.php
 │   ├── refresh_sys_stats.php
 │   ├── api_keys.php
+│   ├── endpoint_tech.php  # quickinfo pairing + technical overview
+│   ├── quickinfo_stats.php
 │   └── login.php / logout.php
 ├── api/
 │   ├── chat.php           # Main pipeline

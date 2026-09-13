@@ -169,6 +169,19 @@ Gemeinsame Balancer-Logik für LLM-, AUTOMATIC1111- und ComfyUI-Endpunkte.
 | `openaiNormalizeMessages` | `openaiNormalizeMessages(array $messages): array` | Normalisiert ein Nachrichtenarray ins OpenAI-Format inkl. Validierung. |
 | `openaiNormalizeChatPayload` | `openaiNormalizeChatPayload(array $input): array` | Normalisiert und validiert den eingehenden Chat-Completion-Request-Payload. |
 
+## lib/quickinfo.php
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `quickinfoNormalizeUrl` | `quickinfoNormalizeUrl(string $url): string` | Normalisiert eine quickinfo-URL (Schema ergänzen, `/api/v1` und Slashes entfernen); `''` bei ungültiger URL. |
+| `quickinfoCurlHandle` | `quickinfoCurlHandle(string $baseUrl, string $apiKey, string $path, bool $verifyTls, int $timeout)` | Erzeugt ein konfiguriertes curl-Handle für `/api/v1/<path>` mit Bearer-Token. |
+| `quickinfoReadHandle` | `quickinfoReadHandle($ch, $body): array` | Interpretiert ein abgeschlossenes curl-Handle (HTTP-Status, 401/429, JSON) zu `{ok, http, data, error}`. |
+| `quickinfoRequest` | `quickinfoRequest(string $baseUrl, string $apiKey, string $path, bool $verifyTls = false, int $timeout = 6): array` | Einzelne synchrone API-v1-Anfrage. |
+| `quickinfoTestPairing` | `quickinfoTestPairing(string $baseUrl, string $apiKey, bool $verifyTls = false): array` | Prüft ein Pairing über `/api/v1/info`; liefert `{ok, message, info}`. |
+| `quickinfoSeriesMinMax` | `quickinfoSeriesMinMax($series): array` | Min./Max. einer History-Serie `[[ts, value], …]`. |
+| `quickinfoCollectMetrics` | `quickinfoCollectMetrics(array $endpoints, int $timeout = 6): array` | Holt `status`, `info` und 24h-`history` aller gekoppelten Endpunkte parallel (curl_multi), Ergebnis je Endpunkt-ID. |
+| `quickinfoBuildMetricRow` | `quickinfoBuildMetricRow(array $status, array $info, array $history): array` | Fasst die drei API-Antworten zu einer flachen Metrikzeile (CPU/GPU-Last & -Temperatur inkl. 24h-Min./Max., RAM/VRAM, GPU-Modell) zusammen. |
+
 ## lib/prompt_security.php
 
 | Funktion | Signatur | Beschreibung |
@@ -477,6 +490,8 @@ Nur eine top-level Funktion:
 | Datei | Zweck |
 |---|---|
 | `admin/api_keys.php` | CRUD für OpenAI-kompatible API-Keys (erzeugen/aktivieren/löschen) |
+| `admin/endpoint_tech.php` | quickinfo-Pairing je Endpunkt (`pair_quickinfo`, `test_quickinfo`, `unpair_quickinfo`) und Live-Übersicht |
+| `admin/quickinfo_stats.php` | JSON: Modell, Ø Token/s (heute) und quickinfo-Metriken je Endpunkt |
 | `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients, SD/ComfyUI-Zahlen) |
 | `admin/login.php` | Anmeldung (LDAP/SSO/lokal) mit Sitzungsverwaltung |
 | `admin/logout.php` | Beendet die Sitzung und leitet zum Login um |
