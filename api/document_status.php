@@ -11,8 +11,7 @@
  *                to that conversation are returned (used by the paperclip
  *                upload chips in the chat composer).
  *   scope      – "library" returns only the documents the user decided to keep
- *                in the knowledge base (used by the library overlay), including
- *                globally shared documents of other users.
+ *                in their personal library (used by the library overlay).
  *
  * GET  → JSON { ok, uploads: [...] }
  *
@@ -50,16 +49,16 @@ $libraryOnly = ($_GET['scope'] ?? '') === 'library';
 
 try {
     if ($libraryOnly) {
-        // Own retained documents plus everything other users shared globally.
+        // Own retained documents only – uploads are never shared with others.
         $stmt = $db->prepare(
-            "SELECT {$columns}, (user_id = ?) AS is_own
+            "SELECT {$columns}, 1 AS is_own
                FROM document_uploads
               WHERE is_library = 1
-                AND (user_id = ? OR is_global_rag = 1)
+                AND user_id = ?
               ORDER BY uploaded_at DESC
               LIMIT 200"
         );
-        $stmt->execute([$userId, $userId]);
+        $stmt->execute([$userId]);
     } elseif ($sessionId !== '') {
         $stmt = $db->prepare(
             "SELECT {$columns}

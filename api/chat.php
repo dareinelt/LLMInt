@@ -29,6 +29,7 @@ require_once __DIR__ . '/balancer.php';
 require_once __DIR__ . '/sd_balancer.php';
 require_once __DIR__ . '/comfy_balancer.php';
 require_once __DIR__ . '/embedding.php';
+require_once __DIR__ . '/vector_store.php';
 
 function buildSearxngSearchUrl(string $baseUrl, string $query): string
 {
@@ -650,8 +651,9 @@ function scoreRagChunk(string $chunkText, string $query, array $terms): float
 
 /**
  * Returns true when at least one analysed document upload is available
- * for the current user (own uploads, globally shared uploads, or documents
- * attached to the current chat session via the paperclip button).
+ * for the current user (own library uploads or documents attached to the
+ * current chat session via the paperclip button). Shared knowledge no longer
+ * comes from uploads but from the vector store (see api/vector_store.php).
  */
 function hasDocumentUploads(?int $userId, string $chatSessionId = ''): bool
 {
@@ -664,9 +666,9 @@ function hasDocumentUploads(?int $userId, string $chatSessionId = ''): bool
                FROM document_uploads
               WHERE status = 'done'
                 AND chunk_count > 0
-                AND (user_id = ? OR is_global_rag = 1)
+                AND user_id = ?
                 AND (is_library = 1 OR chat_session_id = ?)
-                AND (chat_session_id IS NULL OR is_global_rag = 1 OR chat_session_id = ?)"
+                AND (chat_session_id IS NULL OR chat_session_id = ?)"
         );
         $stmt->execute([$userId, $chatSessionId, $chatSessionId]);
         $count = (int) $stmt->fetchColumn();
@@ -768,7 +770,7 @@ function createDocumentQueryToolDefinition(): array
         'type' => 'function',
         'function' => [
             'name' => 'query_documents',
-            'description' => 'Durchsucht analysierte Dokumente (an diesen Chat angehängte Uploads, eigene Uploads sowie global freigegebene Uploads anderer Nutzer) per chunk-basierter RAG-Suche. An den aktuellen Chat angehängte Dokumente werden bevorzugt. Gib in deiner Antwort an, aus welchem Dokument die Informationen stammen.',
+            'description' => 'Durchsucht die zentrale Wissensdatenbank (Vektordatenbank) sowie analysierte Dokumente des Nutzers (an diesen Chat angehängte Uploads und eigene Bibliotheks-Uploads) per RAG-Suche. An den aktuellen Chat angehängte Dokumente werden bevorzugt. Gib in deiner Antwort an, aus welchem Dokument die Informationen stammen.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -797,11 +799,11 @@ function createDocumentQueryToolDefinition(): array
  *
  * Documents attached to $chatSessionId (paperclip upload inside the chat) are
  * loaded first and receive a relevance boost, so the conversation's own files
- * win over the global knowledge base.
+ * win over the user's library.
  *
  * Returns an array with matching document excerpts.
  */
-function queryDocuments(string $query, ?int $userId, string $chatSessionId = ''): array
+function queryUploadedDocuments(string $query, ?int $userId, string $chatSessionId = ''): array
 {
     $query = trim($query);
     if ($query === '') {
@@ -842,9 +844,9 @@ function queryDocuments(string $query, ?int $userId, string $chatSessionId = '')
                FROM document_chunks dc
                JOIN document_uploads du ON du.id = dc.document_upload_id
               WHERE du.status = 'done'
-                AND (du.user_id = ? OR du.is_global_rag = 1)
+                AND du.user_id = ?
                 AND (du.is_library = 1 OR du.chat_session_id = ?)
-                AND (du.chat_session_id IS NULL OR du.is_global_rag = 1 OR du.chat_session_id = ?)
+                AND (du.chat_session_id IS NULL OR du.chat_session_id = ?)
               ORDER BY is_session_document DESC, du.uploaded_at DESC, dc.chunk_index ASC
               LIMIT {$chunkLimit}"
         );
@@ -855,7 +857,7 @@ function queryDocuments(string $query, ?int $userId, string $chatSessionId = '')
             writeLog('info', 'Dokumentensuche lieferte 0 relevante Dokumente.');
             return [
                 'found'   => false,
-                'message' => 'Es sind noch keine analysierten Dokument-Chunks (eigene oder global freigegebene) verfügbar.',
+                'message' => 'Es sind noch keine analysierten eigenen Dokument-Chunks verfügbar.',
             ];
         }
 
@@ -1040,6 +1042,62 @@ function queryDocuments(string $query, ?int $userId, string $chatSessionId = '')
         writeLog('error', 'Dokumentensuche Fehler: ' . $e->getMessage());
         return ['error' => 'Datenbankfehler: ' . $e->getMessage()];
     }
+}
+
+/**
+ * Tool entry point: combine the central vector store (docvecwizard / Milvus)
+ * with the user's own uploaded documents. Chat attachments come first, then
+ * vector-store hits, then library uploads.
+ */
+function queryDocuments(string $query, ?int $userId, string $chatSessionId = ''): array
+{
+    $query = trim($query);
+    if ($query === '') {
+        return ['error' => 'Leere Suchanfrage.'];
+    }
+
+    $uploadResults = [];
+    $uploadError   = null;
+    if ($userId !== null && $userId > 0 && hasDocumentUploads($userId, $chatSessionId)) {
+        $uploaded = queryUploadedDocuments($query, $userId, $chatSessionId);
+        if (isset($uploaded['error'])) {
+            $uploadError = (string) $uploaded['error'];
+        } elseif (!empty($uploaded['found'])) {
+            $uploadResults = $uploaded['results'];
+        }
+    }
+
+    $vectorResults = [];
+    $vectorMessage = '';
+    if (vectorStoreEnabled()) {
+        $vec = vectorStoreSearch($query);
+        if ($vec['ok']) {
+            $vectorResults = vectorHitsToToolResults($vec['hits']);
+        } else {
+            $vectorMessage = $vec['message'];
+        }
+    }
+
+    $attached = array_values(array_filter($uploadResults, static fn(array $r): bool => !empty($r['attached_to_chat'])));
+    $library  = array_values(array_filter($uploadResults, static fn(array $r): bool => empty($r['attached_to_chat'])));
+    $results  = array_merge($attached, $vectorResults, $library);
+
+    if ($results === []) {
+        $msg = 'Keine passenden Informationen gefunden.';
+        if ($vectorMessage !== '') {
+            $msg .= ' Vektordatenbank: ' . $vectorMessage;
+        }
+        if ($uploadError !== null) {
+            $msg .= ' Dokumente: ' . $uploadError;
+        }
+        return ['found' => false, 'message' => $msg];
+    }
+
+    $out = ['found' => true, 'results' => $results];
+    if ($vectorMessage !== '') {
+        $out['vector_store_notice'] = $vectorMessage;
+    }
+    return $out;
 }
 
 
@@ -2750,7 +2808,7 @@ if (!empty($endpoint['is_llamacpp'])) {
 $useSearchTool   = $searxngBaseUrl !== '' && $endpointSupportsToolCalling;
 $useSdTool       = hasSdEndpoints() && $endpointSupportsToolCalling;
 $useComfyTool    = hasComfyEndpoints() && $endpointSupportsToolCalling;
-$useDocQueryTool = hasDocumentUploads($sessionUserId, $sessionId) && $endpointSupportsToolCalling;
+$useDocQueryTool = (hasDocumentUploads($sessionUserId, $sessionId) || vectorStoreEnabled()) && $endpointSupportsToolCalling;
 $useTools        = $useSearchTool || $useSdTool || $useComfyTool || $useDocQueryTool;
 if ($openAiToolMode === 'disabled') {
     $useSearchTool = false;
@@ -2779,6 +2837,26 @@ $chatDocumentPrompt = buildChatDocumentSystemPrompt($chatDocuments, $useDocQuery
 if ($chatDocumentPrompt !== '') {
     array_unshift($llmMessages, ['role' => 'system', 'content' => $chatDocumentPrompt]);
     writeLog('info', count($chatDocuments) . ' an den Chat angehängte Dokument(e) im Kontext berücksichtigt.');
+}
+// Central knowledge base: every request retrieves context from the active
+// vector store (docvecwizard API or local Milvus) for the latest user message
+// and injects it as a system message – independent of tool-calling support.
+if (vectorStoreEnabled()) {
+    $vectorQueryText = '';
+    foreach (array_reverse($payload['messages']) as $msg) {
+        if (($msg['role'] ?? '') === 'user') {
+            $vectorQueryText = is_string($msg['content']) ? $msg['content'] : normalizeAssistantContent($msg['content'] ?? '');
+            break;
+        }
+    }
+    $vectorQueryText = trim($vectorQueryText);
+    if ($vectorQueryText !== '') {
+        $vectorContext = vectorStoreSearch(mb_substr($vectorQueryText, 0, 2000));
+        if ($vectorContext['ok'] && $vectorContext['hits'] !== []) {
+            array_unshift($llmMessages, ['role' => 'system', 'content' => buildVectorContextSystemPrompt($vectorContext['hits'])]);
+            writeLog('info', count($vectorContext['hits']) . ' Treffer aus der Vektordatenbank (' . vectorStoreLabel($vectorContext['mode']) . ') im Kontext berücksichtigt.');
+        }
+    }
 }
 // Always tell the upstream model the current date and time. This notice is
 // hard-coded and therefore stays in place regardless of how the configurable

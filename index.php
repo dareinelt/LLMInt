@@ -1687,23 +1687,11 @@ $csrfToken = $_SESSION['csrf_token'];
             color: var(--text-muted);
         }
 
-        #upload-global-wrap {
-            margin-top: 12px;
+        .upload-private-note {
+            margin: 12px 0 0;
             font-size: .82rem;
             color: var(--text-muted);
-        }
-
-        #upload-global-wrap label {
-            display: flex;
-            align-items: flex-start;
-            gap: 8px;
-            cursor: pointer;
             line-height: 1.35;
-        }
-
-        #upload-global-rag {
-            margin-top: 2px;
-            accent-color: var(--accent);
         }
 
         #upload-progress {
@@ -1869,31 +1857,6 @@ $csrfToken = $_SESSION['csrf_token'];
 
         .doc-retention-option input { margin-top: 2px; accent-color: var(--accent); }
 
-        #doc-retention-scope {
-            margin-top: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            opacity: .45;
-            pointer-events: none;
-            transition: opacity .15s;
-        }
-
-        #doc-retention-scope.enabled { opacity: 1; pointer-events: auto; }
-
-        #doc-retention-scope label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: .84rem;
-            padding: 9px 12px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            cursor: pointer;
-        }
-
-        #doc-retention-scope input { accent-color: var(--accent); }
-
         #doc-retention-msg { font-size: .8rem; margin-top: 12px; }
         #doc-retention-msg.ok    { color: var(--success); }
         #doc-retention-msg.error { color: var(--error); }
@@ -1919,27 +1882,6 @@ $csrfToken = $_SESSION['csrf_token'];
         }
 
         #library-search:focus { outline: none; border-color: var(--accent); }
-
-        .library-filter {
-            display: flex;
-            gap: 4px;
-            background: var(--surface-alt);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 3px;
-        }
-
-        .library-filter button {
-            border: none;
-            background: transparent;
-            color: var(--text-muted);
-            font-size: .78rem;
-            padding: 5px 10px;
-            border-radius: calc(var(--radius) - 2px);
-            cursor: pointer;
-        }
-
-        .library-filter button.active { background: var(--accent); color: #fff; }
 
         #library-grid {
             display: grid;
@@ -1990,9 +1932,7 @@ $csrfToken = $_SESSION['csrf_token'];
             color: var(--text-muted);
         }
 
-        .library-badge.public { border-color: var(--accent); color: var(--accent); }
         .library-badge.private { border-color: var(--border); }
-        .library-badge.foreign { border-color: var(--border); font-style: italic; }
 
         .library-card-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: auto; }
 
@@ -2129,12 +2069,7 @@ $csrfToken = $_SESSION['csrf_token'];
                accept=".pdf,.docx,.xlsx,.xlsm,.xls,.pptx,.odt,.ods,.odp,.rtf,.csv,.tsv,.txt,.md,.json,.xml,.html,.htm,.yaml,.yml,.log,.ini,.conf,.png,.jpg,.jpeg,.webp,.gif">
 
         <div id="upload-preview"></div>
-        <div id="upload-global-wrap">
-            <label for="upload-global-rag">
-                <input type="checkbox" id="upload-global-rag" checked>
-                Upload global für RAG freigeben (alle Nutzer können die Inhalte verwenden)
-            </label>
-        </div>
+        <p class="upload-private-note">🔒 Hochgeladene Dateien sind nur für dich sichtbar. Gemeinsames Wissen kommt aus der zentralen Wissensdatenbank.</p>
 
         <div id="upload-progress">
             <div id="upload-progress-bar">
@@ -2160,19 +2095,8 @@ $csrfToken = $_SESSION['csrf_token'];
 
             <label class="doc-retention-option" for="doc-retention-keep">
                 <input type="checkbox" id="doc-retention-keep">
-                <span>Diese Datei in die Wissensdatenbank aufnehmen und für spätere Informationssuche aufbewahren</span>
+                <span>Diese Datei in meiner Bibliothek aufbewahren und für spätere Informationssuche nutzen (nur für mich sichtbar)</span>
             </label>
-
-            <div id="doc-retention-scope">
-                <label for="doc-retention-private">
-                    <input type="radio" name="doc-retention-scope" id="doc-retention-private" value="private" checked>
-                    🔒 Nur für mich
-                </label>
-                <label for="doc-retention-global">
-                    <input type="radio" name="doc-retention-scope" id="doc-retention-global" value="global">
-                    🌐 Für alle Nutzer
-                </label>
-            </div>
 
             <div id="doc-retention-msg"></div>
         </div>
@@ -2194,11 +2118,6 @@ $csrfToken = $_SESSION['csrf_token'];
         <div class="doc-overlay-body">
             <div id="library-toolbar">
                 <input type="search" id="library-search" placeholder="Dateien durchsuchen …" aria-label="Dateien durchsuchen">
-                <div class="library-filter" role="group" aria-label="Filter">
-                    <button type="button" data-filter="all" class="active">Alle</button>
-                    <button type="button" data-filter="private">🔒 Privat</button>
-                    <button type="button" data-filter="public">🌐 Öffentlich</button>
-                </div>
             </div>
             <div id="library-grid"></div>
             <div id="library-empty" style="display:none"></div>
@@ -4430,7 +4349,6 @@ $csrfToken = $_SESSION['csrf_token'];
 
     const CSRF_TOKEN = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
     const MAX_BYTES  = <?= (int) (max(1, (int) getSetting('upload_max_mb', '20')) * 1024 * 1024) ?>;
-    const GLOBAL_RAG_DEFAULT = false;
 
     const docBtn      = document.getElementById('attach-doc-btn');
     const docInput    = document.getElementById('attach-doc-input');
@@ -4540,7 +4458,7 @@ $csrfToken = $_SESSION['csrf_token'];
             keep.className = 'doc-chip-meta';
             const isKept = parseInt(doc.is_library, 10) === 1;
             keep.textContent = isKept
-                ? (parseInt(doc.is_global_rag, 10) === 1 ? '🌐 aufbewahrt' : '🔒 aufbewahrt')
+                ? '🔒 aufbewahrt'
                 : '⏳ nur diese Sitzung';
             chip.appendChild(keep);
 
@@ -4596,7 +4514,6 @@ $csrfToken = $_SESSION['csrf_token'];
             const fd = new FormData();
             fd.append('file', file, file.name);
             fd.append('csrf_token', CSRF_TOKEN);
-            fd.append('global_rag', GLOBAL_RAG_DEFAULT ? '1' : '0');
             // Chat uploads are processed for this conversation only; the user
             // can opt into permanent storage via the file overlay.
             fd.append('retain', '0');
@@ -4754,7 +4671,6 @@ $csrfToken = $_SESSION['csrf_token'];
     const progressFill  = document.getElementById('upload-progress-fill');
     const uploadMsg     = document.getElementById('upload-msg');
     const submitBtn     = document.getElementById('upload-submit-btn');
-    const globalRagCb   = document.getElementById('upload-global-rag');
 
     let selectedFile = null;
     let panelOpen = false;
@@ -4809,7 +4725,7 @@ $csrfToken = $_SESSION['csrf_token'];
             const size = formatBytes(parseInt(u.file_size) || 0);
             const kept = parseInt(u.is_library, 10) === 1;
             const globalScope = kept
-                ? (parseInt(u.is_global_rag, 10) === 1 ? '🌐 Bibliothek (alle Nutzer)' : '🔒 Bibliothek (nur für mich)')
+                ? '🔒 Bibliothek (nur für mich)'
                 : 'Nur für diese Chat-Sitzung';
 
             let extra = '';
@@ -4928,7 +4844,6 @@ $csrfToken = $_SESSION['csrf_token'];
         if (uploadProgress) uploadProgress.style.display = 'none';
         if (progressFill)  progressFill.style.width = '0%';
         if (uploadMsg)   { uploadMsg.textContent = ''; uploadMsg.className = ''; }
-        if (globalRagCb)   globalRagCb.checked = true;
         if (submitBtn)     submitBtn.disabled = true;
     }
 
@@ -5019,7 +4934,6 @@ $csrfToken = $_SESSION['csrf_token'];
             const fd = new FormData();
             fd.append('file', selectedFile, selectedFile.name);
             fd.append('csrf_token', CSRF);
-            fd.append('global_rag', globalRagCb && globalRagCb.checked ? '1' : '0');
 
             try {
                 if (progressFill) progressFill.style.width = '50%';
@@ -5064,9 +4978,6 @@ $csrfToken = $_SESSION['csrf_token'];
     const titleEl     = document.getElementById('doc-retention-title');
     const metaEl      = document.getElementById('doc-retention-meta');
     const keepCb      = document.getElementById('doc-retention-keep');
-    const scopeWrap   = document.getElementById('doc-retention-scope');
-    const scopePriv   = document.getElementById('doc-retention-private');
-    const scopeGlob   = document.getElementById('doc-retention-global');
     const msgEl       = document.getElementById('doc-retention-msg');
     const saveBtn     = document.getElementById('doc-retention-save');
     const cancelBtn   = document.getElementById('doc-retention-cancel');
@@ -5078,11 +4989,9 @@ $csrfToken = $_SESSION['csrf_token'];
     const libGrid     = document.getElementById('library-grid');
     const libEmpty    = document.getElementById('library-empty');
     const libSearch   = document.getElementById('library-search');
-    const libFilters  = document.querySelectorAll('.library-filter button');
 
     let currentDoc = null;
     let libraryItems = [];
-    let libraryFilter = 'all';
 
     function esc(s) {
         return String(s)
@@ -5108,11 +5017,6 @@ $csrfToken = $_SESSION['csrf_token'];
     }
 
     // ── Retention overlay ─────────────────────────────────────
-    function syncScopeState() {
-        if (!scopeWrap || !keepCb) return;
-        scopeWrap.classList.toggle('enabled', keepCb.checked);
-    }
-
     function openRetention(doc) {
         if (!overlay || !doc) return;
         currentDoc = doc;
@@ -5129,11 +5033,8 @@ $csrfToken = $_SESSION['csrf_token'];
 
         const kept = parseInt(doc.is_library, 10) === 1;
         if (keepCb) keepCb.checked = kept;
-        if (scopeGlob) scopeGlob.checked = kept && parseInt(doc.is_global_rag, 10) === 1;
-        if (scopePriv) scopePriv.checked = !(scopeGlob && scopeGlob.checked);
         if (msgEl) { msgEl.textContent = ''; msgEl.className = ''; }
         if (saveBtn) saveBtn.disabled = false;
-        syncScopeState();
 
         overlay.classList.add('open');
     }
@@ -5143,7 +5044,6 @@ $csrfToken = $_SESSION['csrf_token'];
         currentDoc = null;
     }
 
-    if (keepCb) keepCb.addEventListener('change', syncScopeState);
     if (cancelBtn) cancelBtn.addEventListener('click', closeRetention);
     if (closeBtn) closeBtn.addEventListener('click', closeRetention);
     if (overlay) {
@@ -5166,7 +5066,6 @@ $csrfToken = $_SESSION['csrf_token'];
                     body: JSON.stringify({
                         id: currentDoc.id,
                         retain: retain ? '1' : '0',
-                        scope: (scopeGlob && scopeGlob.checked) ? 'global' : 'private',
                         csrf_token: CSRF,
                     }),
                 });
@@ -5192,9 +5091,6 @@ $csrfToken = $_SESSION['csrf_token'];
         const term = (libSearch && libSearch.value || '').trim().toLowerCase();
 
         const items = libraryItems.filter(function (u) {
-            const isPublic = parseInt(u.is_global_rag, 10) === 1;
-            if (libraryFilter === 'public' && !isPublic) return false;
-            if (libraryFilter === 'private' && isPublic) return false;
             if (term && String(u.original_name || '').toLowerCase().indexOf(term) === -1) return false;
             return true;
         });
@@ -5204,32 +5100,21 @@ $csrfToken = $_SESSION['csrf_token'];
             if (libEmpty) {
                 libEmpty.style.display = 'block';
                 libEmpty.textContent = libraryItems.length
-                    ? 'Keine Dateien passen zum Filter.'
-                    : 'Noch keine Dateien aufbewahrt. Klicke im Chat auf eine hochgeladene Datei, um sie in die Wissensdatenbank aufzunehmen.';
+                    ? 'Keine Dateien passen zur Suche.'
+                    : 'Noch keine Dateien aufbewahrt. Klicke im Chat auf eine hochgeladene Datei, um sie in deine Bibliothek aufzunehmen.';
             }
             return;
         }
         if (libEmpty) libEmpty.style.display = 'none';
 
         libGrid.innerHTML = items.map(function (u) {
-            const isPublic = parseInt(u.is_global_rag, 10) === 1;
-            const isOwn    = parseInt(u.is_own, 10) === 1;
             const chunks   = parseInt(u.chunk_count, 10) || 0;
-            const badges   = [
-                isPublic
-                    ? '<span class="library-badge public">🌐 Für alle Nutzer</span>'
-                    : '<span class="library-badge private">🔒 Nur für mich</span>',
-            ];
-            if (!isOwn) badges.push('<span class="library-badge foreign">von anderen geteilt</span>');
+            const badges   = ['<span class="library-badge private">🔒 Nur für mich</span>'];
             if (u.status !== 'done') badges.push('<span class="library-badge">' + esc(u.status) + '</span>');
 
-            const actions = isOwn
-                ? '<div class="library-card-actions">'
-                    + '<button type="button" data-action="scope" data-id="' + esc(u.id) + '">'
-                    + (isPublic ? '🔒 Privat machen' : '🌐 Freigeben') + '</button>'
+            const actions = '<div class="library-card-actions">'
                     + '<button type="button" class="danger" data-action="delete" data-id="' + esc(u.id) + '">🗑 Entfernen</button>'
-                  + '</div>'
-                : '';
+                  + '</div>';
 
             return '<div class="library-card">'
                 + '<div class="library-card-top"><span class="library-card-icon">📄</span>'
@@ -5275,15 +5160,6 @@ $csrfToken = $_SESSION['csrf_token'];
     }
     if (libSearch) libSearch.addEventListener('input', renderLibrary);
 
-    libFilters.forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            libFilters.forEach(function (b) { b.classList.remove('active'); });
-            btn.classList.add('active');
-            libraryFilter = btn.getAttribute('data-filter') || 'all';
-            renderLibrary();
-        });
-    });
-
     if (libGrid) {
         libGrid.addEventListener('click', async function (e) {
             const btn = e.target.closest('button[data-action]');
@@ -5295,7 +5171,7 @@ $csrfToken = $_SESSION['csrf_token'];
             btn.disabled = true;
             try {
                 if (btn.getAttribute('data-action') === 'delete') {
-                    if (!window.confirm('„' + (item.original_name || 'Datei') + '“ endgültig aus der Wissensdatenbank entfernen?')) {
+                    if (!window.confirm('„' + (item.original_name || 'Datei') + '“ endgültig aus der Bibliothek entfernen?')) {
                         btn.disabled = false;
                         return;
                     }
@@ -5303,18 +5179,6 @@ $csrfToken = $_SESSION['csrf_token'];
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ id: id, csrf_token: CSRF }),
-                    });
-                } else {
-                    const makePublic = parseInt(item.is_global_rag, 10) !== 1;
-                    await fetch('api/document_retention.php', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            id: id,
-                            retain: '1',
-                            scope: makePublic ? 'global' : 'private',
-                            csrf_token: CSRF,
-                        }),
                     });
                 }
             } catch (_) { /* reload shows the actual state */ }

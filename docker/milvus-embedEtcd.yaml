@@ -1,0 +1,8 @@
+# Embedded etcd configuration for the Milvus standalone container
+# (mirrors the upstream standalone_embed.sh defaults). Milvus stores its
+# metadata in this etcd instance; data lives under /var/lib/milvus/etcd.
+listen-client-urls: http://0.0.0.0:2379
+advertise-client-urls: http://0.0.0.0:2379
+quota-backend-bytes: 4294967296
+auto-compaction-mode: revision
+auto-compaction-retention: '1000'
