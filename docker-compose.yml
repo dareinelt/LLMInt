@@ -32,6 +32,8 @@ services:
         condition: service_healthy
       docconvert:
         condition: service_started
+      milvus:
+        condition: service_started
     environment:
       # Database connection (must match the db service above)
       DB_HOST: db
@@ -43,12 +45,20 @@ services:
       DOCCONVERT_URL: ${DOCCONVERT_URL:-http://docconvert:8000}
       DOCCONVERT_TOKEN: ${DOCCONVERT_TOKEN:-}
       DOCCONVERT_TIMEOUT: ${DOCCONVERT_TIMEOUT:-120}
+      # Local Milvus vector database (used when the admin selects
+      # "Wissensdatenbank → lokale Milvus-Instanz"; docvecwizard exports are
+      # imported into this instance). Can be overridden in the admin UI.
+      MILVUS_URL: ${MILVUS_URL:-http://milvus:19530}
+      MILVUS_METRICS_URL: ${MILVUS_METRICS_URL:-http://milvus:9091}
       # PHP timezone (overrides docker/php.ini if set)
       TZ: ${TZ:-Europe/Berlin}
     volumes:
       # Persist uploaded documents and generated images across restarts
       - doc_uploads:/var/www/html/doc_uploads
       - sd_output:/var/www/html/sd_output
+      # docvecwizard export archives (*.tar.gz) placed here can be imported
+      # from the admin UI without a browser upload.
+      - vector_imports:/var/www/html/vector_imports
       # ── Optional: Windows SSO (Kerberos) ────────────────────────────────────
       # Mount a valid keytab and krb5.conf and uncomment the GSSAPI block in
       # docker/apache.conf to enable transparent Windows SSO.
@@ -77,6 +87,35 @@ services:
     volumes:
       # Temporary chunk cache; survives restarts, pruned by TTL.
       - docconvert_cache:/var/cache/docconvert
+
+  # ── Milvus vector database (standalone, embedded etcd + local storage) ───────
+  # Holds the vectors imported from docvecwizard export archives when LLMInt
+  # runs the knowledge base in "local" mode. Not needed when the remote
+  # docvecwizard API mode is used – the service may then be stopped or removed.
+  # Internal only: no host port is published.
+  milvus:
+    image: milvusdb/milvus:${MILVUS_VERSION:-v2.5.27}
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/embedEtcd.yaml
+      COMMON_STORAGETYPE: local
+      DEPLOY_MODE: STANDALONE
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - milvus_data:/var/lib/milvus
+      - ./docker/milvus-embedEtcd.yaml:/milvus/configs/embedEtcd.yaml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 90s
+    mem_limit: ${MILVUS_MEM_LIMIT:-2g}
 
   # ── phpMyAdmin ────────────────────────────────────────────────────────────────
   # Protected by HTTP Basic Auth (credentials from PMA_BASIC_AUTH_USER /
@@ -109,3 +148,5 @@ volumes:
   doc_uploads:
   sd_output:
   docconvert_cache:
+  milvus_data:
+  vector_imports:

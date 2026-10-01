@@ -8,12 +8,12 @@
  * POST multipart/form-data:
  *   file          – The uploaded file (see the format table below)
  *   csrf_token    – CSRF token from the session
- *   global_rag    – "1" for globally shareable RAG usage, else "0"
- *   retain        – "1" to keep the file in the knowledge base ("Bibliothek")
- *                   for later RAG searches. Uploads attached to a chat session
- *                   default to "0": they are processed for the running
- *                   conversation only and the stored file is discarded right
- *                   after the analysis.
+ *   retain        – "1" to keep the file in the user's personal library
+ *                   ("Bibliothek") for later RAG searches. Uploads attached to
+ *                   a chat session default to "0": they are processed for the
+ *                   running conversation only and the stored file is discarded
+ *                   right after the analysis. Uploads are always private; the
+ *                   shared knowledge base is the vector store (api/vector_store.php).
  *   session_id    – Optional chat session ID; the upload is then attached to
  *                   that conversation and usable inside it right away
  *
@@ -492,7 +492,9 @@ $file         = $_FILES['file'];
 $originalName = basename($file['name']);
 $tmpPath      = $file['tmp_name'];
 $fileSize     = (int) $file['size'];
-$globalRag    = isset($_POST['global_rag']) && (string) $_POST['global_rag'] === '1' ? 1 : 0;
+// Uploads are always private. Shared knowledge comes exclusively from the
+// central vector store (api/vector_store.php); a "global_rag" flag is ignored.
+$globalRag    = 0;
 
 // Whether the document is kept in the knowledge base for later searches.
 // Chat attachments are ephemeral unless the user explicitly opts in; uploads

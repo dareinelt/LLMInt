@@ -97,7 +97,8 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `client_count_log` | Zeitreihe gleichzeitiger Clients |
 | `sd_endpoints`, `sd_tasks` | AUTOMATIC1111-Endpunkte und deren Aufträge |
 | `comfy_endpoints`, `comfy_tasks` | ComfyUI-Endpunkte und deren Aufträge |
-| `document_uploads` | Upload-Metadaten, Verarbeitungs- und Embedding-Status, `is_global_rag` |
+| `document_uploads` | Upload-Metadaten, Verarbeitungs- und Embedding-Status (`is_global_rag` fest `0`) |
+| `vector_documents`, `vector_chunks`, `vector_imports`, `vector_query_logs` | Zentrale Wissensdatenbank (docvecwizard-Importe, Import-Protokoll, Abfrage-Log) |
 | `document_chunks` | Chunks mit optionalem Embedding (`FK` auf `document_uploads`, `ON DELETE CASCADE`) |
 | `embedding_endpoints` | Embedding-Server (`base_url`, `model`, `timeout`) |
 | `embedding_cache` | zwischengespeicherte Query-Embeddings |
@@ -241,14 +242,24 @@ bzw. `pickComfyEndpoint()`/`completeComfyTask()`.
 - Aufbewahrung: Chat-Uploads sind standardmäßig flüchtig (`document_uploads.is_library = 0`);
   die gespeicherte Datei wird nach der Analyse gelöscht und die Chunks sind nur innerhalb der
   eigenen Chat-Sitzung durchsuchbar. Über `api/document_retention.php` nimmt der Benutzer eine
-  Datei in die Wissensdatenbank auf und wählt „Nur für mich“ (`is_global_rag = 0`) oder
-  „Für alle Nutzer“ (`is_global_rag = 1`).
-- Statusabfrage im Frontend: `api/document_status.php` (`scope=library` liefert die Bibliothek);
-  Neuberechnung über `api/rebuild_embeddings.php`.
+  Datei in seine **private** Wissensdatenbank auf. Eine globale Freigabe gibt es nicht mehr
+  (`is_global_rag` ist fest `0`).
+- Statusabfrage im Frontend: `api/document_status.php` (`scope=library` liefert die eigenen
+  Bibliotheksdokumente); Neuberechnung über `api/rebuild_embeddings.php`.
+- Zentrale Wissensdatenbank (`api/vector_store.php`): teamweites Wissen kommt aus einer von
+  docvecwizard befüllten Milvus-Vektordatenbank – Modus `remote` (REST-API von docvecwizard,
+  `docvecSearch()`) oder Modus `local` (Export-Import über `api/vector_import.php` in den
+  `milvus`-Container plus `vector_documents`/`vector_chunks`, Suche über
+  `generateEmbeddingAuto()` + `milvusSearch()`). `vectorStoreSearch()` wird in `api/chat.php` bei
+  jeder Anfrage aufgerufen; Treffer landen als Kontext-Systemnachricht
+  (`buildVectorContextSystemPrompt()`) und im Tool `query_documents`. `vectorStoreStatus()`
+  und `vectorQueryStats()` speisen die Dashboard-Kachel (`admin/load_stats.php`,
+  Schlüssel `vector_store`). Verbindungstest: `api/test_vector_store.php`.
 
 Einstellungen: `embedding_enabled`, `embedding_model`, `embedding_timeout`,
 `embedding_cache_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`,
-`reranker_enabled`, `reranker_endpoint`, `reranker_model`, `reranker_top_k`.
+`reranker_enabled`, `reranker_endpoint`, `reranker_model`, `reranker_top_k`,
+`vector_store_mode`, `vector_top_k`, `vector_min_score`, `docvec_api_*`, `milvus_*`.
 
 ---
 
@@ -334,7 +345,9 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/heartbeat.php` | POST | – | Präsenz-Token melden |
 | `api/document_status.php` | GET | Session | Upload-Status des Benutzers |
 | `api/upload_document.php` | POST | Session + CSRF | Dokument-Upload (`retain=1` bewahrt die Datei auf) |
-| `api/document_retention.php` | POST | Session + CSRF | Aufbewahrung in der Wissensdatenbank und Freigabe (privat/global) setzen |
+| `api/document_retention.php` | POST | Session + CSRF | Datei in die private Wissensdatenbank aufnehmen / wieder entfernen |
+| `api/vector_import.php` | GET/POST | Admin + CSRF | docvecwizard-Exportarchive auflisten bzw. importieren |
+| `api/test_vector_store.php` | POST | Admin | Verbindungstest docvecwizard-API / Milvus |
 | `api/document_delete.php` | POST | Session + CSRF | Eigenes Dokument samt Chunks löschen |
 | `api/rebuild_embeddings.php` | POST | Admin + CSRF | Embeddings neu berechnen |
 | `api/sd_generate.php`, `api/comfy_generate.php` | POST | Session | Bildgenerierung |

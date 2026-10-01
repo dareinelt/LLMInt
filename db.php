@@ -364,7 +364,7 @@ function ensureRuntimeSchema(PDO $pdo): void
         "ALTER TABLE users ADD COLUMN auth_source VARCHAR(10) NOT NULL DEFAULT 'local' AFTER can_upload_documents",
         "ALTER TABLE users ADD COLUMN ldap_dn VARCHAR(500) NULL AFTER auth_source",
         "ALTER TABLE document_uploads ADD COLUMN chunk_count INT UNSIGNED NOT NULL DEFAULT 0 AFTER extracted_text",
-        "ALTER TABLE document_uploads ADD COLUMN is_global_rag TINYINT(1) NOT NULL DEFAULT 1 AFTER chunk_count",
+        "ALTER TABLE document_uploads ADD COLUMN is_global_rag TINYINT(1) NOT NULL DEFAULT 0 AFTER chunk_count",
         // Chat session a document was attached to (inline upload in the chat).
         "ALTER TABLE document_uploads ADD COLUMN chat_session_id VARCHAR(128) NULL AFTER is_global_rag",
     ] as $alter) {
@@ -436,7 +436,7 @@ function ensureRuntimeSchema(PDO $pdo): void
             status         ENUM('pending','processing','done','error') NOT NULL DEFAULT 'pending',
             extracted_text MEDIUMTEXT      NULL,
             chunk_count    INT UNSIGNED    NOT NULL DEFAULT 0,
-            is_global_rag  TINYINT(1)      NOT NULL DEFAULT 1,
+            is_global_rag  TINYINT(1)      NOT NULL DEFAULT 0,
             is_library     TINYINT(1)      NOT NULL DEFAULT 0,
             chat_session_id VARCHAR(128)   NULL,
             error_message  TEXT            NULL,
@@ -530,6 +530,90 @@ function ensureRuntimeSchema(PDO $pdo): void
             KEY idx_el_type_created (type, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
+
+    // ── Vector store (docvecwizard / Milvus) ─────────────────────────────────
+    // Shared knowledge no longer comes from user uploads but from a Milvus
+    // vector database (remote docvecwizard API or a local import). The chunk
+    // texts of a local import live here; the vectors live in Milvus.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS vector_documents (
+            document_id          CHAR(36)     NOT NULL,
+            document_version_id  CHAR(36)     NOT NULL DEFAULT '',
+            filename             VARCHAR(512) NOT NULL DEFAULT '',
+            source_path          VARCHAR(1024) NOT NULL DEFAULT '',
+            mime_type            VARCHAR(191) NOT NULL DEFAULT '',
+            file_size            BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            page_count           INT UNSIGNED NOT NULL DEFAULT 0,
+            chunk_count          INT UNSIGNED NOT NULL DEFAULT 0,
+            vector_count         INT UNSIGNED NOT NULL DEFAULT 0,
+            embedding_model      VARCHAR(191) NOT NULL DEFAULT '',
+            embedding_dimension  INT UNSIGNED NOT NULL DEFAULT 0,
+            collection_name      VARCHAR(191) NOT NULL DEFAULT '',
+            import_id            INT UNSIGNED NULL,
+            imported_at          TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (document_id),
+            KEY idx_vd_collection (collection_name),
+            KEY idx_vd_import (import_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS vector_chunks (
+            id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            chunk_id     CHAR(36)        NOT NULL,
+            vector_id    CHAR(36)        NULL,
+            document_id  CHAR(36)        NOT NULL,
+            chunk_index  INT UNSIGNED    NOT NULL DEFAULT 0,
+            page_start   INT UNSIGNED    NOT NULL DEFAULT 0,
+            page_end     INT UNSIGNED    NOT NULL DEFAULT 0,
+            text         MEDIUMTEXT      NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_vc_chunk (chunk_id),
+            KEY idx_vc_document (document_id, chunk_index),
+            CONSTRAINT fk_vc_document
+                FOREIGN KEY (document_id) REFERENCES vector_documents(document_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS vector_imports (
+            id          INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+            filename    VARCHAR(500)  NOT NULL DEFAULT '',
+            status      ENUM('running','done','error') NOT NULL DEFAULT 'running',
+            strategy    VARCHAR(20)   NOT NULL DEFAULT 'skip',
+            documents   INT UNSIGNED  NOT NULL DEFAULT 0,
+            chunks      INT UNSIGNED  NOT NULL DEFAULT 0,
+            vectors     INT UNSIGNED  NOT NULL DEFAULT 0,
+            skipped     INT UNSIGNED  NOT NULL DEFAULT 0,
+            message     TEXT          NULL,
+            manifest    MEDIUMTEXT    NULL,
+            created_at  TIMESTAMP(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            finished_at TIMESTAMP(3)  NULL,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS vector_query_logs (
+            id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            mode        ENUM('remote','local') NOT NULL DEFAULT 'remote',
+            duration_ms INT UNSIGNED    NOT NULL DEFAULT 0,
+            hits        INT UNSIGNED    NOT NULL DEFAULT 0,
+            status      ENUM('ok','error') NOT NULL DEFAULT 'ok',
+            created_at  TIMESTAMP(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            KEY idx_vql_created (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // User uploads can no longer be shared globally; existing shares are revoked.
+    foreach ([
+        "ALTER TABLE document_uploads ALTER COLUMN is_global_rag SET DEFAULT 0",
+        "UPDATE document_uploads SET is_global_rag = 0 WHERE is_global_rag <> 0",
+    ] as $globalFix) {
+        try { $pdo->exec($globalFix); } catch (Throwable $_e) { /* ignore */ }
+    }
 
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS conversation_sessions (

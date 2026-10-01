@@ -3,17 +3,20 @@
 /**
  * api/document_retention.php
  *
- * Toggles whether one of the current user's documents is kept in the knowledge
- * base ("Bibliothek") for later RAG searches, and how it is shared.
+ * Toggles whether one of the current user's documents is kept in the user's
+ * personal library ("Bibliothek") for later RAG searches.
  *
  * Files uploaded inside a chat are ephemeral by default: they are analysed for
  * the running conversation only. This endpoint is called from the overlay that
  * opens when a user clicks an attached file in the chat.
  *
+ * Uploads are always private. Shared knowledge comes exclusively from the
+ * central vector store (see api/vector_store.php); a "scope" parameter is
+ * ignored.
+ *
  * POST (JSON or form-encoded):
  *   id         – document_uploads.id
  *   retain     – "1" to keep the document, "0" to limit it to the chat session
- *   scope      – "global" for all users, anything else for "private"
  *   csrf_token – CSRF token from the session
  *
  * Returns JSON { ok, message, document }.
@@ -61,7 +64,6 @@ if ($uploadId <= 0) {
 }
 
 $retain = isset($input['retain']) && (string) $input['retain'] === '1';
-$global = $retain && (string) ($input['scope'] ?? 'private') === 'global';
 
 $userId = (int) $_SESSION['admin_id'];
 $db     = getDb();
@@ -81,8 +83,8 @@ if (!$row) {
 }
 
 try {
-    $db->prepare('UPDATE document_uploads SET is_library = ?, is_global_rag = ? WHERE id = ? AND user_id = ?')
-       ->execute([$retain ? 1 : 0, $global ? 1 : 0, $uploadId, $userId]);
+    $db->prepare('UPDATE document_uploads SET is_library = ?, is_global_rag = 0 WHERE id = ? AND user_id = ?')
+       ->execute([$retain ? 1 : 0, $uploadId, $userId]);
 } catch (Throwable $e) {
     writeLog('warning', 'Aufbewahrung von Dokument ' . $uploadId . ' konnte nicht geändert werden: ' . $e->getMessage());
     http_response_code(500);
@@ -107,14 +109,14 @@ writeLog(
     'info',
     'Dokument "' . (string) $row['original_name'] . '" '
     . ($retain
-        ? ('in die Wissensdatenbank aufgenommen (' . ($global ? 'für alle Nutzer' : 'nur für mich') . ').')
+        ? 'in die persönliche Bibliothek aufgenommen.'
         : 'wird nicht mehr aufbewahrt (nur noch in der Chat-Sitzung nutzbar).')
 );
 
 echo json_encode([
     'ok'       => true,
     'message'  => $retain
-        ? ('Datei wird aufbewahrt (' . ($global ? 'für alle Nutzer' : 'nur für mich') . ').')
+        ? 'Datei wird in deiner Bibliothek aufbewahrt.'
         : 'Datei wird nicht aufbewahrt.',
     'document' => $document,
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

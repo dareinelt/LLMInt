@@ -96,6 +96,22 @@ $rerankerModel         = getSetting('reranker_model',         '');
 $rerankerTimeout       = (int) getSetting('reranker_timeout', '30');
 $rerankerTopK          = (int) getSetting('reranker_top_k',   '5');
 
+// ── Vector store (docvecwizard / Milvus) settings ────────────────────────────
+require_once __DIR__ . '/../api/vector_store.php';
+$vectorStoreMode    = vectorStoreMode();
+$vectorTopK         = vectorStoreTopK();
+$vectorMinScore     = getSetting('vector_min_score', '0');
+$docvecApiUrl       = getSetting('docvec_api_url', '');
+$docvecApiUsername  = getSetting('docvec_api_username', '');
+$docvecApiPassword  = getSetting('docvec_api_password', '');
+$docvecApiTimeout   = (int) getSetting('docvec_api_timeout', '20');
+$docvecApiVerifyTls = getSetting('docvec_api_verify_tls', '0') === '1';
+$milvusUrlSetting   = getSetting('milvus_url', '');
+$milvusMetricsSetting = getSetting('milvus_metrics_url', '');
+$milvusToken        = getSetting('milvus_token', '');
+$milvusTimeout      = (int) getSetting('milvus_timeout', '30');
+$milvusCollection   = getSetting('milvus_collection', '');
+
 // ── Generate CSRF token ───────────────────────────────────────────────────────
 
 if (empty($_SESSION['csrf_token'])) {
@@ -908,6 +924,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashOk = 'Reranker-Einstellungen gespeichert.';
             }
 
+        // ── Save vector store settings ────────────────────────────────────────
+        } elseif ($action === 'save_vector_store_settings') {
+            $newMode = (string) ($_POST['vector_store_mode'] ?? 'off');
+            if (!in_array($newMode, ['off', 'remote', 'local'], true)) {
+                $newMode = 'off';
+            }
+            $newTopK      = max(1, min(50, (int) ($_POST['vector_top_k'] ?? 5)));
+            $newMinScore  = max(0.0, min(1.0, (float) str_replace(',', '.', (string) ($_POST['vector_min_score'] ?? '0'))));
+            $newDocvecUrl = rtrim(trim((string) ($_POST['docvec_api_url'] ?? '')), '/');
+            $newDocvecUser = trim((string) ($_POST['docvec_api_username'] ?? ''));
+            $newDocvecPass = (string) ($_POST['docvec_api_password'] ?? '');
+            $newDocvecTimeout = max(3, min(300, (int) ($_POST['docvec_api_timeout'] ?? 20)));
+            $newDocvecVerify  = isset($_POST['docvec_api_verify_tls']) ? '1' : '0';
+            $newMilvusUrl     = rtrim(trim((string) ($_POST['milvus_url'] ?? '')), '/');
+            $newMilvusMetrics = rtrim(trim((string) ($_POST['milvus_metrics_url'] ?? '')), '/');
+            $newMilvusToken   = trim((string) ($_POST['milvus_token'] ?? ''));
+            $newMilvusTimeout = max(3, min(600, (int) ($_POST['milvus_timeout'] ?? 30)));
+            $newMilvusCollection = trim((string) ($_POST['milvus_collection'] ?? ''));
+
+            $urlInvalid = static fn(string $u): bool => $u !== '' && filter_var($u, FILTER_VALIDATE_URL) === false;
+            if ($urlInvalid($newDocvecUrl) || $urlInvalid($newMilvusUrl) || $urlInvalid($newMilvusMetrics)) {
+                $flashError = 'Bitte gültige URLs eingeben (http:// oder https://).';
+            } elseif ($newMode === 'remote' && $newDocvecUrl === '') {
+                $flashError = 'Für den API-Modus wird die URL der docvecwizard-Instanz benötigt.';
+            } elseif ($newMilvusCollection !== '' && !preg_match('/^[A-Za-z_][A-Za-z0-9_]{0,254}$/', $newMilvusCollection)) {
+                $flashError = 'Ungültiger Collection-Name (erlaubt: Buchstaben, Ziffern, Unterstrich).';
+            } else {
+                setSetting('vector_store_mode',    $newMode);
+                setSetting('vector_top_k',         (string) $newTopK);
+                setSetting('vector_min_score',     number_format($newMinScore, 2, '.', ''));
+                setSetting('docvec_api_url',       $newDocvecUrl);
+                setSetting('docvec_api_username',  $newDocvecUser);
+                if ($newDocvecPass !== '') {
+                    setSetting('docvec_api_password', $newDocvecPass);
+                    $docvecApiPassword = $newDocvecPass;
+                }
+                setSetting('docvec_api_timeout',    (string) $newDocvecTimeout);
+                setSetting('docvec_api_verify_tls', $newDocvecVerify);
+                setSetting('milvus_url',            $newMilvusUrl);
+                setSetting('milvus_metrics_url',    $newMilvusMetrics);
+                setSetting('milvus_token',          $newMilvusToken);
+                setSetting('milvus_timeout',        (string) $newMilvusTimeout);
+                setSetting('milvus_collection',     $newMilvusCollection);
+                setSetting('vector_store_status_cache', '');
+
+                $vectorStoreMode      = $newMode;
+                $vectorTopK           = $newTopK;
+                $vectorMinScore       = number_format($newMinScore, 2, '.', '');
+                $docvecApiUrl         = $newDocvecUrl;
+                $docvecApiUsername    = $newDocvecUser;
+                $docvecApiTimeout     = $newDocvecTimeout;
+                $docvecApiVerifyTls   = $newDocvecVerify === '1';
+                $milvusUrlSetting     = $newMilvusUrl;
+                $milvusMetricsSetting = $newMilvusMetrics;
+                $milvusToken          = $newMilvusToken;
+                $milvusTimeout        = $newMilvusTimeout;
+                $milvusCollection     = $newMilvusCollection;
+
+                $flashOk = 'Vektordatenbank-Einstellungen gespeichert (Modus: ' . vectorStoreLabel($newMode === 'off' ? '' : $newMode) . ($newMode === 'off' ? ' deaktiviert' : '') . ').';
+            }
+
+        // ── Reset local vector store (drop imported data) ─────────────────────
+        } elseif ($action === 'vector_store_reset_local') {
+            $dropped = [];
+            try {
+                $collections = $db->query('SELECT DISTINCT collection_name FROM vector_documents WHERE collection_name <> ""')->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($collections as $col) {
+                    if (milvusHasCollection((string) $col)) {
+                        $res = milvusDropCollection((string) $col);
+                        if ($res['ok']) {
+                            $dropped[] = (string) $col;
+                        }
+                    }
+                }
+                $db->exec('DELETE FROM vector_chunks');
+                $db->exec('DELETE FROM vector_documents');
+                setSetting('milvus_collection', '');
+                setSetting('vector_store_status_cache', '');
+                $milvusCollection = '';
+                writeLog('warning', 'Lokaler Vektorspeicher zurückgesetzt' . ($dropped !== [] ? ' (Collections: ' . implode(', ', $dropped) . ')' : '') . '.');
+                $flashOk = 'Lokaler Vektorspeicher geleert' . ($dropped !== [] ? ' – Milvus-Collections entfernt: ' . implode(', ', $dropped) : '') . '.';
+            } catch (Throwable $e) {
+                $flashError = 'Zurücksetzen fehlgeschlagen: ' . $e->getMessage();
+            }
+
         // ── Change password ───────────────────────────────────────────────────
         } elseif ($action === 'change_password') {
             $oldPass  = $_POST['old_password']         ?? '';
@@ -1154,6 +1255,22 @@ if ($searxngBaseUrl !== '') {
     } catch (PDOException $e) {
         // search_logs table may not exist on older installations
     }
+}
+
+// ── Vector store status & statistics ─────────────────────────────────────────
+// Status probing is cached for 20 s inside vectorStoreStatus(); the dashboard
+// polls admin/load_stats.php for live updates.
+$vectorStatus = array_merge(vectorStoreStatus(), vectorQueryStats());
+$vectorImports = [];
+$vectorLocalDocs = ['documents' => 0, 'chunks' => 0, 'models' => []];
+try {
+    $vectorImports = $db->query('SELECT id, filename, status, strategy, documents, chunks, vectors, skipped, message, created_at, finished_at FROM vector_imports ORDER BY id DESC LIMIT 8')->fetchAll();
+    $vRow = $db->query('SELECT COUNT(*) AS documents, COALESCE(SUM(chunk_count),0) AS chunks FROM vector_documents')->fetch();
+    $vectorLocalDocs['documents'] = (int) ($vRow['documents'] ?? 0);
+    $vectorLocalDocs['chunks']    = (int) ($vRow['chunks'] ?? 0);
+    $vectorLocalDocs['models']    = $db->query('SELECT embedding_model, embedding_dimension, collection_name, COUNT(*) AS n FROM vector_documents GROUP BY embedding_model, embedding_dimension, collection_name ORDER BY n DESC')->fetchAll();
+} catch (PDOException $e) {
+    // Tables may not exist yet
 }
 
 // ── SD endpoints and statistics ───────────────────────────────────────────────
@@ -1594,13 +1711,43 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         #config-sd-card { order: 9; }
         #config-comfy-card { order: 10; }
         #config-routing-card { order: 11; }
-        #config-embedding-card { order: 12; }
-        #config-hybrid-search-card { order: 13; }
-        #config-reranker-card { order: 14; }
-        #embedding-stats-card { order: 15; }
-        #config-system-messages-card { order: 16; }
-        #log-config-card { order: 17; }
-        #log-viewer-card { order: 18; }
+        #config-vector-store-card { order: 12; }
+        #config-embedding-card { order: 13; }
+        #config-hybrid-search-card { order: 14; }
+        #config-reranker-card { order: 15; }
+        #embedding-stats-card { order: 16; }
+        #config-system-messages-card { order: 17; }
+        #log-config-card { order: 18; }
+        #log-viewer-card { order: 19; }
+
+        /* ── Vektordatenbank ─────────────────────────────────────── */
+        .vector-mode-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        .vector-mode-option {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 400;
+        }
+        .vector-mode-option.active { border-color: var(--accent); background: rgba(16,185,129,.08); }
+        .vector-mode-option input { margin-top: 3px; accent-color: var(--accent); }
+        .vector-mode-option span { display: flex; flex-direction: column; gap: 2px; }
+        .vector-mode-option small { color: var(--text-muted); font-size: .76rem; }
+        .vector-mode-fields {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px 4px;
+            margin: 8px 0 16px;
+        }
+        .vector-mode-fields legend { padding: 0 6px; font-weight: 600; font-size: .9rem; }
+        .vector-mode-fields[hidden] { display: none; }
 
         /* ── Nutzungsstatistik ───────────────────────────────────── */
         .usage-range {
@@ -2117,6 +2264,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <a href="#config-decision-card">🗂️ Entscheidungsfindung</a>
 
     <span class="sidebar-label">Hybrid-RAG</span>
+    <a href="#config-vector-store-card">🧠 Wissensdatenbank</a>
     <a href="#config-embedding-card">🧬 Embedding-Endpunkte</a>
     <a href="#config-hybrid-search-card">🔀 Hybrid-Suche</a>
     <a href="#config-reranker-card">🏆 Reranker</a>
@@ -2209,6 +2357,20 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             <div class="stat-box">
                 <div class="stat-val stat-done" id="db-srxng-today"><?= number_format($searxngStats['today_jobs']) ?></div>
                 <div class="stat-lbl">Suchen heute</div>
+            </div>
+            <?php endif; ?>
+            <?php if ($vectorStoreMode !== 'off'): ?>
+            <div class="stat-box">
+                <div class="stat-val <?= !empty($vectorStatus['online']) ? 'stat-done' : 'stat-error' ?>" id="db-vec-status"><?= !empty($vectorStatus['online']) ? 'online' : 'offline' ?></div>
+                <div class="stat-lbl"><?= htmlspecialchars($vectorStatus['label']) ?></div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-done" id="db-vec-today"><?= number_format((int) $vectorStatus['today_queries']) ?></div>
+                <div class="stat-lbl">RAG-Abfragen heute</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val stat-tokens" id="db-vec-vectors"><?= $vectorStatus['vectors'] !== null ? number_format((int) $vectorStatus['vectors']) : '–' ?></div>
+                <div class="stat-lbl">Vektoren</div>
             </div>
             <?php endif; ?>
             <?php if (!empty($sdEndpoints)): ?>
@@ -3951,6 +4113,217 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
+         Vektordatenbank (docvecwizard / Milvus)
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-vector-store-card">
+        <details class="config-panel" open>
+            <summary>🧠 Wissensdatenbank (Vektordatenbank)</summary>
+
+            <p class="hint" style="margin-bottom:16px">
+                Gemeinsames Wissen für alle Nutzer kommt ausschließlich aus einer Milvus-Vektordatenbank, die von
+                <a href="https://github.com/dareinelt/docvecwizard" target="_blank" rel="noopener">docvecwizard</a> befüllt wird.
+                Nutzer-Uploads bleiben privat. Bei jeder Chat-Anfrage werden passende Abschnitte aus der aktiven
+                Vektordatenbank abgerufen und dem Modell als Kontext mitgegeben.
+            </p>
+
+            <form method="POST" id="vector-store-form">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action" value="save_vector_store_settings">
+
+                <div class="form-group">
+                    <label style="font-weight:600">Modus</label>
+                    <div class="vector-mode-grid">
+                        <label class="vector-mode-option<?= $vectorStoreMode === 'off' ? ' active' : '' ?>">
+                            <input type="radio" name="vector_store_mode" value="off" <?= $vectorStoreMode === 'off' ? 'checked' : '' ?>>
+                            <span><strong>Aus</strong><small>Keine zentrale Wissensdatenbank</small></span>
+                        </label>
+                        <label class="vector-mode-option<?= $vectorStoreMode === 'remote' ? ' active' : '' ?>">
+                            <input type="radio" name="vector_store_mode" value="remote" <?= $vectorStoreMode === 'remote' ? 'checked' : '' ?>>
+                            <span><strong>docvecwizard-API</strong><small>Entfernte Instanz über REST abfragen (deren Milvus)</small></span>
+                        </label>
+                        <label class="vector-mode-option<?= $vectorStoreMode === 'local' ? ' active' : '' ?>">
+                            <input type="radio" name="vector_store_mode" value="local" <?= $vectorStoreMode === 'local' ? 'checked' : '' ?>>
+                            <span><strong>Eigenes Milvus</strong><small>docvecwizard-Export in die lokale Milvus-Instanz importieren</small></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                    <div class="form-group">
+                        <label for="vector-top-k">Treffer pro Anfrage (Top-K)</label>
+                        <input type="number" id="vector-top-k" name="vector_top_k" min="1" max="50" value="<?= (int) $vectorTopK ?>">
+                    </div>
+                    <div class="form-group">
+                        <label for="vector-min-score">Mindest-Ähnlichkeit (0–1, 0 = aus)</label>
+                        <input type="number" id="vector-min-score" name="vector_min_score" step="0.05" min="0" max="1" value="<?= htmlspecialchars($vectorMinScore) ?>">
+                    </div>
+                </div>
+
+                <!-- ── Remote: docvecwizard API ── -->
+                <fieldset class="vector-mode-fields" data-mode="remote" <?= $vectorStoreMode === 'remote' ? '' : 'hidden' ?>>
+                    <legend>🌐 docvecwizard-API</legend>
+                    <div class="form-group">
+                        <label for="docvec-api-url">Basis-URL</label>
+                        <input type="url" id="docvec-api-url" name="docvec_api_url" placeholder="https://docvec.example.org:8443"
+                               value="<?= htmlspecialchars($docvecApiUrl) ?>">
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                        <div class="form-group">
+                            <label for="docvec-api-username">Benutzername</label>
+                            <input type="text" id="docvec-api-username" name="docvec_api_username" autocomplete="off"
+                                   value="<?= htmlspecialchars($docvecApiUsername) ?>">
+                        </div>
+                        <div class="form-group">
+                            <label for="docvec-api-password">Passwort <?php if ($docvecApiPassword !== ''): ?><small style="color:var(--text-muted)">(gespeichert – leer lassen zum Beibehalten)</small><?php endif; ?></label>
+                            <input type="password" id="docvec-api-password" name="docvec_api_password" autocomplete="new-password" placeholder="<?= $docvecApiPassword !== '' ? '••••••••' : '' ?>">
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:end">
+                        <div class="form-group">
+                            <label for="docvec-api-timeout">Timeout (Sekunden)</label>
+                            <input type="number" id="docvec-api-timeout" name="docvec_api_timeout" min="3" max="300" value="<?= (int) $docvecApiTimeout ?>">
+                        </div>
+                        <div class="form-group" style="flex-direction:row;align-items:center;gap:10px">
+                            <input type="checkbox" id="docvec-api-verify-tls" name="docvec_api_verify_tls" <?= $docvecApiVerifyTls ? 'checked' : '' ?>>
+                            <label for="docvec-api-verify-tls" style="margin:0">TLS-Zertifikat prüfen <small style="color:var(--text-muted)">(aus bei selbstsignierten Zertifikaten)</small></label>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                        <button type="button" class="btn btn-secondary" id="vector-test-remote-btn">🔌 Verbindung testen</button>
+                        <span id="vector-test-remote-result" style="font-size:.85rem"></span>
+                    </div>
+                </fieldset>
+
+                <!-- ── Local: own Milvus ── -->
+                <fieldset class="vector-mode-fields" data-mode="local" <?= $vectorStoreMode === 'local' ? '' : 'hidden' ?>>
+                    <legend>🗄️ Eigene Milvus-Instanz</legend>
+                    <p class="hint">Der Dienst <code>milvus</code> aus <code>docker-compose.yml</code> ist unter <code><?= htmlspecialchars(milvusBaseUrl()) ?></code> erreichbar. Felder leer lassen, um die Compose-Standardwerte zu verwenden.</p>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                        <div class="form-group">
+                            <label for="milvus-url">Milvus-URL (REST)</label>
+                            <input type="url" id="milvus-url" name="milvus_url" placeholder="http://milvus:19530"
+                                   value="<?= htmlspecialchars($milvusUrlSetting) ?>">
+                        </div>
+                        <div class="form-group">
+                            <label for="milvus-metrics-url">Health-URL</label>
+                            <input type="url" id="milvus-metrics-url" name="milvus_metrics_url" placeholder="http://milvus:9091"
+                                   value="<?= htmlspecialchars($milvusMetricsSetting) ?>">
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+                        <div class="form-group">
+                            <label for="milvus-token">Token <small style="color:var(--text-muted)">(optional, user:pass)</small></label>
+                            <input type="text" id="milvus-token" name="milvus_token" autocomplete="off" value="<?= htmlspecialchars($milvusToken) ?>">
+                        </div>
+                        <div class="form-group">
+                            <label for="milvus-timeout">Timeout (Sekunden)</label>
+                            <input type="number" id="milvus-timeout" name="milvus_timeout" min="3" max="600" value="<?= (int) $milvusTimeout ?>">
+                        </div>
+                        <div class="form-group">
+                            <label for="milvus-collection">Collection <small style="color:var(--text-muted)">(leer = automatisch)</small></label>
+                            <input type="text" id="milvus-collection" name="milvus_collection" placeholder="docvec_<?= htmlspecialchars($vectorLocalDocs['models'][0]['collection_name'] ?? 'modell') ?>"
+                                   value="<?= htmlspecialchars($milvusCollection) ?>">
+                        </div>
+                    </div>
+                    <p class="hint">
+                        ⚠️ Für die Anfrage-Vektorisierung muss der Embedding-Endpunkt von LLMInt dasselbe Modell liefern,
+                        mit dem der Export in docvecwizard erzeugt wurde
+                        <?php if (!empty($vectorLocalDocs['models'])): ?>
+                            (importiert: <?= htmlspecialchars(implode(', ', array_map(static fn(array $m): string => $m['embedding_model'] . ' / ' . $m['embedding_dimension'] . ' Dim.', $vectorLocalDocs['models']))) ?>).
+                        <?php else: ?>
+                            .
+                        <?php endif; ?>
+                    </p>
+                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                        <button type="button" class="btn btn-secondary" id="vector-test-local-btn">🔌 Verbindung testen</button>
+                        <span id="vector-test-local-result" style="font-size:.85rem"></span>
+                    </div>
+                </fieldset>
+
+                <button type="submit" class="btn" style="margin-top:12px">💾 Speichern</button>
+            </form>
+
+            <!-- ── Import of docvecwizard exports (local mode) ── -->
+            <div id="vector-import-section" <?= $vectorStoreMode === 'local' ? '' : 'hidden' ?>>
+                <hr style="border-color:var(--border);margin:24px 0">
+                <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">📦 docvecwizard-Export importieren</h3>
+                <p class="hint">
+                    Exportarchiv (<code>.tar.gz</code>, Format 1.x) aus docvecwizard hochladen. Chunk-Texte landen in MySQL,
+                    die Vektoren unverändert in der lokalen Milvus-Collection. Große Exporte können alternativ in den
+                    Ordner <code>vector_imports/</code> des Web-Containers gelegt und unten ausgewählt werden.
+                </p>
+                <form id="vector-import-form" style="margin-top:12px">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                        <div class="form-group">
+                            <label for="vector-import-file">Archiv hochladen</label>
+                            <input type="file" id="vector-import-file" accept=".gz,.tgz,application/gzip,application/x-gzip">
+                        </div>
+                        <div class="form-group">
+                            <label for="vector-import-server-file">… oder Datei aus <code>vector_imports/</code></label>
+                            <select id="vector-import-server-file">
+                                <option value="">– keine –</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group" style="flex-direction:row;align-items:center;gap:16px;flex-wrap:wrap">
+                        <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="radio" name="vector_import_strategy" value="skip" checked> Vorhandene Dokumente überspringen</label>
+                        <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="radio" name="vector_import_strategy" value="overwrite"> Vorhandene Dokumente überschreiben</label>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                        <button type="submit" class="btn" id="vector-import-btn">📥 Importieren</button>
+                        <span id="vector-import-result" style="font-size:.85rem"></span>
+                    </div>
+                    <div id="vector-import-progress" style="display:none;margin-top:10px;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+                        <div id="vector-import-progress-fill" style="height:100%;width:0;background:var(--accent);transition:width .2s"></div>
+                    </div>
+                </form>
+
+                <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px">
+                    <div class="stat-box">
+                        <div class="stat-val stat-done"><?= number_format($vectorLocalDocs['documents']) ?></div>
+                        <div class="stat-lbl">Dokumente (lokal)</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val stat-tokens"><?= number_format($vectorLocalDocs['chunks']) ?></div>
+                        <div class="stat-lbl">Chunks (lokal)</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val stat-tokens"><?= $vectorStatus['mode'] === 'local' && $vectorStatus['vectors'] !== null ? number_format((int) $vectorStatus['vectors']) : '–' ?></div>
+                        <div class="stat-lbl">Vektoren in Milvus</div>
+                    </div>
+                </div>
+
+                <?php if (!empty($vectorImports)): ?>
+                <table style="margin-top:16px">
+                    <thead><tr><th>#</th><th>Archiv</th><th>Status</th><th>Dok.</th><th>Chunks</th><th>Vektoren</th><th>Übersprungen</th><th>Zeitpunkt</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($vectorImports as $imp): ?>
+                        <tr title="<?= htmlspecialchars((string) ($imp['message'] ?? '')) ?>">
+                            <td><?= (int) $imp['id'] ?></td>
+                            <td><?= htmlspecialchars((string) $imp['filename']) ?></td>
+                            <td><?= $imp['status'] === 'done' ? '✅' : ($imp['status'] === 'error' ? '❌' : '⏳') ?> <?= htmlspecialchars((string) $imp['status']) ?></td>
+                            <td><?= (int) $imp['documents'] ?></td>
+                            <td><?= number_format((int) $imp['chunks']) ?></td>
+                            <td><?= number_format((int) $imp['vectors']) ?></td>
+                            <td><?= (int) $imp['skipped'] ?></td>
+                            <td><?= htmlspecialchars((string) $imp['created_at']) ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php endif; ?>
+
+                <form method="POST" style="margin-top:16px"
+                      onsubmit="return confirm('Alle importierten Dokumente, Chunks und Milvus-Collections des lokalen Vektorspeichers löschen?');">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                    <input type="hidden" name="action" value="vector_store_reset_local">
+                    <button type="submit" class="btn btn-danger">🗑 Lokalen Vektorspeicher leeren</button>
+                </form>
+            </div>
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
          Hybrid-Suche Einstellungen
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-hybrid-search-card">
@@ -5007,6 +5380,175 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     });
 })();
 
+// ── Vector store (docvecwizard / Milvus) card ────────────────────────────────
+(function () {
+    'use strict';
+
+    const form = document.getElementById('vector-store-form');
+    if (!form) { return; }
+
+    const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+    const modeRadios   = form.querySelectorAll('input[name="vector_store_mode"]');
+    const modeFields   = form.querySelectorAll('.vector-mode-fields');
+    const importSect   = document.getElementById('vector-import-section');
+
+    function syncMode() {
+        let mode = 'off';
+        modeRadios.forEach(function (r) { if (r.checked) { mode = r.value; } });
+        modeRadios.forEach(function (r) {
+            r.closest('.vector-mode-option').classList.toggle('active', r.checked);
+        });
+        modeFields.forEach(function (fs) { fs.hidden = fs.getAttribute('data-mode') !== mode; });
+        if (importSect) { importSect.hidden = mode !== 'local'; }
+    }
+    modeRadios.forEach(function (r) { r.addEventListener('change', syncMode); });
+    syncMode();
+
+    function val(id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; }
+
+    function bindTest(btnId, resultId, mode, collect) {
+        const btn = document.getElementById(btnId);
+        const out = document.getElementById(resultId);
+        if (!btn || !out) { return; }
+        btn.addEventListener('click', async function () {
+            btn.disabled = true;
+            btn.textContent = '⟳ Teste …';
+            out.textContent = '';
+            try {
+                const body = collect();
+                body.mode = mode;
+                const res  = await fetch('../api/test_vector_store.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await res.json();
+                out.style.color = data.ok ? 'var(--success)' : 'var(--error)';
+                out.textContent = (data.ok ? '✓ ' : '✗ ') + (data.message || '');
+            } catch (e) {
+                out.style.color = 'var(--error)';
+                out.textContent = '✗ Netzwerkfehler: ' + e.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔌 Verbindung testen';
+            }
+        });
+    }
+
+    bindTest('vector-test-remote-btn', 'vector-test-remote-result', 'remote', function () {
+        const tls = document.getElementById('docvec-api-verify-tls');
+        return {
+            docvec_api_url:        val('docvec-api-url'),
+            docvec_api_username:   val('docvec-api-username'),
+            docvec_api_password:   (document.getElementById('docvec-api-password') || {}).value || '',
+            docvec_api_timeout:    val('docvec-api-timeout'),
+            docvec_api_verify_tls: (tls && tls.checked) ? '1' : '0',
+        };
+    });
+    bindTest('vector-test-local-btn', 'vector-test-local-result', 'local', function () {
+        return {
+            milvus_url:         val('milvus-url'),
+            milvus_metrics_url: val('milvus-metrics-url'),
+            milvus_token:       val('milvus-token'),
+            milvus_timeout:     val('milvus-timeout'),
+            milvus_collection:  val('milvus-collection'),
+        };
+    });
+
+    // ── Import ────────────────────────────────────────────────────────────
+    const importForm   = document.getElementById('vector-import-form');
+    const fileInput    = document.getElementById('vector-import-file');
+    const serverSelect = document.getElementById('vector-import-server-file');
+    const importBtn    = document.getElementById('vector-import-btn');
+    const importOut    = document.getElementById('vector-import-result');
+    const progress     = document.getElementById('vector-import-progress');
+    const progressFill = document.getElementById('vector-import-progress-fill');
+    if (!importForm) { return; }
+
+    function formatBytes(b) {
+        b = parseInt(b, 10) || 0;
+        if (b < 1024 * 1024) { return Math.round(b / 1024) + ' KB'; }
+        if (b < 1024 * 1024 * 1024) { return (b / 1024 / 1024).toFixed(1) + ' MB'; }
+        return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    }
+
+    async function loadServerFiles() {
+        if (!serverSelect) { return; }
+        try {
+            const res  = await fetch('../api/vector_import.php');
+            const data = await res.json();
+            const files = (data && data.ok && Array.isArray(data.files)) ? data.files : [];
+            serverSelect.innerHTML = '<option value="">– keine –</option>' + files.map(function (f) {
+                const name = String(f.name).replace(/[<>&"]/g, function (c) {
+                    return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c];
+                });
+                return '<option value="' + name + '">' + name + ' (' + formatBytes(f.size) + ')</option>';
+            }).join('');
+        } catch (_) { /* leave the default option */ }
+    }
+    loadServerFiles();
+
+    function resetImportUi() {
+        importBtn.disabled = false;
+        importBtn.textContent = '📥 Importieren';
+        if (progress) { progress.style.display = 'none'; }
+    }
+
+    importForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        const file       = fileInput && fileInput.files && fileInput.files[0];
+        const serverFile = serverSelect ? serverSelect.value : '';
+        if (!file && !serverFile) {
+            importOut.style.color = 'var(--error)';
+            importOut.textContent = '✗ Bitte ein Archiv auswählen.';
+            return;
+        }
+        const strategyEl = importForm.querySelector('input[name="vector_import_strategy"]:checked');
+
+        const fd = new FormData();
+        fd.append('csrf_token', CSRF);
+        fd.append('strategy', strategyEl ? strategyEl.value : 'skip');
+        if (file) { fd.append('archive', file, file.name); } else { fd.append('server_file', serverFile); }
+
+        importBtn.disabled = true;
+        importBtn.textContent = '⟳ Importiere …';
+        importOut.style.color = 'var(--text-muted)';
+        importOut.textContent = file ? 'Archiv wird hochgeladen …' : 'Archiv wird verarbeitet …';
+        if (progress) { progress.style.display = 'block'; progressFill.style.width = '0%'; }
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '../api/vector_import.php');
+        xhr.upload.addEventListener('progress', function (ev) {
+            if (!ev.lengthComputable || !progressFill) { return; }
+            const pct = Math.round(ev.loaded / ev.total * 100);
+            progressFill.style.width = pct + '%';
+            if (pct >= 100) { importOut.textContent = 'Archiv wird verarbeitet (Prüfsummen, MySQL, Milvus) – bitte warten …'; }
+        });
+        xhr.addEventListener('load', function () {
+            let data = null;
+            try { data = JSON.parse(xhr.responseText); } catch (_) { data = null; }
+            if (data && data.ok) {
+                importOut.style.color = 'var(--success)';
+                importOut.textContent = '✓ ' + data.message;
+                window.setTimeout(function () {
+                    window.location.hash = '#config-vector-store-card';
+                    window.location.reload();
+                }, 1500);
+            } else {
+                importOut.style.color = 'var(--error)';
+                importOut.textContent = '✗ ' + ((data && data.message) || ('Import fehlgeschlagen (HTTP ' + xhr.status + ').'));
+                resetImportUi();
+            }
+        });
+        xhr.addEventListener('error', function () {
+            importOut.style.color = 'var(--error)';
+            importOut.textContent = '✗ Netzwerkfehler beim Import.';
+            resetImportUi();
+        });
+        xhr.send(fd);
+    });
+})();
+
 // ── ComfyUI endpoint form ─────────────────────────────────────────────────────
 (function () {
     'use strict';
@@ -5176,6 +5718,8 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         'today_jobs'           => $searxngStats['today_jobs'],
         'avg_duration_seconds' => $searxngStats['avg_duration_seconds'],
     ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    const INITIAL_VECTOR = <?= json_encode($vectorStatus, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
     const INITIAL_SD = <?= json_encode(
         array_map(function ($s) {
@@ -5508,14 +6052,15 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     // ── Tree renderer ─────────────────────────────────────────────────────────
 
-    function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints, clients) {
+    function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints, clients, vectorStore) {
         svg.innerHTML = '';
 
         const hasSearxng  = searxng && searxng.enabled;
+        const hasVector   = vectorStore && vectorStore.enabled;
         const hasSd       = Array.isArray(sdEndpoints) && sdEndpoints.length > 0;
         const hasComfy    = Array.isArray(comfyEndpoints) && comfyEndpoints.length > 0;
 
-        if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasSd && !hasComfy) {
+        if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasVector && !hasSd && !hasComfy) {
             treeW = 400; treeH = 60; treeX = 0; treeY = 0;
             svg.setAttribute('viewBox', `0 0 ${treeW} ${treeH}`);
             txt(svg, 'Keine Endpunkte konfiguriert.', {
@@ -5544,6 +6089,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         addLinearGradient('grad-mod',   0, 1, '#333342', '#28283a');
         addLinearGradient('grad-cli',   0, 1, '#1c2b1c', '#182418');
         addLinearGradient('grad-srxng', 0, 1, '#1a2f38', '#142028');
+        addLinearGradient('grad-vec',   0, 1, '#14312a', '#0f221d');
         addLinearGradient('grad-sd',    0, 1, '#2b200f', '#201808');
         addLinearGradient('grad-comfy', 0, 1, '#221430', '#180e22');
         svg.appendChild(defs);
@@ -5574,6 +6120,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const H_GAP  = 60;
         const V_GAP  = 14;
         const SRXNG_W = EP_W, SRXNG_H = 110;
+        const VEC_W   = EP_W, VEC_H   = 130;
         const SD_W    = EP_W, SD_H    = 90;
         const COMFY_W = EP_W, COMFY_H = 90;
 
@@ -5596,6 +6143,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const SRXNG_V_GAP = 20;
         let TOTAL_H = LLM_H;
         if (hasSearxng) { TOTAL_H += SRXNG_V_GAP + SRXNG_H; }
+        if (hasVector)  { TOTAL_H += SRXNG_V_GAP + VEC_H; }
         if (hasSd)      { TOTAL_H += SRXNG_V_GAP + sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP; }
         if (hasComfy)   { TOTAL_H += SRXNG_V_GAP + comfyEndpoints.length * COMFY_H + (comfyEndpoints.length - 1) * V_GAP; }
         TOTAL_H += PAD;
@@ -5623,6 +6171,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         let afterLlmY = LLM_H;
         const searxngCY = afterLlmY + SRXNG_V_GAP + SRXNG_H / 2;
         if (hasSearxng) { afterLlmY += SRXNG_V_GAP + SRXNG_H; }
+
+        const vectorCY = afterLlmY + SRXNG_V_GAP + VEC_H / 2;
+        if (hasVector) { afterLlmY += SRXNG_V_GAP + VEC_H; }
 
         const sdStartY = afterLlmY + SRXNG_V_GAP;
         const sdCY = {};
@@ -5764,6 +6315,17 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${searxngCY} ${COL3_X},${searxngCY}`,
                 'rgba(6,182,212,0.35)',
                 searxng.running > 0
+            ));
+        }
+
+        // Root → Vector store (docvecwizard API / local Milvus)
+        if (hasVector) {
+            const rX   = COL1_X + ROOT_W;
+            const ctrl = (COL3_X - rX) * 0.55;
+            svg.appendChild(connPath(
+                `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${vectorCY} ${COL3_X},${vectorCY}`,
+                vectorStore.online ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)',
+                false
             ));
         }
 
@@ -6121,6 +6683,50 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             svg.appendChild(g);
         }
 
+        // ── Vector store tile ─────────────────────────────────────────────────
+        if (hasVector) {
+            const VEC_COLOR = '#10b981';
+            const online    = !!vectorStore.online;
+            const g = mk('g', { transform: `translate(${COL3_X},${vectorCY - VEC_H / 2})` });
+
+            g.appendChild(mk('rect', {
+                x: 0, y: 0, width: VEC_W, height: VEC_H,
+                rx: 10, fill: 'url(#grad-vec)',
+                stroke: online ? VEC_COLOR + '66' : 'rgba(239,68,68,0.4)', 'stroke-width': 1.5,
+            }));
+
+            if (online && (vectorStore.today_queries || 0) > 0) {
+                g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: VEC_COLOR }));
+            }
+            g.appendChild(mk('circle', { cx: 14, cy: 18, r: 4, fill: online ? VEC_COLOR : '#ef4444' }));
+
+            const vecTitle = vectorStore.mode === 'remote' ? '🧠 docvecwizard-API' : '🧠 Milvus (lokal)';
+            txt(g, vecTitle, {
+                x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
+            });
+            g.appendChild(mk('line', { x1: 10, y1: 32, x2: VEC_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
+
+            const urlLabel = vectorStore.base_url ? truncate(shortUrl(vectorStore.base_url), 30) : '–';
+            txt(g, urlLabel, { x: 12, y: 50, fill: '#cbd5e1', 'font-size': 10, 'font-family': 'monospace, sans-serif' });
+
+            txt(g, online ? '●  Online' : '●  Offline', {
+                x: 12, y: 70, fill: online ? '#22c55e' : '#ef4444', 'font-size': 11, 'font-family': 'sans-serif',
+            });
+            const docs = vectorStore.documents, vecs = vectorStore.vectors;
+            const invLabel = (docs === null || docs === undefined) && (vecs === null || vecs === undefined)
+                ? '📚  Bestand: –'
+                : `📚  ${formatNum(docs || 0)} Dok. · ${formatNum(vecs || 0)} Vektoren`;
+            txt(g, invLabel, { x: 12, y: 90, fill: '#94a3b8', 'font-size': 11, 'font-family': 'sans-serif' });
+
+            const avgMs = vectorStore.avg_duration_ms;
+            const avgLabel = (avgMs !== null && avgMs !== undefined) ? `${Math.round(avgMs)} ms` : '–';
+            txt(g, `🔍  Abfragen heute: ${formatNum(vectorStore.today_queries || 0)} · Ø ${avgLabel}`, {
+                x: 12, y: 110, fill: '#94a3b8', 'font-size': 11, 'font-family': 'sans-serif',
+            });
+
+            svg.appendChild(g);
+        }
+
         // ── SD endpoint tiles ─────────────────────────────────────────────────
         if (hasSd) {
             const SD_COLOR = '#f97316';
@@ -6229,6 +6835,25 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         setStatBox('db-comfy-running', comfyT.total_running      ?? 0);
         setStatBox('db-comfy-done24',  comfyT.total_done_24h     ?? 0);
         setStatBox('db-comfy-done',    comfyT.total_done         ?? 0);
+
+        const v = data.vector_store || null;
+        if (v && v.enabled) {
+            const statusEl = document.getElementById('db-vec-status');
+            if (statusEl) {
+                const label = v.online ? 'online' : 'offline';
+                if (statusEl.textContent !== label) {
+                    statusEl.textContent = label;
+                    statusEl.classList.toggle('stat-done', !!v.online);
+                    statusEl.classList.toggle('stat-error', !v.online);
+                }
+            }
+            setStatBox('db-vec-today', v.today_queries ?? 0);
+            const vecEl = document.getElementById('db-vec-vectors');
+            if (vecEl) {
+                if (v.vectors === null || v.vectors === undefined) { vecEl.textContent = '–'; }
+                else { setStatBox('db-vec-vectors', v.vectors); }
+            }
+        }
     }
 
     // ── Status bar ────────────────────────────────────────────────────────────
@@ -6254,7 +6879,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             clearTimeout(timer);
             const data = await res.json();
             if (data.ok && Array.isArray(data.endpoints)) {
-                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || [], data.clients || null);
+                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || [], data.clients || null, data.vector_store || null);
                 updateStatBoxes(data);
                 setStatus(tsLabel(data.ts), false);
             } else {
@@ -6267,7 +6892,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     }
 
     // Initial render using PHP-injected data
-    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD, INITIAL_COMFY, INITIAL_CLIENTS);
+    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD, INITIAL_COMFY, INITIAL_CLIENTS, INITIAL_VECTOR);
     setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
 
     // Refresh every 15 seconds
@@ -6882,7 +7507,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         'dashboard-card', 'usage-stats-card', 'config-smtp-card', 'config-ldap-card', 'config-searxng-card',
         'config-endpoints-card', 'config-request-handling-card', 'config-global-system-prompt-card',
         'config-sd-card', 'config-comfy-card', 'config-system-messages-card',
-        'config-embedding-card', 'config-hybrid-search-card', 'config-reranker-card', 'embedding-stats-card',
+        'config-vector-store-card', 'config-embedding-card', 'config-hybrid-search-card', 'config-reranker-card', 'embedding-stats-card',
         'log-config-card', 'log-viewer-card', 'users-card', 'password-card'
     ];
 

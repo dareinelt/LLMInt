@@ -9,12 +9,14 @@
  * Response shape:
  *   { ok: true, ts: <unix seconds>, endpoints: [ { id, alias, base_url,
  *     default_model, is_active, running, today_jobs, today_tokens }, … ],
- *     searxng: { enabled, running, today_jobs, avg_duration_seconds } }
+ *     searxng: { enabled, running, today_jobs, avg_duration_seconds },
+ *     vector_store: { enabled, mode, label, base_url, online, documents, vectors, today_queries, … } }
  */
 
 session_start();
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../api/vector_store.php';
 requireAdminOrJson403();
 
 // Release the session write lock – this endpoint only reads the session
@@ -304,10 +306,22 @@ try {
         }
     } catch (PDOException $e) { }
 
+    // ── Vector store (docvecwizard API / local Milvus) ────────────────────────
+
+    $vectorStore = ['enabled' => false, 'mode' => 'off', 'online' => false];
+    try {
+        // Status is cached for 20 s inside vectorStoreStatus(), so the 15 s
+        // dashboard poll does not hammer the remote API / Milvus.
+        $vectorStore = array_merge(vectorStoreStatus(), vectorQueryStats());
+    } catch (Throwable $e) {
+        $vectorStore['detail'] = $e->getMessage();
+    }
+
     echo json_encode(
         ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng,
          'sd_endpoints' => $sdRows, 'comfy_endpoints' => $comfyRows, 'clients' => $clientStats,
-         'totals' => $totals, 'sd_totals' => $sdTotals, 'comfy_totals' => $comfyTotals],
+         'totals' => $totals, 'sd_totals' => $sdTotals, 'comfy_totals' => $comfyTotals,
+         'vector_store' => $vectorStore],
         JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     );
 

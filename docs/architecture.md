@@ -146,8 +146,11 @@ migrieren.
 | `endpoint_sys_stats` | per SSH gelesene Systemmetriken je Endpunkt |
 | `sd_endpoints`, `sd_tasks` | AUTOMATIC1111-Endpunkte und deren Aufträge |
 | `comfy_endpoints`, `comfy_tasks` | ComfyUI-Endpunkte und deren Aufträge |
-| `document_uploads` | Upload-Metadaten, Verarbeitungs-/Embedding-Status, `is_global_rag` |
+| `document_uploads` | Upload-Metadaten, Verarbeitungs-/Embedding-Status (`is_global_rag` ist immer `0` – Uploads sind privat) |
 | `document_chunks` | Chunks mit optionalem Embedding (FK auf `document_uploads`, `ON DELETE CASCADE`) |
+| `vector_documents`, `vector_chunks` | aus docvecwizard-Exporten importierte Dokumente/Chunk-Texte (Modus `local`; Vektoren liegen in Milvus) |
+| `vector_imports` | Protokoll der Export-Importe (Manifest, Dokument-/Vektorzahlen, Strategie) |
+| `vector_query_logs` | jede Wissensdatenbank-Abfrage mit Modus, Trefferzahl, Dauer, Fehler |
 | `embedding_endpoints` | Embedding-Server (`base_url`, `model`, `timeout`) |
 | `embedding_cache` | zwischengespeicherte Query-Embeddings |
 | `embedding_logs` | Laufzeit-/Trefferstatistik der Embedding-Aufrufe |
@@ -349,6 +352,59 @@ Relevante Einstellungen: `embedding_enabled`, `embedding_model`, `embedding_time
 `vision_model`, `pdf_vision_enabled`, `pdf_vision_dpi`, `pdf_vision_max_pages`,
 `upload_max_mb`.
 
+### 8.1 Zentrale Wissensdatenbank (docvecwizard / Milvus)
+
+Nutzer-Uploads sind **immer privat** (`document_uploads.is_global_rag` ist fest `0`;
+alte globale Freigaben werden beim Setup zurückgesetzt). Teamweites Wissen stammt
+ausschließlich aus einer von docvecwizard befüllten Milvus-Vektordatenbank, die
+`api/vector_store.php` in einem von zwei Modi anbindet (`vector_store_mode`):
+
+```mermaid
+flowchart LR
+    subgraph Remote[Modus remote]
+        DVW[docvecwizard\nREST-API + eigenes Milvus]
+    end
+    subgraph Local[Modus local]
+        EXP[docvecwizard-Export\n.tar.gz] --> IMP[api/vector_import.php]
+        IMP --> MV[(Milvus-Container\ndocvec_<modell>)]
+        IMP --> MY[(MySQL\nvector_documents / vector_chunks)]
+    end
+    Q[Chat-Anfrage] --> VS[vectorStoreSearch\napi/vector_store.php]
+    VS -->|docvecSearch| DVW
+    VS -->|generateEmbeddingAuto + milvusSearch| MV
+    MV --> MY
+    VS --> CTX[buildVectorContextSystemPrompt\n+ Tool query_documents]
+    VS --> LOG[(vector_query_logs)]
+    ST[vectorStoreStatus\n20-s-Cache] --> DB[Admin-Dashboard-Kachel\nadmin/load_stats.php]
+```
+
+- **remote**: `docvecLogin()` meldet sich mit `docvec_api_username`/`docvec_api_password`
+  an (`POST /api/login`, Cookie `docvec_sid`, `X-CSRF-Token`), `docvecSearch()` ruft
+  `POST /api/search {query, limit}` auf. Embeddings erzeugt docvecwizard; LLMInt
+  braucht keinen eigenen Embedding-Endpunkt. Status über `GET /api/status`.
+- **local**: `api/vector_import.php` entpackt das Exportarchiv (PharData, Pfad- und
+  Größenprüfung), verifiziert `checksums/SHA256SUMS`, legt bei Bedarf die Collection
+  `docvec_<slug>` über die Milvus-REST-API v2 an (Schema identisch zu docvecwizard,
+  COSINE/AUTOINDEX), schreibt Vektoren in Batches nach Milvus und Chunk-Texte/Metadaten
+  transaktional nach MySQL (`vector_documents`, `vector_chunks`), protokolliert den Lauf
+  in `vector_imports`. Strategien `skip` (vorhandene Dokumentversionen überspringen)
+  oder `overwrite`. Bei der Suche wird die Anfrage mit `generateEmbeddingAuto()`
+  eingebettet (Modell muss zum Export passen) und `milvusSearch()` liefert IDs, deren
+  Texte aus `vector_chunks` nachgeladen werden.
+- **Chat-Integration** (`api/chat.php`): Ist ein Modus aktiv, wird bei *jeder* Anfrage
+  die letzte Nutzernachricht gegen die Vektordatenbank gesucht (`vector_top_k`,
+  `vector_min_score`); Treffer werden als Kontext-Systemnachricht vorangestellt und
+  zusätzlich vom Tool `query_documents` zurückgegeben (zusammen mit privaten Uploads).
+- **Dashboard**: `vectorStoreStatus()` (Cache 20 s in `vector_store_status_cache`) und
+  `vectorQueryStats()` fließen über `admin/load_stats.php` (`vector_store`) in die
+  Kachel der Lastverteilungs-Grafik (online/offline, Basis-URL, Dokumente/Vektoren,
+  Abfragen heute, Ø Antwortzeit).
+
+Relevante Einstellungen: `vector_store_mode`, `vector_top_k`, `vector_min_score`,
+`docvec_api_url`, `docvec_api_username`, `docvec_api_password`, `docvec_api_timeout`,
+`docvec_api_verify_tls`, `milvus_url`, `milvus_metrics_url`, `milvus_token`,
+`milvus_timeout`, `milvus_collection`.
+
 ---
 
 ## 9. Prompt-Security-Pipeline
@@ -411,8 +467,8 @@ u. v. m. (vollständige Liste in [`functions.md`](functions.md#adminindexphp)).
 
 Die Oberfläche ist in Karten mit stabilen IDs gegliedert (`dashboard-card`,
 `config-endpoints-card`, `config-balancer-card`, `config-routing-card`,
-`config-sd-card`, `config-comfy-card`, `config-embedding-card`,
-`config-hybrid-search-card`, `config-reranker-card`,
+`config-sd-card`, `config-comfy-card`, `config-vector-store-card`,
+`config-embedding-card`, `config-hybrid-search-card`, `config-reranker-card`,
 `config-global-system-prompt-card`, `config-smtp-card`, `config-ldap-card`,
 `log-viewer-card`, `users-card`, `password-card` u. a.).
 
@@ -436,6 +492,8 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/upload_document.php` | POST | Session + CSRF | Dokument-Upload (Office, Text, PDF, Bild) |
 | `api/document_delete.php` | POST | Session + CSRF | Upload inklusive Chunks entfernen |
 | `api/rebuild_embeddings.php` | POST | Admin + CSRF | Embeddings neu berechnen |
+| `api/vector_import.php` | GET/POST | Admin + CSRF | docvecwizard-Exportarchive auflisten bzw. in Milvus/MySQL importieren |
+| `api/test_vector_store.php` | POST | Admin | Verbindungstest docvecwizard-API (`mode=remote`) oder Milvus (`mode=local`) |
 | `api/sd_generate.php`, `api/comfy_generate.php` | POST | Session | Bildgenerierung |
 | `api/sd_checkpoints.php`, `api/comfy_checkpoints.php` | GET | – | verfügbare Checkpoints |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
@@ -444,9 +502,9 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | API-Key | OpenAI-kompatibel, ohne Tools |
 | `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | API-Key | OpenAI-kompatibel, mit Tools |
 
-`api/balancer.php`, `api/sd_balancer.php`, `api/comfy_balancer.php` und
-`api/embedding.php` sind reine Bibliotheken und werden eingebunden, nicht direkt
-aufgerufen.
+`api/balancer.php`, `api/sd_balancer.php`, `api/comfy_balancer.php`,
+`api/embedding.php` und `api/vector_store.php` sind reine Bibliotheken und werden
+eingebunden, nicht direkt aufgerufen.
 
 ---
 
@@ -461,14 +519,18 @@ aufgerufen.
   `beautifulsoup4`/`lxml`. Läuft als unprivilegierter Nutzer, kein veröffentlichter
   Port – nur im Compose-Netz erreichbar.
 - `docker-compose.yml`: Dienste `db` (MySQL 8.0 mit Healthcheck), `web` (Port
-  `HTTP_PORT`, Standard 8080), `docconvert` (interner Konverter) und `phpmyadmin`
-  (Port `PMA_PORT`, Standard 8081, per HTTP Basic Auth geschützt). Volumes:
-  `db_data`, `doc_uploads`, `sd_output`, `docconvert_cache`.
+  `HTTP_PORT`, Standard 8080), `docconvert` (interner Konverter), `milvus`
+  (Milvus Standalone mit eingebettetem etcd und lokalem Storage, nur im
+  Compose-Netz erreichbar, für den Modus `local` der Wissensdatenbank) und
+  `phpmyadmin` (Port `PMA_PORT`, Standard 8081, per HTTP Basic Auth geschützt).
+  Volumes: `db_data`, `doc_uploads`, `sd_output`, `docconvert_cache`,
+  `milvus_data`, `vector_imports`.
 - `.env.example`: `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_ROOT_PASS`, `HTTP_PORT`,
   `PMA_PORT`, `PMA_BASIC_AUTH_USER`, `PMA_BASIC_AUTH_PASSWORD`, `TZ`,
   `DOCCONVERT_URL`, `DOCCONVERT_TOKEN`, `DOCCONVERT_TIMEOUT`,
   `DOCCONVERT_CACHE_TTL`, `DOCCONVERT_MAX_BYTES`, `DOCCONVERT_MAX_CHARS`,
-  `DOCCONVERT_OVERLAP`, `DOCCONVERT_CACHE_MAX`.
+  `DOCCONVERT_OVERLAP`, `DOCCONVERT_CACHE_MAX`, `MILVUS_VERSION`, `MILVUS_URL`,
+  `MILVUS_METRICS_URL`, `MILVUS_MEM_LIMIT`.
 
 ---
 

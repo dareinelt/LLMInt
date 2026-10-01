@@ -45,7 +45,8 @@ Weitere Dokumente im Repository:
 - **Reasoning auf Abruf:** Thinking/Reasoning ist standardmäßig deaktiviert und wird mit dem Präfix `!!` für den jeweiligen Prompt eingeschaltet (Anzeige als 💡-Pille in der Eingabezeile).
 - **Prompt-Funktionen:** Präfixe wie `/table`, `/tldr` oder `/eli5` schalten für den jeweiligen Prompt eine feste Systemprompt-Ergänzung frei (z. B. Tabellenformat, Kurz-Zusammenfassung, kindgerechte Erklärung); Anzeige als eigene Pille je aktiver Funktion, mehrere Funktionen lassen sich kombinieren.
 - **Intelligence Upgrade:** beantwortet einfache Anfragen zunächst ressourcenschonend und bietet bei freier Kapazität optional ein leistungsfähigeres Modell für eine erneute Bearbeitung an.
-- **Hybrid-RAG:** Dokument-Upload (Office, PDF, Text, Bilder) mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
+- **Hybrid-RAG:** privater Dokument-Upload (Office, PDF, Text, Bilder) mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
+- **Zentrale Wissensdatenbank:** teamweites Wissen aus [docvecwizard](https://github.com/dareinelt/docvecwizard) – wahlweise live über dessen REST-API/Milvus oder per Export-Import in eine eigene Milvus-Instanz im Compose-Stack; wird bei jeder Chat-Anfrage herangezogen und im Admin-Dashboard visualisiert.
 - **Chat-Tools:** Websuche mit SearXNG (`search_web`) inklusive Nachladen ganzer Seiteninhalte (`web_fetch`), Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
 - **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO.
 - **OpenAI-kompatible API:** Modellliste und Chat Completions, wahlweise mit den Chat-Tools.
@@ -337,6 +338,11 @@ Persistente Docker-Volumes:
 - `db_data` für die Datenbank
 - `doc_uploads` für hochgeladene Dokumente
 - `sd_output` für generierte Bilder
+- `docconvert_cache` für den Konvertierungs-Cache
+- `milvus_data` für die lokale Milvus-Vektordatenbank (Modus `local` der Wissensdatenbank)
+- `vector_imports` für docvecwizard-Exportarchive, die serverseitig importiert werden sollen
+
+Der `milvus`-Service (Standalone mit eingebettetem etcd, ca. 2 GB RAM) wird nur im Modus `local` der Wissensdatenbank benötigt. Wer ausschließlich die docvecwizard-API nutzt, kann ihn mit `docker compose stop milvus` anhalten.
 
 Häufige Befehle:
 
@@ -405,9 +411,9 @@ Dokumente werden über `api/upload_document.php` hochgeladen – entweder über 
 
 Office- und Textdateien konvertiert der separate Container `docconvert` (Python/FastAPI). Er liefert strukturierten Text und strukturbewusste Chunks mit Quellenangabe (Kapitel, Tabellenblatt und Zeilenbereich, Foliennummer) und hält Ergebnisse per Content-Hash in einem temporären TTL-Cache vor. Ist der Dienst nicht erreichbar, verarbeitet ein PHP-Fallback zumindest die reinen Textformate.
 
-Im Chat hochgeladene Dateien werden an die Chat-Sitzung gebunden, als Chip über dem Eingabefeld angezeigt und bei der RAG-Suche bevorzugt. Sie werden standardmäßig **nicht** dauerhaft aufbewahrt: Die Datei wird nur im Rahmen der Chat-Sitzung verarbeitet, die hochgeladene Datei nach der Analyse vom Server gelöscht und außerhalb dieser Sitzung nicht für RAG verwendet. Ein Klick auf den Chip öffnet ein Overlay mit der standardmäßig deaktivierten Option „Diese Datei in die Wissensdatenbank aufnehmen und für spätere Informationssuche aufbewahren“ sowie der Freigabe „Nur für mich“ oder „Für alle Nutzer“ (`api/document_retention.php`). Aufbewahrte Dateien listet das Bibliotheks-Overlay (📚 im Kopfbereich) inklusive öffentlich/privat-Kennzeichnung auf; dort lassen sich die Freigabe umstellen und eigene Dateien löschen. Uploads über den Upload-Dialog (RAG-Workflow) werden wie bisher dauerhaft gespeichert. Ein Fortschrittsbalken zeigt Upload und anschließende Verarbeitung an. Große Zwischenablage-Inhalte (mehr als 100 Zeilen) werden beim Einfügen mit Strg+V automatisch als Datei „Eingefügter Text“ angehängt, damit nichts verloren geht. Datei- und Bildanhänge stehen ausschließlich angemeldeten Benutzern zur Verfügung.
+Im Chat hochgeladene Dateien werden an die Chat-Sitzung gebunden, als Chip über dem Eingabefeld angezeigt und bei der RAG-Suche bevorzugt. Sie werden standardmäßig **nicht** dauerhaft aufbewahrt: Die Datei wird nur im Rahmen der Chat-Sitzung verarbeitet, die hochgeladene Datei nach der Analyse vom Server gelöscht und außerhalb dieser Sitzung nicht für RAG verwendet. Ein Klick auf den Chip öffnet ein Overlay mit der standardmäßig deaktivierten Option „Diese Datei in meine Wissensdatenbank aufnehmen und für spätere Informationssuche aufbewahren“ (`api/document_retention.php`). Aufbewahrte Dateien listet das Bibliotheks-Overlay (📚 im Kopfbereich) auf; dort lassen sich eigene Dateien löschen. **Alle Nutzer-Uploads sind ausschließlich privat** – eine Freigabe „für alle Nutzer“ gibt es nicht mehr; gemeinsames Wissen kommt aus der zentralen Vektordatenbank (siehe unten). Uploads über den Upload-Dialog (RAG-Workflow) werden wie bisher dauerhaft (privat) gespeichert. Ein Fortschrittsbalken zeigt Upload und anschließende Verarbeitung an. Große Zwischenablage-Inhalte (mehr als 100 Zeilen) werden beim Einfügen mit Strg+V automatisch als Datei „Eingefügter Text“ angehängt, damit nichts verloren geht. Datei- und Bildanhänge stehen ausschließlich angemeldeten Benutzern zur Verfügung.
 
-Die Pipeline speichert Chunks in `document_chunks` und kann sie für teamweiten Kontext global freigeben. Bei aktivierten Embeddings wird nach dem Chunking eine OpenAI-kompatible Embedding-API aufgerufen. Die Suche kombiniert dann:
+Die Pipeline speichert Chunks in `document_chunks`. Bei aktivierten Embeddings wird nach dem Chunking eine OpenAI-kompatible Embedding-API aufgerufen. Die Suche kombiniert dann:
 
 1. BM25-Keyword-Treffer
 2. Cosine Similarity über gespeicherte Embeddings
@@ -415,6 +421,18 @@ Die Pipeline speichert Chunks in `document_chunks` und kann sie für teamweiten 
 4. optionales Reranking
 
 Ist ein Embedding-Endpunkt oder Reranker nicht erreichbar, fällt die Anwendung auf die vorherige Suchstufe zurück. Relevante Einstellungen sind `embedding_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`, `embedding_cache_enabled`, `reranker_enabled`, `reranker_endpoint` und `reranker_top_k`. Für den Upload selbst kommen `vision_model`, `pdf_vision_enabled`, `pdf_vision_dpi`, `pdf_vision_max_pages` und `upload_max_mb` hinzu.
+
+### Zentrale Wissensdatenbank (docvecwizard / Milvus)
+
+Teamweites Wissen wird nicht mehr von Nutzern hochgeladen, sondern zentral mit [docvecwizard](https://github.com/dareinelt/docvecwizard) aufbereitet und in einer Milvus-Vektordatenbank gehalten. LLMInt bindet diese Wissensbasis über `api/vector_store.php` in **einem von zwei Modi** ein (Admin → „🧠 Wissensdatenbank“, Einstellung `vector_store_mode`):
+
+| Modus | Beschreibung |
+|-------|--------------|
+| `remote` | LLMInt meldet sich an der REST-API von docvecwizard an (`docvec_api_url`, `docvec_api_username`, `docvec_api_password`) und fragt dessen Milvus-Instanz über `POST /api/search` ab. Die Embeddings erzeugt docvecwizard selbst; LLMInt benötigt dafür keinen eigenen Embedding-Endpunkt. |
+| `local` | Ein docvecwizard-**Export** (`.tar.gz` mit `manifest.json`, `checksums/SHA256SUMS`, `documents/<version>/{metadata,chunks,vectors}.json`) wird über die Admin-Oberfläche (`api/vector_import.php`) in die im Compose-Stack mitlaufende Milvus-Instanz (`milvus`-Service, Collection `docvec_<modell>`) und als Volltext nach MySQL (`vector_documents`, `vector_chunks`) importiert. Archive können per Browser hochgeladen oder in das Volume `vector_imports/` gelegt werden. Für die Suche muss ein Embedding-Endpunkt mit demselben Modell wie beim Export aktiv sein. |
+| `off` | Keine zentrale Wissensdatenbank; nur private Uploads werden durchsucht. |
+
+Ist ein Modus aktiv, zieht `api/chat.php` **bei jeder Anfrage** die `vector_top_k` besten Treffer (Mindest-Score `vector_min_score`) aus der Vektordatenbank, injiziert sie als Kontext-Systemnachricht und stellt sie zusätzlich dem Tool `query_documents` zur Verfügung. Jede Abfrage wird in `vector_query_logs` protokolliert. Status (online/offline, Dokumente, Vektoren, Abfragen heute, Ø Antwortzeit) erscheint als Kachel in der Dashboard-Grafik der Admin-Oberfläche – bei `remote` mit der URL des API-Endpunkts, bei `local` mit der Milvus-URL. Beide Modi lassen sich in der Admin-Oberfläche vor dem Speichern testen (`api/test_vector_store.php`).
 
 ## Prompt Security
 
@@ -465,6 +483,7 @@ print(response.choices[0].message.content)
 | Bereich | Endpunkte |
 |---|---|
 | Dokumente | `api/upload_document.php`, `api/document_status.php`, `api/document_retention.php`, `api/document_delete.php`, `api/rebuild_embeddings.php` |
+| Wissensdatenbank (Admin) | `api/vector_import.php` (docvecwizard-Export importieren / Archive auflisten), `api/test_vector_store.php` (Verbindungstest Remote-API oder Milvus) |
 | Bildgenerierung | `api/sd_generate.php`, `api/sd_checkpoints.php`, `api/comfy_generate.php`, `api/comfy_checkpoints.php` |
 | Integrationen | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` |
 | Benutzer und Status | `api/verify_email.php`, `api/reset_password.php`, `api/admin_user_action.php`, `api/heartbeat.php` |
@@ -507,6 +526,7 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 | LLM-Betrieb | `endpoints`, `tasks`, `endpoint_sys_stats`, `app_logs` |
 | Chat und Routing | `conversation_sessions`, `routing_categories`, `routing_rules`, `search_logs` |
 | Dokumente und Embeddings | `document_uploads`, `document_chunks`, `embedding_endpoints`, `embedding_cache`, `embedding_logs` |
+| Zentrale Wissensdatenbank | `vector_documents`, `vector_chunks`, `vector_imports`, `vector_query_logs` (Vektoren selbst liegen in Milvus) |
 | Bildgenerierung | `sd_endpoints`, `sd_tasks`, `comfy_endpoints`, `comfy_tasks` |
 | Monitoring | `active_clients`, `client_count_log`, `client_count_daily`, `user_login_log` |
 | Sicherheit | `prompt_security_rules`, `prompt_security_logs` |
