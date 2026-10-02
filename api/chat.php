@@ -18,8 +18,9 @@
  */
 
 // Start the PHP session so that $_SESSION['admin_id'] is available for
-// linking conversation sessions to registered users.
-if (session_status() === PHP_SESSION_NONE) {
+// linking conversation sessions to registered users. Requests via the
+// OpenAI-compatible API are always anonymous and never touch a session.
+if (empty($GLOBALS['LLMINT_OPENAI_STRICT_MODE']) && session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
@@ -2083,23 +2084,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-/**
- * Return the best-guess client IP address.
- * Checks X-Forwarded-For when a trusted proxy injects it, falls back to REMOTE_ADDR.
- */
-function getClientIp(): string
-{
-    $xff = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
-    if ($xff !== '') {
-        $parts = explode(',', $xff);
-        $ip = trim($parts[0]);
-        if (filter_var($ip, FILTER_VALIDATE_IP)) {
-            return $ip;
-        }
-    }
-    return $_SERVER['REMOTE_ADDR'] ?? '–';
-}
-
 function getEndpointLogLabel(array $endpoint): string
 {
     $alias = trim((string) ($endpoint['alias'] ?? ''));
@@ -2521,7 +2505,9 @@ if ($intelligenceGroup !== null) {
 // Release the session write lock immediately. chat.php can run for many seconds
 // (waiting for the LLM response) and holding the lock blocks every other same-session
 // request – most critically the admin/load_stats.php polling endpoint.
-session_write_close();
+if (session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
 
 // Occasionally purge expired conversation sessions (5 % probability).
 if (mt_rand(1, 20) === 1) {

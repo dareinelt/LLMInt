@@ -2,14 +2,9 @@
 
 declare(strict_types=1);
 
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
-
 require_once __DIR__ . '/../../lib/openai_api.php';
 
 openaiAuthenticateApiRequest();
-session_write_close();
 
 $models = openaiAvailableModels();
 

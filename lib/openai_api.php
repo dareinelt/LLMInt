@@ -68,20 +68,28 @@ function openaiReadBearerToken(): string
     return trim(substr($header, 7));
 }
 
-function openaiAuthenticateApiRequest(): array
+/**
+ * Validate the optional API key of an OpenAI-compatible request.
+ *
+ * Without an Authorization header – or with an unknown, inactive or expired
+ * key – the request is accepted anonymously. A valid key is only used for
+ * identification in the log – API clients never act as the key owner.
+ *
+ * @return array{key_id:int,name:string}|null Key info, or null without key.
+ */
+function openaiAuthenticateApiRequest(): ?array
 {
     $token = openaiReadBearerToken();
     if ($token === '') {
-        openaiSendError(401, 'Missing Authorization bearer token.', 'authentication_error');
+        return null;
     }
 
     $hash = openaiApiKeyHash($token);
 
     try {
         $stmt = getDb()->prepare(
-            'SELECT ak.id, ak.user_id, u.username
+            'SELECT ak.id, ak.name
                FROM api_keys ak
-               JOIN users u ON u.id = ak.user_id
               WHERE ak.api_key_hash = ?
                 AND ak.is_active = 1
                 AND (ak.expires_at IS NULL OR ak.expires_at > NOW())
@@ -94,7 +102,9 @@ function openaiAuthenticateApiRequest(): array
     }
 
     if (!$row) {
-        openaiSendError(401, 'Invalid API key.', 'authentication_error');
+        // Anonymous access is allowed anyway, and many OpenAI clients insist
+        // on sending some placeholder key – treat unknown keys as anonymous.
+        return null;
     }
 
     try {
@@ -105,30 +115,61 @@ function openaiAuthenticateApiRequest(): array
 
     return [
         'key_id' => (int) $row['id'],
-        'user_id' => (int) $row['user_id'],
-        'username' => (string) $row['username'],
+        'name' => (string) $row['name'],
     ];
 }
 
-function openaiAvailableModels(): array
+/**
+ * Treat the current request as an anonymous visitor and tag all log entries.
+ *
+ * The caller's PHP session (if a cookie was sent at all) is never loaded, so an
+ * API request can neither inherit nor modify a browser login.
+ */
+function openaiBeginAnonymousApiRequest(?array $apiKey): void
 {
-    $rows = getDb()->query(
-        "SELECT DISTINCT default_model
-           FROM endpoints
-          WHERE is_active = 1
-            AND default_model <> ''
-          ORDER BY default_model ASC"
-    )->fetchAll(PDO::FETCH_ASSOC);
+    $_SESSION = [];
 
-    $models = [];
-    foreach ($rows as $row) {
-        $model = trim((string) ($row['default_model'] ?? ''));
-        if ($model !== '') {
-            $models[] = $model;
-        }
+    $GLOBALS['LLMINT_API_LOG_TAG'] = $apiKey !== null
+        ? '[API · Key „' . $apiKey['name'] . '“]'
+        : '[API]';
+}
+
+/**
+ * Public base URL of the OpenAI-compatible API ("…/api/openai/v1" or
+ * "…/api/openai-tools/v1"), derived from the current request. Honours
+ * X-Forwarded-Proto/-Host when LLMInt runs behind a reverse proxy.
+ */
+function openaiPublicBaseUrl(bool $withTools = false): string
+{
+    $forwardedProto = strtolower(trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
+    if (in_array($forwardedProto, ['http', 'https'], true)) {
+        $proto = $forwardedProto;
+    } else {
+        $https = strtolower((string) ($_SERVER['HTTPS'] ?? ''));
+        $proto = ($https !== '' && $https !== 'off') ? 'https' : 'http';
     }
 
-    return $models;
+    $host = trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ''))[0]);
+    if ($host === '') {
+        $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    }
+
+    // Called from admin/*.php – the application root is one level up.
+    $rootDir = str_replace('\\', '/', dirname(dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/admin/x.php'))));
+    $rootDir = rtrim($rootDir, '/');
+
+    return $proto . '://' . $host . $rootDir . '/api/' . ($withTools ? 'openai-tools' : 'openai') . '/v1';
+}
+
+/**
+ * Models offered via the API. Like anonymous web visitors, API clients always
+ * start with the guest default model; routing and load balancing take it from
+ * there.
+ */
+function openaiAvailableModels(): array
+{
+    $model = getGuestDefaultModel();
+    return $model !== '' ? [$model] : [];
 }
 
 function openaiNormalizeMessages(array $messages): array
@@ -173,9 +214,11 @@ function openaiNormalizeMessages(array $messages): array
 
 function openaiNormalizeChatPayload(array $input): array
 {
-    $model = trim((string) ($input['model'] ?? ''));
+    // Like an anonymous web visitor, the API always uses the guest default
+    // model – the "model" field of the request is ignored.
+    $model = getGuestDefaultModel();
     if ($model === '') {
-        openaiSendError(400, 'Field "model" is required.');
+        openaiSendError(503, 'No default model configured.', 'server_error');
     }
 
     if (!isset($input['messages']) || !is_array($input['messages'])) {
@@ -203,6 +246,10 @@ function openaiNormalizeChatPayload(array $input): array
 
     if (array_key_exists('stop', $input) && (is_string($input['stop']) || is_array($input['stop']))) {
         $payload['stop'] = $input['stop'];
+    }
+
+    if (isset($input['reasoning_effort']) && is_string($input['reasoning_effort'])) {
+        $payload['reasoning_effort'] = $input['reasoning_effort'];
     }
 
     return $payload;

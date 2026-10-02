@@ -1168,6 +1168,48 @@ function requireAdminOrJson403(): void
 }
 
 /**
+ * Return the best-guess client IP address.
+ * Checks X-Forwarded-For when a trusted proxy injects it, falls back to REMOTE_ADDR.
+ */
+function getClientIp(): string
+{
+    $xff = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
+    if ($xff !== '') {
+        $parts = explode(',', $xff);
+        $ip = trim($parts[0]);
+        if (filter_var($ip, FILTER_VALIDATE_IP)) {
+            return $ip;
+        }
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? '–';
+}
+
+/**
+ * Model used for visitors who are not logged in (setting 'default_model').
+ * Falls back to the model of the first active endpoint; returns '' if none.
+ */
+function getGuestDefaultModel(): string
+{
+    $model = trim(getSetting('default_model', ''));
+    if ($model !== '') {
+        return $model;
+    }
+
+    try {
+        $ep = getDb()->query(
+            "SELECT default_model FROM endpoints WHERE is_active = 1 AND default_model != '' ORDER BY sort_order ASC, id ASC LIMIT 1"
+        )->fetch();
+        if ($ep) {
+            return trim((string) $ep['default_model']);
+        }
+    } catch (PDOException $e) {
+        // Ignore – endpoints table may not exist yet (before setup.php is run).
+    }
+
+    return '';
+}
+
+/**
  * Write a log entry to the app_logs table.
  *
  * The effective minimum log level is controlled by the setting 'log_level'
@@ -1195,6 +1237,13 @@ function writeLog(string $level, string $message): void
 
         if ($levelOrder[$level] < $levelOrder[$configuredLevel]) {
             return; // Below configured threshold – do not store.
+        }
+
+        // Requests arriving via the OpenAI-compatible API are tagged so that
+        // they can be told apart from direct use of the web interface.
+        $apiLogTag = (string) ($GLOBALS['LLMINT_API_LOG_TAG'] ?? '');
+        if ($apiLogTag !== '') {
+            $message = $apiLogTag . ' ' . $message;
         }
 
         getDb()->prepare(

@@ -59,7 +59,8 @@ Intelligenzgruppen.
 | `isCurrentUserAdmin` | `isCurrentUserAdmin(): bool` | Prüft, ob der angemeldete Benutzer Administratorrechte hat. |
 | `requireAdminOrRedirect` | `requireAdminOrRedirect(string $loginUrl = 'login.php'): void` | Schützt HTML-Seiten; leitet zum Login um oder zeigt 403, falls kein Administrator. |
 | `requireAdminOrJson403` | `requireAdminOrJson403(): void` | Schützt JSON-Endpunkte; sendet 403-JSON, falls kein Administrator. |
-| `writeLog` | `writeLog(string $level, string $message): void` | Schreibt einen Log-Eintrag in `app_logs` (respektiert `log_level`, best effort). |
+| `writeLog` | `writeLog(string $level, string $message): void` | Schreibt einen Log-Eintrag in `app_logs` (respektiert `log_level`, best effort); stellt bei API-Zugriffen das Präfix aus `LLMINT_API_LOG_TAG` voran. |
+| `getGuestDefaultModel` | `getGuestDefaultModel(): string` | Modell für nicht angemeldete Besucher und API-Zugriffe (`default_model`, sonst erstes aktives Endpunktmodell). |
 | `purgeOldLogs` | `purgeOldLogs(): void` | Löscht `app_logs`-Einträge, die älter als die Aufbewahrungsfrist sind (Standard 30 Tage). |
 | `loadRoutingCategoriesFromDb` | `loadRoutingCategoriesFromDb(): array` | Lädt alle Routing-Kategorien aus der DB, sortiert nach `sort_order`. |
 | `loadRoutingCategories` | `loadRoutingCategories(): array` | Liefert geordnete Liste von Kategorienamen aus DB oder Fallback-Datei. |
@@ -164,8 +165,10 @@ Gemeinsame Balancer-Logik für LLM-, AUTOMATIC1111- und ComfyUI-Endpunkte.
 | `openaiApiKeyHash` | `openaiApiKeyHash(string $plainKey): string` | Berechnet den SHA-256-Hash eines API-Keys. |
 | `openaiGenerateApiKeyMaterial` | `openaiGenerateApiKeyMaterial(): array` | Generiert neues API-Key-Material (Klartext, Hash, Präfix). |
 | `openaiReadBearerToken` | `openaiReadBearerToken(): string` | Extrahiert das Bearer-Token aus dem `Authorization`-Header. |
-| `openaiAuthenticateApiRequest` | `openaiAuthenticateApiRequest(): array` | Authentifiziert eine API-Anfrage per Bearer-Token; liefert Key-/Benutzerdaten oder sendet 401. |
-| `openaiAvailableModels` | `openaiAvailableModels(): array` | Liefert die Liste eindeutiger aktiver Endpunktmodelle. |
+| `openaiAuthenticateApiRequest` | `openaiAuthenticateApiRequest(): ?array` | Erkennt einen optionalen API-Key; liefert `key_id`/`name` eines gültigen Keys, sonst `null` (anonym). Meldet nie als Key-Besitzer an. |
+| `openaiBeginAnonymousApiRequest` | `openaiBeginAnonymousApiRequest(?array $apiKey): void` | Leert `$_SESSION` (keine PHP-Sitzung) und setzt das Log-Präfix `[API]` bzw. `[API · Key „Name“]` (`LLMINT_API_LOG_TAG`). |
+| `openaiPublicBaseUrl` | `openaiPublicBaseUrl(bool $withTools = false): string` | Öffentliche Basis-URL der API (berücksichtigt `X-Forwarded-Proto`/`-Host`) für die Anzeige im Admin-Bereich. |
+| `openaiAvailableModels` | `openaiAvailableModels(): array` | Liefert nur das Gast-Standardmodell (`getGuestDefaultModel()`). |
 | `openaiNormalizeMessages` | `openaiNormalizeMessages(array $messages): array` | Normalisiert ein Nachrichtenarray ins OpenAI-Format inkl. Validierung. |
 | `openaiNormalizeChatPayload` | `openaiNormalizeChatPayload(array $input): array` | Normalisiert und validiert den eingehenden Chat-Completion-Request-Payload. |
 
@@ -304,7 +307,7 @@ Zentrale Chat-Pipeline (~3.300 Zeilen). Funktionen sind thematisch gruppiert.
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
-| `getClientIp` | `getClientIp(): string` | Ermittelt die Client-IP (prüft zuerst `X-Forwarded-For`). |
+| `getClientIp` | `getClientIp(): string` | Ermittelt die Client-IP (prüft zuerst `X-Forwarded-For`); definiert in `db.php`. |
 | `getEndpointLogLabel` | `getEndpointLogLabel(array $endpoint): string` | Liefert das Anzeige-Label eines Endpunkts (Alias oder `base_url`). |
 | `elapsedMilliseconds` | `elapsedMilliseconds(float $startedAt): int` | Liefert die vergangenen Millisekunden seit einem Zeitstempel. |
 | `isTimeoutMessage` | `isTimeoutMessage(string $message): bool` | Prüft, ob eine Fehlermeldung auf einen Timeout hindeutet. |
@@ -448,8 +451,8 @@ Diese Dateien enthalten ausschließlich prozeduralen Code (kein top-level `funct
 | `api/sd_generate.php` | Bildgenerierung via AUTOMATIC1111 |
 | `api/test_ldap.php` | Ruft `ldapTestConnection()` auf |
 | `api/test_smtp.php` | Ruft `sendMail()` zum Testversand auf |
-| `api/openai_common/chat_completions.php` | Authentifiziert, normalisiert Payload, bindet `api/chat.php`-Logik ein |
-| `api/openai_common/models.php` | Authentifiziert, ruft `openaiAvailableModels()` auf |
+| `api/openai_common/chat_completions.php` | Optionale Key-Erkennung, anonymer Kontext ohne PHP-Sitzung, Gast-Standardmodell, Zugriffs-Log, bindet `api/chat.php`-Logik ein |
+| `api/openai_common/models.php` | Optionale Key-Erkennung, ruft `openaiAvailableModels()` auf |
 | `api/openai/v1/chat/completions/index.php` | Setzt `LLMINT_OPENAI_TOOL_MODE='disabled'`, bindet `openai_common/chat_completions.php` ein |
 | `api/openai/v1/models/index.php` | Bindet `openai_common/models.php` ein |
 | `api/openai-tools/v1/chat/completions/index.php` | Setzt `LLMINT_OPENAI_TOOL_MODE='enabled'`, bindet `openai_common/chat_completions.php` ein |
@@ -489,7 +492,7 @@ Nur eine top-level Funktion:
 
 | Datei | Zweck |
 |---|---|
-| `admin/api_keys.php` | CRUD für OpenAI-kompatible API-Keys (erzeugen/aktivieren/löschen) |
+| `admin/api_keys.php` | CRUD für OpenAI-kompatible API-Keys (erzeugen/aktivieren/löschen) und kopierbare API-Basis-URLs |
 | `admin/endpoint_tech.php` | quickinfo-Pairing je Endpunkt (`pair_quickinfo`, `test_quickinfo`, `unpair_quickinfo`) und Live-Übersicht |
 | `admin/quickinfo_stats.php` | JSON: Modell, Ø Token/s (heute) und quickinfo-Metriken je Endpunkt |
 | `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients, SD/ComfyUI-Zahlen) |
