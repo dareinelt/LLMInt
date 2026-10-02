@@ -132,6 +132,18 @@ $apiKeys = $keys->fetchAll(PDO::FETCH_ASSOC);
     <?php endif; ?>
 
     <div class="card">
+        <h2>OpenAI-kompatible API</h2>
+        <p style="color:#8e8ea0;font-size:.9rem">Basis-URL für externe Applikationen. Ein API-Key ist optional und dient nur der Zuordnung im Log – API-Zugriffe verhalten sich immer wie ein nicht angemeldeter Benutzer.</p>
+        <?php foreach (['Ohne Tools' => openaiPublicBaseUrl(false), 'Mit Tools' => openaiPublicBaseUrl(true)] as $apiUrlLabel => $apiUrlValue): ?>
+            <label><?= htmlspecialchars($apiUrlLabel) ?></label>
+            <div style="display:flex;gap:8px;margin-bottom:10px">
+                <input type="text" value="<?= htmlspecialchars($apiUrlValue) ?>" readonly onfocus="this.select()" style="font-family:monospace">
+                <button class="btn secondary" type="button" onclick="copyApiUrl(this)">Kopieren</button>
+            </div>
+        <?php endforeach; ?>
+    </div>
+
+    <div class="card">
         <h2>OpenAI API-Key erstellen</h2>
         <form method="post">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
@@ -192,5 +204,22 @@ $apiKeys = $keys->fetchAll(PDO::FETCH_ASSOC);
         </table>
     </div>
 </div>
+<script>
+function copyApiUrl(btn) {
+    var input = btn.previousElementSibling;
+    var done = function () {
+        var old = btn.textContent;
+        btn.textContent = 'Kopiert ✓';
+        setTimeout(function () { btn.textContent = old; }, 1500);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(input.value).then(done, function () {
+            input.select(); document.execCommand('copy'); done();
+        });
+    } else {
+        input.select(); document.execCommand('copy'); done();
+    }
+}
+</script>
 </body>
 </html>

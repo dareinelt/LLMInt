@@ -49,7 +49,7 @@ Weitere Dokumente im Repository:
 - **Zentrale Wissensdatenbank:** teamweites Wissen aus [docvecwizard](https://github.com/dareinelt/docvecwizard) – wahlweise live über dessen REST-API/Milvus oder per Export-Import in eine eigene Milvus-Instanz im Compose-Stack; wird bei jeder Chat-Anfrage herangezogen und im Admin-Dashboard visualisiert.
 - **Chat-Tools:** Websuche mit SearXNG (`search_web`) inklusive Nachladen ganzer Seiteninhalte (`web_fetch`), Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
 - **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO.
-- **OpenAI-kompatible API:** Modellliste und Chat Completions, wahlweise mit den Chat-Tools.
+- **OpenAI-kompatible API:** externe Applikationen nutzen LLMInt als Reverse-Proxy (Chat Completions, wahlweise mit den Chat-Tools); sie verhalten sich wie nicht angemeldete Benutzer, durchlaufen Routing und Lastverteilung wie ein direkter Zugriff und werden im Log mit `[API]` gekennzeichnet.
 - **Monitoring:** Endpunktlast, Tokenverbrauch, aktive Clients (als Wolke mit Hostname bzw. IP-Adresse rund um die Clients-Kachel), Such- und Generierungsjobs sowie optionale SSH-Systemmetriken. Die Lastverteilungs-Grafik lässt sich per **⛶ Vollbild** auf die volle Browserfenstergröße vergrößern (kein Browser-Vollbild, Beenden per Button oder Esc).
 - **Endpunkte technische Verwaltung:** jeder LLM-Endpunkt lässt sich mit einer [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz koppeln (Server-URL + API-Schlüssel der Management-Board-API). Die Seite `admin/endpoint_tech.php` zeigt je Endpunkt in einer Zeile Modell, Ø Token/s, CPU-/GPU-Last, CPU-/GPU-Temperatur (mit 24h-Min./Max.) sowie RAM-/VRAM-Auslastung; ein Klick auf die Zeile öffnet quickinfo im neuen Tab.
 - **Nutzungsstatistik:** Liniendiagramm im Adminbereich (retinatauglich, umschaltbar auf 3, 7, 14, 30, 90, 180 Tage oder ein Jahr) mit Clients, angemeldeten Nutzern, durchgeführten Tasks, Websuchen und fehlgeschlagenen Tasks je Tag.
@@ -456,23 +456,30 @@ Die Verwaltung ist unter `admin/prompt_security.php` verfügbar. Dort lassen sic
 
 | Pfad | Methode | Zweck |
 |---|---|---|
-| `api/openai/v1/models` | GET | aktive LLMInt-Modellgruppen |
+| `api/openai/v1/models` | GET | Gast-Standardmodell (einziges angebotenes Modell) |
 | `api/openai/v1/chat/completions` | POST | Chat Completions ohne Tools |
-| `api/openai-tools/v1/models` | GET | aktive LLMInt-Modellgruppen |
+| `api/openai-tools/v1/models` | GET | Gast-Standardmodell (einziges angebotenes Modell) |
 | `api/openai-tools/v1/chat/completions` | POST | Chat Completions mit Web-, RAG- und Bild-Tools |
 
-Die Endpunkte erwarten einen API-Key im `Authorization: Bearer ...`-Header. API-Keys werden als Hash gespeichert und im Admin-Bereich verwaltet.
+LLMInt arbeitet für externe Applikationen als Reverse-Proxy vor den LLM-Endpunkten. Per API zugreifende Applikationen verhalten sich wie ein **nicht angemeldeter Benutzer**:
+
+- Es wird keine PHP-Sitzung verwendet; ein mitgesendetes Session-Cookie wird ignoriert. Bildanhänge, Intelligenzgruppen (`@@…`) und benutzerbezogene Dokumente stehen daher – wie für Gäste – nicht zur Verfügung.
+- Das Feld `model` wird ignoriert; jede Anfrage startet mit dem Gast-Standardmodell (Einstellung `default_model`). Danach greifen Prompt Security, Entscheidungsmodell/Routing, Balancer, Fallback und Warteschlange genau wie bei einem direkten Zugriff. Reasoning lässt sich per `!!`-Präfix oder `reasoning_effort` aktivieren.
+- Ein API-Key im Header `Authorization: Bearer <key>` ist optional. Unbekannte, deaktivierte oder abgelaufene Keys (z. B. Platzhalter, die manche Clients zwingend senden) werden wie ein Zugriff ohne Key behandelt; ein gültiger Key dient nur der Zuordnung im Log, nicht der Anmeldung als Key-Besitzer.
+- Alle Log-Einträge einer API-Anfrage tragen das Präfix `[API]` bzw. `[API · Key „Name“]` und werden im Log-Viewer als Badge hervorgehoben; ein Eintrag „Zugriff über OpenAI-kompatible API …“ protokolliert Client-IP, Tool-Modus sowie angefordertes und verwendetes Modell.
+
+Die Basis-URLs zum Kopieren zeigt der Admin-Bereich unter **Verwaltung → 🔌 OpenAI-API** sowie die Seite `admin/api_keys.php`. API-Keys werden als Hash gespeichert und dort verwaltet.
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(
     base_url="https://server.example/api/openai/v1",
-    api_key="sk-...",
+    api_key="sk-...",  # optional; ohne Key einen beliebigen Platzhalter angeben
 )
 
 response = client.chat.completions.create(
-    model="modellname",
+    model="khwf-ki",  # wird ignoriert, es gilt das Gast-Standardmodell
     messages=[{"role": "user", "content": "Hallo"}],
 )
 print(response.choices[0].message.content)

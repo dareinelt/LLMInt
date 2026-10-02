@@ -499,8 +499,8 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
 | `api/admin_user_action.php` | POST | Admin + CSRF | Benutzerverwaltung |
 | `api/verify_email.php`, `api/reset_password.php` | GET/POST | Token | E-Mail-Verifikation, Passwort-Reset |
-| `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | API-Key | OpenAI-kompatibel, ohne Tools |
-| `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | API-Key | OpenAI-kompatibel, mit Tools |
+| `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | anonym (API-Key optional, nur für Log) | OpenAI-kompatibel, ohne Tools; Gast-Standardmodell, Log-Präfix `[API]` |
+| `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | anonym (API-Key optional, nur für Log) | OpenAI-kompatibel, mit Tools; Gast-Standardmodell, Log-Präfix `[API]` |
 
 `api/balancer.php`, `api/sd_balancer.php`, `api/comfy_balancer.php`,
 `api/embedding.php` und `api/vector_store.php` sind reine Bibliotheken und werden

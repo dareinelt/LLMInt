@@ -44,13 +44,13 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `admin/prompt_security.php` | 878 | Prompt-Security-Regeln, Logs und Einstellungen |
 | `admin/load_stats.php` | 317 | JSON-Livedaten für das Dashboard |
 | `admin/refresh_sys_stats.php` | 211 | SSH-Abfrage von RAM/CPU/Temperatur je Endpunkt |
-| `admin/api_keys.php` | 196 | API-Keys für die OpenAI-kompatible API |
+| `admin/api_keys.php` | 196 | API-Keys und kopierbare Basis-URLs der OpenAI-kompatiblen API |
 | `admin/endpoint_tech.php` | – | Endpunkte technische Verwaltung: quickinfo-Pairing je Endpunkt und Live-Übersicht (CPU/GPU/RAM/VRAM, Temperaturen) |
 | `admin/quickinfo_stats.php` | – | JSON-Livedaten aller gekoppelten quickinfo-Instanzen (parallel per curl_multi) |
 | `lib/quickinfo.php` | – | Client für die quickinfo Management-Board-API (`/api/v1/status`, `info`, `history`) |
 | `lib/balancer_engine.php` | 468 | Gemeinsame Balancer-Logik für LLM, AUTOMATIC1111 und ComfyUI |
 | `lib/prompt_security.php` | 499 | Regelwerk, Normalisierung, Scoring, Entscheidung, Logging |
-| `lib/openai_api.php` | 209 | API-Key-Handling, Payload-Normalisierung, Fehlerformat |
+| `lib/openai_api.php` | 209 | optionale API-Key-Erkennung, anonymer API-Kontext mit Log-Präfix, öffentliche Basis-URL, Payload-Normalisierung (Gast-Standardmodell), Fehlerformat |
 | `lib/ldap_auth.php` | 320 | LDAP-Bind, Benutzerabgleich, Kerberos-SSO |
 | `lib/mailer.php` | 334 | Eigener SMTP-Client (kein PHPMailer) |
 | `lib/prompt.txt` | – | Fallback-Kategorien/Prompt für das Routing, importierbar in die DB |
@@ -355,8 +355,8 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
 | `api/admin_user_action.php` | POST | Admin + CSRF | Benutzerverwaltung |
 | `api/verify_email.php`, `api/reset_password.php` | GET/POST | Token | E-Mail-Verifikation, Passwort-Reset |
-| `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | API-Key | OpenAI-kompatibel, ohne Tools |
-| `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | API-Key | OpenAI-kompatibel, mit Tools |
+| `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | anonym (API-Key optional, nur für Log) | OpenAI-kompatibel, ohne Tools; Gast-Standardmodell, Log-Präfix `[API]` |
+| `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | anonym (API-Key optional, nur für Log) | OpenAI-kompatibel, mit Tools; Gast-Standardmodell, Log-Präfix `[API]` |
 
 `api/balancer.php`, `api/sd_balancer.php`, `api/comfy_balancer.php` und `api/embedding.php`
 sind reine Bibliotheken und werden eingebunden, nicht direkt aufgerufen.

@@ -12,6 +12,7 @@ session_start();
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../lib/balancer_engine.php';
+require_once __DIR__ . '/../lib/openai_api.php';
 
 requireAdminOrRedirect('login.php');
 
@@ -2279,6 +2280,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     <span class="sidebar-label">Verwaltung</span>
     <a href="#users-card">👤 Benutzerkonten</a>
+    <a href="#openai-api-card">🔌 OpenAI-API</a>
     <a href="api_keys.php">🗝️ API-Keys</a>
     <a href="#password-card">🔑 Passwort ändern</a>
     <a href="endpoint_tech.php">🛠️ Endpunkte technische Verwaltung</a>
@@ -4717,7 +4719,14 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                         <tr>
                             <td style="white-space:nowrap;color:var(--muted)"><?= htmlspecialchars($lr['created_at']) ?></td>
                             <td style="font-weight:600;color:<?= $lvColor ?>"><?= htmlspecialchars(strtoupper($lr['level'])) ?></td>
-                            <td style="word-break:break-word;max-width:700px"><?= htmlspecialchars($lr['message']) ?></td>
+                            <td style="word-break:break-word;max-width:700px"><?php
+                                $lrMessage = (string) $lr['message'];
+                                if (preg_match('/^(\[API(?: · [^\]]*)?\])\s*(.*)$/su', $lrMessage, $lrApi)):
+                            ?><span title="Zugriff über die OpenAI-kompatible API" style="display:inline-block;margin-right:6px;padding:1px 7px;border-radius:999px;background:rgba(108,99,255,.18);border:1px solid rgba(108,99,255,.45);color:#b8b3ff;font-size:.75rem;font-weight:600;white-space:nowrap"><?= htmlspecialchars(trim($lrApi[1], '[]')) ?></span><?= htmlspecialchars($lrApi[2]) ?><?php
+                                else:
+                            ?><?= htmlspecialchars($lrMessage) ?><?php
+                                endif;
+                            ?></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
@@ -5026,6 +5035,52 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <span id="cu-result" style="font-size:.82rem"></span>
             </div>
         </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         OpenAI-compatible API (links for external applications)
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="openai-api-card">
+        <h2>🔌 OpenAI-kompatible API</h2>
+        <p class="hint" style="margin-bottom:12px">
+            Externe Applikationen greifen über diese Basis-URLs auf die KI zu. API-Zugriffe verhalten sich wie
+            ein nicht angemeldeter Benutzer: Sie verwenden immer das Gast-Standardmodell
+            (<code><?= htmlspecialchars(getGuestDefaultModel() !== '' ? getGuestDefaultModel() : '– nicht konfiguriert –') ?></code>),
+            durchlaufen Routing und Lastverteilung wie ein direkter Zugriff und werden im Log mit <code>API</code> gekennzeichnet.
+            Ein <a href="api_keys.php">API-Key</a> ist optional und dient nur der Zuordnung im Log.
+        </p>
+        <?php foreach ([
+            'openai-api-url'       => ['Ohne Tools', openaiPublicBaseUrl(false)],
+            'openai-tools-api-url' => ['Mit Tools (Websuche, Dokumente, Bilder)', openaiPublicBaseUrl(true)],
+        ] as $apiUrlId => [$apiUrlLabel, $apiUrlValue]): ?>
+            <div class="form-group" style="max-width:740px">
+                <label for="<?= $apiUrlId ?>"><?= htmlspecialchars($apiUrlLabel) ?></label>
+                <div style="display:flex;gap:8px">
+                    <input type="text" id="<?= $apiUrlId ?>" value="<?= htmlspecialchars($apiUrlValue) ?>" readonly
+                           onfocus="this.select()" style="flex:1;font-family:monospace">
+                    <button type="button" class="btn" data-copy-target="<?= $apiUrlId ?>">📋 Kopieren</button>
+                </div>
+            </div>
+        <?php endforeach; ?>
+        <script>
+        document.querySelectorAll('#openai-api-card [data-copy-target]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var input = document.getElementById(btn.getAttribute('data-copy-target'));
+                var done = function () {
+                    var old = btn.textContent;
+                    btn.textContent = '✓ Kopiert';
+                    setTimeout(function () { btn.textContent = old; }, 1500);
+                };
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(input.value).then(done, function () {
+                        input.select(); document.execCommand('copy'); done();
+                    });
+                } else {
+                    input.select(); document.execCommand('copy'); done();
+                }
+            });
+        });
+        </script>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
