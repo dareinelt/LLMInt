@@ -19,6 +19,7 @@ kompakte Navigationshilfe siehe [`agent_index.md`](agent_index.md).
 - [lib/mailer.php](#libmailerphp)
 - [lib/openai_api.php](#libopenai_apiphp)
 - [lib/prompt_security.php](#libprompt_securityphp)
+- [lib/reverse_proxy.php](#libreverse_proxyphp)
 - [api/chat.php](#apichatphp)
 - [api/balancer.php](#apibalancerphp)
 - [api/embedding.php](#apiembeddingphp)
@@ -141,6 +142,8 @@ Gemeinsame Balancer-Logik für LLM-, AUTOMATIC1111- und ComfyUI-Endpunkte.
 | `ldapEnabled` | `ldapEnabled(): bool` | Prüft, ob LDAP-Authentifizierung aktiviert und ein Host konfiguriert ist. |
 | `ldapSsoEnabled` | `ldapSsoEnabled(): bool` | Prüft, ob Windows-SSO via `REMOTE_USER` aktiviert ist. |
 | `ldapSsoUsername` | `ldapSsoUsername(): string` | Extrahiert den Benutzernamen aus `REMOTE_USER` (entfernt Domänen-Präfix/UPN-Suffix). |
+| `ldapProxySsoEnabled` | `ldapProxySsoEnabled(): bool` | Windows-SSO aktiv und an den Reverse-Proxy delegiert (`sso.php`, siehe `lib/reverse_proxy.php`). |
+| `ldapSsoLogin` | `ldapSsoLogin(): ?bool` | Meldet den Benutzer aus `REMOTE_USER` an (Provisionierung, Sitzung, Login-Statistik); `true` Erfolg, `false` Namenskonflikt mit lokalem Konto, `null` kein SSO-Benutzer. |
 | `ldapAuthenticate` | `ldapAuthenticate(string $username, string $password): ?array` | Authentifiziert gegen Active Directory; liefert bei Erfolg Benutzername/DN/E-Mail/Anzeigename. |
 | `ldapFetchUserInfo` | `ldapFetchUserInfo($conn, string $username, string $baseDn): array` | Sucht im Verzeichnis nach dem Benutzer und liefert ausgewählte Attribute. |
 | `ldapProvisionUser` | `ldapProvisionUser(array $info): ?int` | Findet oder erstellt den lokalen Benutzerdatensatz für einen AD-authentifizierten Benutzer. |
@@ -167,10 +170,28 @@ Gemeinsame Balancer-Logik für LLM-, AUTOMATIC1111- und ComfyUI-Endpunkte.
 | `openaiReadBearerToken` | `openaiReadBearerToken(): string` | Extrahiert das Bearer-Token aus dem `Authorization`-Header. |
 | `openaiAuthenticateApiRequest` | `openaiAuthenticateApiRequest(): ?array` | Erkennt einen optionalen API-Key; liefert `key_id`/`name` eines gültigen Keys, sonst `null` (anonym). Meldet nie als Key-Besitzer an. |
 | `openaiBeginAnonymousApiRequest` | `openaiBeginAnonymousApiRequest(?array $apiKey): void` | Leert `$_SESSION` (keine PHP-Sitzung) und setzt das Log-Präfix `[API]` bzw. `[API · Key „Name“]` (`LLMINT_API_LOG_TAG`). |
-| `openaiPublicBaseUrl` | `openaiPublicBaseUrl(bool $withTools = false): string` | Öffentliche Basis-URL der API (berücksichtigt `X-Forwarded-Proto`/`-Host`) für die Anzeige im Admin-Bereich. |
+| `openaiPublicBaseUrl` | `openaiPublicBaseUrl(bool $withTools = false): string` | Öffentliche Basis-URL der API über `appPublicBaseUrl(true)` (berücksichtigt `X-Forwarded-Proto`/`-Host`/`-Prefix`) für die Anzeige im Admin-Bereich. |
 | `openaiAvailableModels` | `openaiAvailableModels(): array` | Liefert nur das Gast-Standardmodell (`getGuestDefaultModel()`). |
 | `openaiNormalizeMessages` | `openaiNormalizeMessages(array $messages): array` | Normalisiert ein Nachrichtenarray ins OpenAI-Format inkl. Validierung. |
 | `openaiNormalizeChatPayload` | `openaiNormalizeChatPayload(array $input): array` | Normalisiert und validiert den eingehenden Chat-Completion-Request-Payload. |
+
+## lib/reverse_proxy.php
+
+Wird per `auto_prepend_file` (`docker/php.ini`) und aus `db.php` geladen (idempotent) und führt beim Laden `reverseProxyApply()` aus. Konfiguration über `TRUSTED_PROXIES` und `PROXY_SSO_HEADER`.
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `reverseProxyTrustedEntries` | `reverseProxyTrustedEntries(): array` | Einträge aus `TRUSTED_PROXIES` (IP, CIDR oder Hostname). |
+| `reverseProxyIpInRange` | `reverseProxyIpInRange(string $ip, string $cidr): bool` | IPv4/IPv6-Prüfung gegen CIDR-Bereich oder Einzel-IP. |
+| `reverseProxyIsTrusted` | `reverseProxyIsTrusted(string $ip): bool` | Ob die IP zu einem vertrauenswürdigen Proxy gehört (Hostnamen einmal je Anfrage aufgelöst). |
+| `reverseProxyFirstHeaderValue` | `reverseProxyFirstHeaderValue(string $serverKey): string` | Erster Wert eines kommagetrennten Headers. |
+| `reverseProxyApply` | `reverseProxyApply(): void` | Vertrauenswürdiger Peer: `REMOTE_ADDR` aus `X-Forwarded-For` (von rechts), `HTTPS`/`session.cookie_secure`, SSO-Header → `REMOTE_USER` (nicht bei `X-Remote-Source`). Andere Peers: Forwarded- und SSO-Header werden verworfen. Ohne `TRUSTED_PROXIES` keine Änderung. |
+| `reverseProxySsoServerKey` | `reverseProxySsoServerKey(): string` | `$_SERVER`-Schlüssel des SSO-Headers oder `''`. |
+| `reverseProxySsoEnabled` | `reverseProxySsoEnabled(): bool` | SSO-Header und `TRUSTED_PROXIES` konfiguriert. |
+| `reverseProxyActive` | `reverseProxyActive(): bool` | Ob die aktuelle Anfrage über einen vertrauenswürdigen Proxy kam. |
+| `reverseProxyPublicPrefix` | `reverseProxyPublicPrefix(): string` | Validierter Pfadpräfix aus `X-Forwarded-Prefix` (z. B. `/ki`) oder `''`. |
+| `appRootScriptPath` | `appRootScriptPath(): string` | URL-Pfad des Anwendungsverzeichnisses aus Sicht des Webservers (aus jedem Unterverzeichnis). |
+| `appPublicBaseUrl` | `appPublicBaseUrl(bool $honourUntrustedForwarded = false): string` | Öffentliche Basis-URL der Anwendung (Schema, Host, Proxy-Präfix, Pfad) für E-Mail-Links und API-Anzeige. |
 
 ## lib/quickinfo.php
 
@@ -307,7 +328,7 @@ Zentrale Chat-Pipeline (~3.300 Zeilen). Funktionen sind thematisch gruppiert.
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
-| `getClientIp` | `getClientIp(): string` | Ermittelt die Client-IP (prüft zuerst `X-Forwarded-For`); definiert in `db.php`. |
+| `getClientIp` | `getClientIp(): string` | Ermittelt die Client-IP (prüft zuerst `X-Forwarded-For`; mit `TRUSTED_PROXIES` bereits durch `lib/reverse_proxy.php` in `REMOTE_ADDR` aufgelöst); definiert in `db.php`. |
 | `getEndpointLogLabel` | `getEndpointLogLabel(array $endpoint): string` | Liefert das Anzeige-Label eines Endpunkts (Alias oder `base_url`). |
 | `elapsedMilliseconds` | `elapsedMilliseconds(float $startedAt): int` | Liefert die vergangenen Millisekunden seit einem Zeitstempel. |
 | `isTimeoutMessage` | `isTimeoutMessage(string $message): bool` | Prüft, ob eine Fehlermeldung auf einen Timeout hindeutet. |
@@ -496,8 +517,8 @@ Nur eine top-level Funktion:
 | `admin/endpoint_tech.php` | quickinfo-Pairing je Endpunkt (`pair_quickinfo`, `test_quickinfo`, `unpair_quickinfo`) und Live-Übersicht |
 | `admin/quickinfo_stats.php` | JSON: Modell, Ø Token/s (heute) und quickinfo-Metriken je Endpunkt |
 | `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients, SD/ComfyUI-Zahlen) |
-| `admin/login.php` | Anmeldung (LDAP/SSO/lokal) mit Sitzungsverwaltung |
-| `admin/logout.php` | Beendet die Sitzung und leitet zum Login um |
+| `admin/login.php` | Anmeldung (LDAP/SSO/lokal) mit Sitzungsverwaltung; bei Proxy-SSO einmal je Sitzung Umleitung auf `../sso.php` |
+| `admin/logout.php` | Beendet die Sitzung (setzt `sso_attempted` in der neuen Sitzung) und leitet zum Login um |
 | `admin/prompt_security.php` | Verwaltung der Prompt-Security-Regeln, -Logs und -Einstellungen (4 Tabs) |
 
 ---

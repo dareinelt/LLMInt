@@ -137,28 +137,11 @@ function openaiBeginAnonymousApiRequest(?array $apiKey): void
 /**
  * Public base URL of the OpenAI-compatible API ("…/api/openai/v1" or
  * "…/api/openai-tools/v1"), derived from the current request. Honours
- * X-Forwarded-Proto/-Host when LLMInt runs behind a reverse proxy.
+ * X-Forwarded-Proto/-Host/-Prefix when LLMInt runs behind a reverse proxy.
  */
 function openaiPublicBaseUrl(bool $withTools = false): string
 {
-    $forwardedProto = strtolower(trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
-    if (in_array($forwardedProto, ['http', 'https'], true)) {
-        $proto = $forwardedProto;
-    } else {
-        $https = strtolower((string) ($_SERVER['HTTPS'] ?? ''));
-        $proto = ($https !== '' && $https !== 'off') ? 'https' : 'http';
-    }
-
-    $host = trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ''))[0]);
-    if ($host === '') {
-        $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
-    }
-
-    // Called from admin/*.php – the application root is one level up.
-    $rootDir = str_replace('\\', '/', dirname(dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/admin/x.php'))));
-    $rootDir = rtrim($rootDir, '/');
-
-    return $proto . '://' . $host . $rootDir . '/api/' . ($withTools ? 'openai-tools' : 'openai') . '/v1';
+    return appPublicBaseUrl(true) . '/api/' . ($withTools ? 'openai-tools' : 'openai') . '/v1';
 }
 
 /**

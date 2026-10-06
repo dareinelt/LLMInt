@@ -54,6 +54,38 @@ function ldapSsoUsername(): string
     return $raw;
 }
 
+/**
+ * Whether Windows SSO is performed by a trusted reverse proxy (lanpa auth
+ * container) at sso.php instead of by this web server for every request.
+ */
+function ldapProxySsoEnabled(): bool
+{
+    return ldapSsoEnabled() && function_exists('reverseProxySsoEnabled') && reverseProxySsoEnabled();
+}
+
+/**
+ * Log in the SSO user from REMOTE_USER.
+ * Returns true on success, false when the name collides with a local
+ * account and null when no SSO user is present.
+ */
+function ldapSsoLogin(): ?bool
+{
+    $ssoUser = ldapSsoUsername();
+    if ($ssoUser === '') {
+        return null;
+    }
+    $userId = ldapProvisionUser(['username' => $ssoUser, 'dn' => '', 'email' => '', 'display_name' => '']);
+    if ($userId === null) {
+        return false;
+    }
+    session_regenerate_id(true);
+    $_SESSION['admin_user'] = $ssoUser;
+    $_SESSION['admin_id']   = $userId;
+    $_SESSION['requires_password_change'] = false;
+    recordUserLogin((int) $userId);
+    return true;
+}
+
 // ── Core authentication ────────────────────────────────────────────────────────
 
 /**

@@ -142,10 +142,7 @@ if ($action === 'send_password_reset') {
           WHERE id = ?'
     )->execute([$token, $expires, $userId]);
 
-    $proto      = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
-    $host       = $_SERVER['HTTP_HOST'] ?? 'localhost';
-    $scriptDir  = rtrim(dirname(dirname($_SERVER['SCRIPT_NAME'] ?? '')), '/\\');
-    $resetUrl   = "{$proto}://{$host}{$scriptDir}/api/reset_password.php?token=" . urlencode($token);
+    $resetUrl   = appPublicBaseUrl() . '/api/reset_password.php?token=' . urlencode($token);
 
     $siteName = getSetting('smtp_from_name', 'LLMInt');
 

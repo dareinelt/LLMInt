@@ -1,0 +1,32 @@
+# docker-compose.lanpa.yml
+#
+# Optional override: publish LLMInt through the `auth` container of lanpa
+# (https://github.com/dareinelt/lanpa) under https://<lanpa-host>/ki/ – HTTPS
+# with the centrally managed lanpa certificate and optional Windows SSO.
+#
+# One-time preparation (shared Docker network, same subnet as TRUSTED_PROXIES):
+#   docker network create --subnet 172.30.251.0/24 llmint-proxy
+#
+# Start:
+#   docker compose -f docker-compose.yml -f docker-compose.lanpa.yml up -d
+# (or COMPOSE_FILE=docker-compose.yml:docker-compose.lanpa.yml in .env)
+#
+# In lanpa: LLMINT_ENABLED=true, LLMINT_UPSTREAM=http://llmint-web and its
+# override that attaches `auth` to the same network. See README
+# "Betrieb hinter lanpa".
+
+services:
+  web:
+    environment:
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.251.0/24}
+      PROXY_SSO_HEADER: ${PROXY_SSO_HEADER:-X-Remote-User}
+    networks:
+      default:
+      lanpa_proxy:
+        aliases:
+          - llmint-web
+
+networks:
+  lanpa_proxy:
+    external: true
+    name: ${LLMINT_PROXY_NETWORK:-llmint-proxy}

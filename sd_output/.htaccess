@@ -7,3 +7,13 @@ Options -Indexes
     Order allow,deny
     Deny from all
 </FilesMatch>
+
+# Only generated PNGs are served; with nosniff a browser never interprets
+# them as HTML/JS (LLMInt may share its origin with lanpa under /ki/).
+<FilesMatch "^(?!.*\.png$).+$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>

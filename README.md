@@ -27,6 +27,7 @@ Weitere Dokumente im Repository:
 - [Voraussetzungen](#voraussetzungen)
 - [Schnellstart mit Docker](#schnellstart-mit-docker)
 - [Klassische Installation](#klassische-installation)
+- [Betrieb hinter lanpa](#betrieb-hinter-lanpa)
 - [Erstkonfiguration](#erstkonfiguration)
 - [Hybrid-RAG](#hybrid-rag)
 - [Prompt Security](#prompt-security)
@@ -48,7 +49,8 @@ Weitere Dokumente im Repository:
 - **Hybrid-RAG:** privater Dokument-Upload (Office, PDF, Text, Bilder) mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
 - **Zentrale Wissensdatenbank:** teamweites Wissen aus [docvecwizard](https://github.com/dareinelt/docvecwizard) – wahlweise live über dessen REST-API/Milvus oder per Export-Import in eine eigene Milvus-Instanz im Compose-Stack; wird bei jeder Chat-Anfrage herangezogen und im Admin-Dashboard visualisiert.
 - **Chat-Tools:** Websuche mit SearXNG (`search_web`) inklusive Nachladen ganzer Seiteninhalte (`web_fetch`), Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
-- **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO.
+- **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO – direkt im Container oder über den `auth`-Container von lanpa.
+- **Betrieb hinter lanpa:** optional unter `https://<lanpa-host>/ki/` mit dem zentral in lanpa verwalteten Zertifikat (siehe [Betrieb hinter lanpa](#betrieb-hinter-lanpa)).
 - **OpenAI-kompatible API:** externe Applikationen nutzen LLMInt als Reverse-Proxy (Chat Completions, wahlweise mit den Chat-Tools); sie verhalten sich wie nicht angemeldete Benutzer, durchlaufen Routing und Lastverteilung wie ein direkter Zugriff und werden im Log mit `[API]` gekennzeichnet.
 - **Monitoring:** Endpunktlast, Tokenverbrauch, aktive Clients (als Wolke mit Hostname bzw. IP-Adresse rund um die Clients-Kachel), Such- und Generierungsjobs sowie optionale SSH-Systemmetriken. Die Lastverteilungs-Grafik lässt sich per **⛶ Vollbild** auf die volle Browserfenstergröße vergrößern (kein Browser-Vollbild, Beenden per Button oder Esc).
 - **Endpunkte technische Verwaltung:** jeder LLM-Endpunkt lässt sich mit einer [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz koppeln (Server-URL + API-Schlüssel der Management-Board-API). Die Seite `admin/endpoint_tech.php` zeigt je Endpunkt in einer Zeile Modell, Ø Token/s, CPU-/GPU-Last, CPU-/GPU-Temperatur (mit 24h-Min./Max.) sowie RAM-/VRAM-Auslastung; ein Klick auf die Zeile öffnet quickinfo im neuen Tab.
@@ -83,13 +85,15 @@ Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Bu
 |---|---|
 | `index.php` | Chat-Oberfläche mit Streaming, Sitzungsliste, Upload-Dialog und Bildanhängen |
 | `login.php`, `register.php`, `logout.php` | Anmeldung, Selbstregistrierung mit E-Mail-Verifikation, Abmeldung |
+| `sso.php`, `sso_fallback.php` | Windows-SSO über den Reverse-Proxy von lanpa und Rückfallseite ohne Domänenanmeldung |
 | `db.php` | Datenbankverbindung, idempotentes Laufzeitschema, Einstellungen, Logging, Chat-Sitzungen, Intelligenzgruppen |
 | `config.php` | leitet `LMSTUDIO_BASE_URL` und `LMSTUDIO_TIMEOUT` aus Endpunkten beziehungsweise Einstellungen ab |
 | `setup.php` | Erstinstallation: Tabellen, Migrationen, Standardeinstellungen, Standardadministrator |
 | `api/` | JSON- und SSE-Endpunkte sowie die Bibliotheken für Balancer und Embeddings |
-| `lib/` | Balancer-Engine, Prompt Security, OpenAI-Hilfsfunktionen, LDAP-Anbindung, SMTP-Client, Routing-Prompt |
+| `lib/` | Balancer-Engine, Prompt Security, OpenAI-Hilfsfunktionen, LDAP-Anbindung, SMTP-Client, Routing-Prompt, Reverse-Proxy-Unterstützung |
 | `admin/` | Administration, Dashboard-Livedaten, Nutzungsstatistik, SSH-Systemmetriken, API-Keys, Prompt Security |
 | `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth |
+| `docker-compose.lanpa.yml` | optionaler Override für den Betrieb hinter dem `auth`-Container von lanpa |
 | `docconvert/` | Python/FastAPI-Container zur Konvertierung von Office- und Textdateien in strukturierte Chunks |
 | `doc_uploads/`, `sd_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
 | `assets/`, `docs/`, `ressources/` | Bilder der Oberfläche, Diagramme der Dokumentation, Beispiel-Systemprompt |
@@ -386,6 +390,49 @@ docker compose down -v # entfernt auch Volumes und damit Daten
 
    Bei einer leeren Datenbank wird der Benutzer `admin` mit dem Passwort `admin` angelegt. Das Passwort sofort ändern und `setup.php` nach der Einrichtung absichern oder entfernen.
 
+## Betrieb hinter lanpa
+
+LLMInt lässt sich hinter den `auth`-Container von [lanpa](https://github.com/dareinelt/lanpa) stellen und ist dann unter `https://<lanpa-host>/ki/` erreichbar. Vorteile:
+
+- **Zentrale Zertifikatverwaltung:** HTTPS terminiert der `auth`-Container mit dem unter lanpa → Admin → **Zertifikate (HTTPS)** verwalteten Zertifikat; LLMInt braucht weder eigenes Zertifikat noch eigenen DNS-Namen.
+- **Windows-SSO ohne eigene Keytab:** Die Kerberos/NTLM-Anmeldung übernimmt der domänenverbundene `auth`-Container. Er verlangt sie nur für `/ki/sso.php` und reicht den erkannten Benutzer im Header `X-Remote-User` weiter.
+
+Ablauf der Anmeldung: Beim ersten Aufruf je Sitzung leitet `index.php` (bzw. `admin/login.php`) einmalig auf `sso.php`. Mit Domänenanmeldung wird der Benutzer wie bisher über LDAP-SSO angelegt bzw. angemeldet; ohne liefert lanpa `sso_fallback.php`, die zurück zur Zielseite führt (Gastzugang bzw. Anmeldeformular). Nach dem Abmelden erfolgt keine automatische Neuanmeldung; über **🪟 Mit Windows-Anmeldung anmelden** auf den Anmeldeseiten lässt sie sich erneut auslösen. Benutzer weiterer Identitätsquellen von lanpa (`X-Remote-Source`) werden nicht übernommen.
+
+**Einrichtung auf demselben Docker-Host:**
+
+1. Gemeinsames Netz einmalig anlegen:
+
+   ```bash
+   docker network create --subnet 172.30.251.0/24 llmint-proxy
+   ```
+
+2. LLMInt mit dem Override starten (hängt `web` mit dem Alias `llmint-web` an das Netz und setzt `TRUSTED_PROXIES=172.30.251.0/24` sowie `PROXY_SSO_HEADER=X-Remote-User`). Den direkten Port auf localhost beschränken, damit TLS nicht umgangen wird:
+
+   ```bash
+   # .env
+   HTTP_PORT=127.0.0.1:8080
+   COMPOSE_FILE=docker-compose.yml:docker-compose.lanpa.yml
+
+   docker compose up -d
+   ```
+
+3. In lanpa `LLMINT_ENABLED=true` und `LLMINT_UPSTREAM=http://llmint-web` setzen (optional `LLMINT_PATH`, Standard `/ki`) und `docker-compose.llmint.yml` in `COMPOSE_FILE` aufnehmen, damit der `auth`-Container an `llmint-proxy` hängt (Details in `docs/llmint.md` von lanpa).
+4. Für SSO in LLMInt unter **Einstellungen → LDAP** LDAP aktivieren und **Windows-SSO** einschalten.
+5. Optional in lanpa eine Kachel auf `/ki/` anlegen.
+
+**LLMInt auf einem anderen Host:** `LLMINT_UPSTREAM=http://<llmint-host>:8080` in lanpa, in LLMInt `TRUSTED_PROXIES=<IP des lanpa-Hosts>` und `PROXY_SSO_HEADER=X-Remote-User`; den Port per Firewall nur für den lanpa-Host freigeben.
+
+| Variable | Bedeutung |
+|---|---|
+| `TRUSTED_PROXIES` | IP-Adressen, CIDR-Bereiche oder Hostnamen der Reverse-Proxys (kommagetrennt). Nur von dort werden `X-Forwarded-For/-Proto/-Host/-Prefix` und der SSO-Header übernommen, von allen anderen Absendern verworfen. Leer = bisheriges Verhalten. |
+| `PROXY_SSO_HEADER` | Header mit dem vom Proxy angemeldeten Benutzer (lanpa: `X-Remote-User`); wird als `REMOTE_USER` an die vorhandene LDAP-SSO-Logik übergeben. Leer = aus. |
+| `LLMINT_PROXY_NETWORK` | Name des gemeinsamen Docker-Netzes in `docker-compose.lanpa.yml` (Standard `llmint-proxy`). |
+
+Technik: `lib/reverse_proxy.php` wird im Container per `auto_prepend_file` (`docker/php.ini`) vor jedem Skript geladen und zusätzlich von `db.php` eingebunden. Es ermittelt die Client-IP aus `X-Forwarded-For` (von rechts, vertrauenswürdige Hops übersprungen), setzt `HTTPS` und das `secure`-Flag des Sitzungscookies und bildet absolute Links (E-Mail-Verifikation, Passwort-Reset, OpenAI-Basis-URL) mit dem Präfix aus `X-Forwarded-Prefix`. Alle übrigen Links der Oberfläche sind relativ und funktionieren unter `/ki/` ohne Anpassung; den Cookie-Pfad schreibt lanpa auf `/ki/` um. Bei klassischer Installation `auto_prepend_file` auf `lib/reverse_proxy.php` setzen, damit das `secure`-Flag greift.
+
+Hinweis: LLMInt läuft unter `/ki/` im selben Origin wie lanpa. Beide Anwendungen verwenden unterschiedliche, `HttpOnly`-gesetzte Sitzungscookies (`PHPSESSID` bzw. `INTRANETSESSID`); generierte Bilder in `sd_output/` werden nur als PNG mit `X-Content-Type-Options: nosniff` ausgeliefert, Dokument-Uploads gar nicht.
+
 ## Erstkonfiguration
 
 Nach der Anmeldung unter `/admin/login.php`:
@@ -568,6 +615,7 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 | Dokument-Upload schlägt fehl | Upload-Recht, Dateityp/-größe, Schreibrechte und bei PDFs `pdftotext` |
 | Keine Embeddings | `embedding_enabled`, aktiver Embedding-Endpunkt, Endpunkt-URL und Admin-Statistik |
 | LDAP-Login oder SMTP-Versand fehlschlägt | Konfiguration und die jeweiligen Testendpunkte |
+| Hinter lanpa: falsche Client-IP, Links ohne `/ki/` oder kein SSO | `TRUSTED_PROXIES` muss die Adresse des `auth`-Containers abdecken, `PROXY_SSO_HEADER=X-Remote-User`, LDAP und Windows-SSO in den Einstellungen aktiv |
 | Keine SSH-Metriken | PHP-Erweiterung `ssh2`, Endpunktzugangsdaten und `lm-sensors` auf dem Zielhost |
 
 ## Lizenz

@@ -39,7 +39,9 @@ Ollama) with multi-model routing, load balancing, hybrid RAG, image generation
 | `lib/healthcheck.php` | Active `/models` probing of LLM endpoints; drives `index.php` maintenance-mode fallback |
 | `lib/prompt_security.php` | Prompt-injection detection: rules, normalization, scoring, AI evaluation, logging |
 | `lib/openai_api.php` | OpenAI API key handling, payload normalization, error formatting |
-| `lib/ldap_auth.php` | LDAP bind, user sync, Kerberos SSO |
+| `lib/ldap_auth.php` | LDAP bind, user sync, Kerberos SSO (direct or via reverse proxy) |
+| `lib/reverse_proxy.php` | Running behind a reverse proxy (lanpa `auth` container, `/ki/`): `TRUSTED_PROXIES`, client IP, HTTPS, `X-Forwarded-Prefix`, proxy SSO header (`PROXY_SSO_HEADER`), `appPublicBaseUrl()`; loaded via `auto_prepend_file` and `db.php` |
+| `sso.php`, `sso_fallback.php` | Proxy SSO entry point (Kerberos/NTLM enforced by lanpa) and fallback ErrorDocument |
 | `lib/mailer.php` | Custom SMTP client (no PHPMailer) |
 | `api/chat.php` | **Main chat pipeline**: prompt security → routing → balancer → tools (search, web fetch, RAG, image gen) → streaming → token accounting |
 | `api/balancer.php` | `pickEndpointForModel()`, `completeTask()`, upgrade suggestions, model availability |
@@ -89,8 +91,10 @@ domain:
   `psLoadRules()`, `psNormalise()`, `psMatchRules()`, `psComputeScore()`,
   `psAiEvaluate()`, `psDecide()`, `psLog()`.
 - **Auth** (`lib/ldap_auth.php`, `login.php`, `register.php`): `ldapEnabled()`,
-  `ldapSsoEnabled()`, `ldapAuthenticate()`, `ldapProvisionUser()`,
-  `ldapTestConnection()`.
+  `ldapSsoEnabled()`, `ldapProxySsoEnabled()`, `ldapSsoLogin()`, `ldapAuthenticate()`,
+  `ldapProvisionUser()`, `ldapTestConnection()`.
+- **Reverse proxy** (`lib/reverse_proxy.php`): `reverseProxyApply()`,
+  `reverseProxyIsTrusted()`, `reverseProxySsoEnabled()`, `appPublicBaseUrl()`.
 - **Image generation**: `pickSdEndpoint()`/`completeSdTask()` (`api/sd_balancer.php`),
   `pickComfyEndpoint()`/`completeComfyTask()` (`api/comfy_balancer.php`).
 - **OpenAI-compatible API**: `api/openai/v1/**` (no tools), `api/openai-tools/v1/**`

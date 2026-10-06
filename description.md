@@ -35,6 +35,7 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `config.php` | 27 | Definiert `LMSTUDIO_BASE_URL` und `LMSTUDIO_TIMEOUT` aus erstem aktivem Endpunkt bzw. Einstellungen |
 | `setup.php` | 345 | Installer: Tabellen, Migrationen, Seed-Einstellungen, Standardadministrator `admin/admin` |
 | `login.php`, `logout.php`, `register.php` | 292/15/443 | Anmeldung (lokal, LDAP, SSO), Abmeldung, Selbstregistrierung mit E-Mail-Verifikation |
+| `sso.php`, `sso_fallback.php` | – | Windows-SSO über den Reverse-Proxy von lanpa (Header aus `PROXY_SSO_HEADER`) und Rückfallseite ohne Domänenanmeldung |
 | `api/chat.php` | 3.339 | Zentrale Chat-Pipeline: Prompt Security, Routing, Balancer, Tools, Streaming, Upgrade, Token-Abrechnung |
 | `api/balancer.php` | 337 | `pickEndpointForModel()`, `completeTask()`, Upgrade-Vorschlag, Modellverfügbarkeit |
 | `api/embedding.php` | 541 | Embeddings erzeugen, Cache, Cosine-Similarity, Reranking, Chunk-Embeddings |
@@ -51,11 +52,13 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `lib/balancer_engine.php` | 468 | Gemeinsame Balancer-Logik für LLM, AUTOMATIC1111 und ComfyUI |
 | `lib/prompt_security.php` | 499 | Regelwerk, Normalisierung, Scoring, Entscheidung, Logging |
 | `lib/openai_api.php` | 209 | optionale API-Key-Erkennung, anonymer API-Kontext mit Log-Präfix, öffentliche Basis-URL, Payload-Normalisierung (Gast-Standardmodell), Fehlerformat |
-| `lib/ldap_auth.php` | 320 | LDAP-Bind, Benutzerabgleich, Kerberos-SSO |
+| `lib/ldap_auth.php` | 320 | LDAP-Bind, Benutzerabgleich, Kerberos-SSO (direkt oder über Reverse-Proxy) |
+| `lib/reverse_proxy.php` | – | Betrieb hinter Reverse-Proxy (lanpa): `TRUSTED_PROXIES`, Client-IP, HTTPS, `X-Forwarded-Prefix`, Proxy-SSO-Header, `appPublicBaseUrl()` |
 | `lib/mailer.php` | 334 | Eigener SMTP-Client (kein PHPMailer) |
 | `lib/prompt.txt` | – | Fallback-Kategorien/Prompt für das Routing, importierbar in die DB |
 | `doc_uploads/`, `sd_output/` | – | Laufzeitdaten (per `.htaccess` geschützt), Docker-Volumes |
 | `docker/`, `Dockerfile`, `docker-compose.yml` | – | Container-Setup inklusive phpMyAdmin mit Basic Auth |
+| `docker-compose.lanpa.yml` | – | Override: `web` im externen Netz `llmint-proxy` (Alias `llmint-web`) hinter dem lanpa-`auth`-Container |
 | `README.md`, `Demo.md` | – | technische bzw. nicht-technische Dokumentation |
 
 ---
@@ -125,6 +128,16 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 - Anmeldereihenfolge in `login.php` und `admin/login.php`: Kerberos-SSO (`REMOTE_USER` über
   `ldapSsoEnabled()`/`ldapSsoUsername()`) → LDAP (`ldapAuthenticate()`, danach
   `ldapProvisionUser()`) → lokale Prüfung mit `password_verify()`.
+- Reverse-Proxy (lanpa `auth`-Container, Unterpfad `/ki/`): `lib/reverse_proxy.php` wird per
+  `auto_prepend_file` (`docker/php.ini`) und aus `db.php` geladen. Nur Peers aus
+  `TRUSTED_PROXIES` dürfen `X-Forwarded-*` und den SSO-Header (`PROXY_SSO_HEADER`, lanpa:
+  `X-Remote-User`) setzen; die Datei setzt daraus `REMOTE_ADDR`, `HTTPS`,
+  `session.cookie_secure` und `REMOTE_USER`. Absolute Links über `appPublicBaseUrl()`
+  (inkl. `X-Forwarded-Prefix`). Proxy-SSO: `index.php`/`admin/login.php` leiten einmal je
+  Sitzung (`$_SESSION['sso_attempted']`) auf `sso.php` (vom Proxy per Kerberos/NTLM
+  geschützt, `ldapSsoLogin()`); ohne Domänenanmeldung liefert der Proxy `sso_fallback.php`.
+  Rückziel über `$_SESSION['sso_return']` (`index.php` | `admin`). Abmeldung setzt
+  `sso_attempted`, damit keine sofortige Neuanmeldung erfolgt.
 - `register.php` erzeugt Verifikationstoken, versendet Mail über `sendMail()` und wird durch
   `api/verify_email.php` abgeschlossen; Passwort-Reset läuft über `api/reset_password.php`.
 - Dokument-Upload erfordert `users.can_upload_documents = 1`.

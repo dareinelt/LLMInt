@@ -47,6 +47,17 @@ if (ldapSsoEnabled()) {
     }
 }
 
+// ── SSO via reverse proxy (lanpa) ─────────────────────────────────────────────
+$proxySso = ldapProxySsoEnabled();
+if (!empty($_SESSION['sso_error'])) {
+    $error = (string) $_SESSION['sso_error'];
+    unset($_SESSION['sso_error']);
+} elseif ($proxySso && $_SERVER['REQUEST_METHOD'] !== 'POST' && isset($_GET['sso'])) {
+    $_SESSION['sso_return'] = 'index.php';
+    header('Location: sso.php');
+    exit;
+}
+
 // ── Form POST ─────────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $error === '') {
     if (($_POST['csrf_token'] ?? '') !== $csrfToken) {
@@ -286,6 +297,9 @@ $ldapActive = ldapEnabled();
     </form>
 
     <a class="register-link" href="register.php">✍ Noch kein Konto? Jetzt registrieren</a>
+    <?php if ($proxySso): ?>
+        <a class="register-link" href="login.php?sso=1">🪟 Mit Windows-Anmeldung anmelden</a>
+    <?php endif; ?>
     <a class="back-link" href="index.php">← Ohne Anmeldung fortfahren</a>
 </div>
 </body>
