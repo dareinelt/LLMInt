@@ -19,6 +19,9 @@ $target  = $targets[$_SESSION['sso_return'] ?? 'index.php'] ?? 'index.php';
 unset($_SESSION['sso_return']);
 $_SESSION['sso_attempted'] = true;
 
+// The proxy serves this page as body of the Negotiate challenge; only a 401
+// lets domain browsers continue with Kerberos/NTLM.
+http_response_code(401);
 header('Cache-Control: no-store');
 $href = htmlspecialchars($target, ENT_QUOTES);
 ?>
