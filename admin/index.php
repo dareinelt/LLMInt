@@ -2825,6 +2825,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     Erfordert Apache <code>mod_auth_kerb</code> / <code>mod_auth_ntlm_winbind</code>
                     oder IIS Windows Authentication. Der Webserver muss <code>REMOTE_USER</code>
                     / <code>AUTH_USER</code> setzen.
+                    Alternativ übernimmt der <code>auth</code>-Container von lanpa die Windows-Anmeldung
+                    (Umgebungsvariablen <code>TRUSTED_PROXIES</code> und <code>PROXY_SSO_HEADER</code>,
+                    siehe README „Betrieb hinter lanpa“)<?= function_exists('reverseProxySsoEnabled') && reverseProxySsoEnabled() ? ' – <strong>aktiv</strong>' : '' ?>.
                 </p>
             </div>
 

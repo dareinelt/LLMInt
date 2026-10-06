@@ -52,6 +52,11 @@ services:
       MILVUS_METRICS_URL: ${MILVUS_METRICS_URL:-http://milvus:9091}
       # PHP timezone (overrides docker/php.ini if set)
       TZ: ${TZ:-Europe/Berlin}
+      # Reverse proxy (e.g. lanpa auth container, see docker-compose.lanpa.yml):
+      # IPs/CIDRs/host names whose X-Forwarded-* headers are trusted, and the
+      # header carrying the Windows-SSO user ("X-Remote-User" for lanpa).
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      PROXY_SSO_HEADER: ${PROXY_SSO_HEADER:-}
     volumes:
       # Persist uploaded documents and generated images across restarts
       - doc_uploads:/var/www/html/doc_uploads

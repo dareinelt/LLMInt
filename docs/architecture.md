@@ -180,6 +180,12 @@ Details zu Feldnamen und Funktionen, die diese Tabellen lesen/schreiben, siehe
   (`ldapSsoEnabled()`/`ldapSsoUsername()` über `REMOTE_USER`) → LDAP
   (`ldapAuthenticate()`, danach `ldapProvisionUser()`) → lokale Prüfung mit
   `password_verify()`.
+- Betrieb hinter lanpa (`/ki/`): `lib/reverse_proxy.php` (per `auto_prepend_file`)
+  übernimmt `X-Forwarded-*` und den SSO-Header nur von `TRUSTED_PROXIES`. Proxy-SSO:
+  `index.php`/`admin/login.php` → `sso.php` (vom lanpa-`auth`-Container per Kerberos/NTLM
+  geschützt, setzt `X-Remote-User` → `REMOTE_USER` → `ldapSsoLogin()`); ohne
+  Domänenanmeldung liefert lanpa `sso_fallback.php`, einmal je Sitzung
+  (`$_SESSION['sso_attempted']`).
 - `register.php` erzeugt ein Verifikationstoken, versendet Mail über `sendMail()` und
   wird durch `api/verify_email.php` abgeschlossen; Passwort-Reset läuft über
   `api/reset_password.php`.

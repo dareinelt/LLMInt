@@ -12,6 +12,14 @@ if (!isset($_SESSION['admin_user']) && ldapSsoEnabled() && ldapSsoUsername() !==
     exit;
 }
 
+// ── SSO via reverse proxy (lanpa): try the Windows login once per session ──
+if (!isset($_SESSION['admin_user']) && empty($_SESSION['sso_attempted']) && ldapProxySsoEnabled()) {
+    $_SESSION['sso_attempted'] = true;
+    $_SESSION['sso_return']    = 'index.php';
+    header('Location: sso.php');
+    exit;
+}
+
 // ── Maintenance mode: show a fallback page instead of the chat UI when no
 //    active LLM endpoint currently responds to a health probe ─────────────────
 if (!isAnyLlmEndpointHealthy()) {

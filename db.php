@@ -13,6 +13,10 @@
  *   DB_PASS  (default: empty)
  */
 
+// Reverse-proxy normalisation (no-op unless TRUSTED_PROXIES is set; normally
+// already loaded via auto_prepend_file).
+require_once __DIR__ . '/lib/reverse_proxy.php';
+
 function getDb(): PDO
 {
     static $pdo = null;
@@ -1169,7 +1173,9 @@ function requireAdminOrJson403(): void
 
 /**
  * Return the best-guess client IP address.
- * Checks X-Forwarded-For when a trusted proxy injects it, falls back to REMOTE_ADDR.
+ * Checks X-Forwarded-For when a proxy injects it, falls back to REMOTE_ADDR.
+ * With TRUSTED_PROXIES configured, lib/reverse_proxy.php has already resolved
+ * the client into REMOTE_ADDR and removed X-Forwarded-For.
  */
 function getClientIp(): string
 {

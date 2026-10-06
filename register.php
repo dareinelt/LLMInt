@@ -90,9 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     )->execute([$username, $hash, $email, $token, $expires, $newUserModel]);
 
                     // Send verification e-mail
-                    $verifyUrl = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http')
-                        . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost')
-                        . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/\\')
+                    $verifyUrl = appPublicBaseUrl()
                         . '/api/verify_email.php?token=' . urlencode($token);
 
                     $siteName = getSetting('smtp_from_name', 'LLMInt');

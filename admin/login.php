@@ -36,6 +36,19 @@ if (ldapSsoEnabled()) {
     }
 }
 
+// ── SSO via reverse proxy (lanpa): try the Windows login once per session ──
+$proxySso = ldapProxySsoEnabled();
+if (!empty($_SESSION['sso_error'])) {
+    $error = (string) $_SESSION['sso_error'];
+    unset($_SESSION['sso_error']);
+} elseif ($proxySso && $_SERVER['REQUEST_METHOD'] !== 'POST'
+    && (empty($_SESSION['sso_attempted']) || isset($_GET['sso']))) {
+    $_SESSION['sso_attempted'] = true;
+    $_SESSION['sso_return']    = 'admin';
+    header('Location: ../sso.php');
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $error === '') {
     $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
@@ -256,6 +269,9 @@ $ldapActive = ldapEnabled();
         <button type="submit" class="btn-primary">Anmelden</button>
     </form>
 
+    <?php if ($proxySso): ?>
+        <a class="back-link" href="login.php?sso=1">🪟 Mit Windows-Anmeldung anmelden</a>
+    <?php endif; ?>
     <a class="back-link" href="../index.php">← Zurück zum Chat</a>
 </div>
 </body>
