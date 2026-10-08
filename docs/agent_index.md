@@ -51,11 +51,11 @@ Ollama) with multi-model routing, load balancing, hybrid RAG, image generation
 | `api/pdf_render.php` | `pdftoppm`/`pdfinfo` wrappers: PDF pages → JPEG, per-page text layer |
 | `api/vision.php` | `analyzeImageWithVision()` – shared vision-model call incl. balancer + task accounting |
 | `docconvert/` | Python/FastAPI container converting Office & text files into structured chunks (TTL disk cache) |
-| `admin/index.php` | Admin UI: endpoints, routing, balancer, RAG, LDAP/SMTP, users, logs |
+| `admin/index.php` | Admin UI: endpoints, routing, balancer, RAG, LDAP/SMTP, users, logs, OpenAI API keys |
 | `admin/prompt_security.php` | Prompt security rule management |
 | `admin/load_stats.php` | Live dashboard stats (JSON) |
 | `admin/refresh_sys_stats.php` | SSH system metrics per endpoint |
-| `admin/api_keys.php` | OpenAI-compatible API key management (optional model binding per key) |
+| `admin/api_keys.php` | Legacy redirect to the `#api-keys-card` section of `admin/index.php` |
 | `admin/endpoint_tech.php` | quickinfo pairing per endpoint + live technical overview (CPU/GPU/RAM/VRAM, temps) |
 | `admin/quickinfo_stats.php` | JSON live metrics of all paired quickinfo instances |
 | `lib/quickinfo.php` | Client for the quickinfo Management-Board API (`/api/v1/*`) |
@@ -167,7 +167,7 @@ Full data model description: [`architecture.md`](architecture.md#4-datenmodell-�
 | Add embedding provider | `api/embedding.php` → `pickEmbeddingEndpoint()`, `generateEmbedding()` |
 | Modify RAG/chunking | `api/upload_document.php` (routing/chunking), `docconvert/app/*.py` (format parsing), `api/embedding.php` (embeddings), `api/chat.php` → `queryDocuments()` |
 | Add a document format | `docconvert/app/converters.py` (parser + `SUPPORTED_FORMATS`), `api/doc_convert.php` (MIME map), `index.php` (accept lists) |
-| Admin UI changes | `admin/index.php` (main), `admin/prompt_security.php`, `admin/api_keys.php` |
+| Admin UI changes | `admin/index.php` (main, incl. API keys), `admin/prompt_security.php` |
 | Auth changes | `login.php`, `register.php`, `lib/ldap_auth.php` |
 | OpenAI API changes | `lib/openai_api.php`, `api/openai*/**` |
 | Image generation | `api/sd_*.php`, `api/comfy_*.php`, `lib/balancer_engine.php` |
@@ -238,7 +238,7 @@ Legacy keys: `lmstudio_base_url`, `lmstudio_timeout`, `endpoints_bootstrapped`.
 │   ├── prompt_security.php
 │   ├── load_stats.php
 │   ├── refresh_sys_stats.php
-│   ├── api_keys.php
+│   ├── api_keys.php       # legacy redirect to index.php#api-keys-card
 │   ├── endpoint_tech.php  # quickinfo pairing + technical overview
 │   ├── quickinfo_stats.php
 │   └── login.php / logout.php

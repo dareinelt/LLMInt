@@ -468,7 +468,8 @@ CSRF-Token, u. a. `add_endpoint`, `update_endpoint`, `delete_endpoint`,
 `reset_circuit`, `toggle_endpoint_pause`, `save_balancer_settings`,
 `save_routing_settings`, `add_routing_category`, `save_hybrid_search_settings`,
 `save_reranker_settings`, `save_smtp_settings`, `save_ldap_settings`,
-`add_sd_endpoint`, `add_comfy_endpoint`, `add_embedding_endpoint`, `change_password`
+`add_sd_endpoint`, `add_comfy_endpoint`, `add_embedding_endpoint`,
+`create_api_key`, `toggle_api_key`, `delete_api_key`, `change_password`
 u. v. m. (vollständige Liste in [`functions.md`](functions.md#adminindexphp)).
 
 Die Oberfläche ist in Karten mit stabilen IDs gegliedert (`dashboard-card`,
@@ -476,10 +477,11 @@ Die Oberfläche ist in Karten mit stabilen IDs gegliedert (`dashboard-card`,
 `config-sd-card`, `config-comfy-card`, `config-vector-store-card`,
 `config-embedding-card`, `config-hybrid-search-card`, `config-reranker-card`,
 `config-global-system-prompt-card`, `config-smtp-card`, `config-ldap-card`,
-`log-viewer-card`, `users-card`, `password-card` u. a.).
+`log-viewer-card`, `users-card`, `openai-api-card`, `api-keys-card`, `password-card` u. a.).
 
 Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
-`admin/refresh_sys_stats.php` (SSH-Metriken), `admin/api_keys.php` (API-Keys),
+`admin/refresh_sys_stats.php` (SSH-Metriken),
+`admin/api_keys.php` (Weiterleitung auf die Karte `api-keys-card` im Dashboard),
 `admin/endpoint_tech.php` + `admin/quickinfo_stats.php` (quickinfo-Pairing, technische Endpunktübersicht),
 `admin/prompt_security.php` (Sicherheitsmodul).
 

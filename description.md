@@ -41,11 +41,11 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `api/embedding.php` | 541 | Embeddings erzeugen, Cache, Cosine-Similarity, Reranking, Chunk-Embeddings |
 | `api/upload_document.php` | 488 | Datei-Upload, Textextraktion, Chunking, Vision-Analyse |
 | `api/openai*/**` | – | OpenAI-kompatible Fassade (`v1/models`, `v1/chat/completions`) |
-| `admin/index.php` | 8.158 | Administration: Dashboard, Endpunkte, Routing, Balancer, RAG, LDAP/SMTP, Benutzer, Logs |
+| `admin/index.php` | 8.406 | Administration: Dashboard, Endpunkte, Routing, Balancer, RAG, LDAP/SMTP, Benutzer, Logs, OpenAI-API-Keys |
 | `admin/prompt_security.php` | 878 | Prompt-Security-Regeln, Logs und Einstellungen |
 | `admin/load_stats.php` | 317 | JSON-Livedaten für das Dashboard |
 | `admin/refresh_sys_stats.php` | 211 | SSH-Abfrage von RAM/CPU/Temperatur je Endpunkt |
-| `admin/api_keys.php` | 256 | API-Keys (optionales, fest am Key hinterlegtes Modell) und kopierbare Basis-URLs der OpenAI-kompatiblen API |
+| `admin/api_keys.php` | 25 | Weiterleitung auf die Karte `api-keys-card` in `admin/index.php` (API-Keys mit optionalem, fest am Key hinterlegtem Modell und kopierbaren Basis-URLs der OpenAI-kompatiblen API) |
 | `admin/endpoint_tech.php` | – | Endpunkte technische Verwaltung: quickinfo-Pairing je Endpunkt und Live-Übersicht (CPU/GPU/RAM/VRAM, Temperaturen) |
 | `admin/quickinfo_stats.php` | – | JSON-Livedaten aller gekoppelten quickinfo-Instanzen (parallel per curl_multi) |
 | `lib/quickinfo.php` | – | Client für die quickinfo Management-Board-API (`/api/v1/status`, `info`, `history`) |
@@ -331,7 +331,8 @@ Verfügbare Aktionen:
 `delete_comfy_endpoint`, `save_routing_settings`, `add_routing_category`,
 `update_routing_category`, `delete_routing_category`, `import_prompt_txt`, `save_log_config`,
 `add_embedding_endpoint`, `update_embedding_endpoint`, `delete_embedding_endpoint`,
-`save_hybrid_search_settings`, `save_reranker_settings`, `change_password`.
+`save_hybrid_search_settings`, `save_reranker_settings`,
+`create_api_key`, `toggle_api_key`, `delete_api_key`, `change_password`.
 
 Die Oberfläche ist in Karten mit stabilen IDs gegliedert, unter anderem `dashboard-card`,
 `config-endpoints-card`, `config-request-handling-card`, `config-balancer-card`,
@@ -339,10 +340,11 @@ Die Oberfläche ist in Karten mit stabilen IDs gegliedert, unter anderem `dashbo
 `config-embedding-card`, `config-hybrid-search-card`, `config-reranker-card`,
 `embedding-stats-card`, `config-global-system-prompt-card`, `config-system-messages-card`,
 `config-smtp-card`, `config-ldap-card`, `config-searxng-card`, `log-config-card`,
-`log-viewer-card`, `users-card`, `password-card`.
+`log-viewer-card`, `users-card`, `openai-api-card`, `api-keys-card`, `password-card`.
 
 Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
-`admin/refresh_sys_stats.php` (SSH-Metriken), `admin/api_keys.php` (API-Keys),
+`admin/refresh_sys_stats.php` (SSH-Metriken),
+`admin/api_keys.php` (Weiterleitung auf die Karte `api-keys-card` im Dashboard),
 `admin/endpoint_tech.php` + `admin/quickinfo_stats.php` (quickinfo-Pairing und technische Endpunktübersicht),
 `admin/prompt_security.php` (Sicherheitsmodul).
 

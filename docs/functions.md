@@ -502,7 +502,7 @@ Nur eine top-level Funktion:
 `update_routing_category`, `delete_routing_category`, `import_prompt_txt`,
 `save_log_config`, `add_embedding_endpoint`, `update_embedding_endpoint`,
 `delete_embedding_endpoint`, `save_hybrid_search_settings`, `save_reranker_settings`,
-`change_password`.
+`create_api_key`, `toggle_api_key`, `delete_api_key`, `change_password`.
 
 ## admin/refresh_sys_stats.php
 
@@ -514,7 +514,7 @@ Nur eine top-level Funktion:
 
 | Datei | Zweck |
 |---|---|
-| `admin/api_keys.php` | CRUD für OpenAI-kompatible API-Keys (erzeugen/aktivieren/löschen), Modellwahl je Key und kopierbare API-Basis-URLs |
+| `admin/api_keys.php` | Weiterleitung auf die Karte `#api-keys-card` in `admin/index.php` (CRUD für OpenAI-kompatible API-Keys, Modellwahl je Key, kopierbare API-Basis-URLs) |
 | `admin/endpoint_tech.php` | quickinfo-Pairing je Endpunkt (`pair_quickinfo`, `test_quickinfo`, `unpair_quickinfo`) und Live-Übersicht |
 | `admin/quickinfo_stats.php` | JSON: Modell, Ø Token/s (heute) und quickinfo-Metriken je Endpunkt |
 | `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients, SD/ComfyUI-Zahlen) |
