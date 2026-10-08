@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../lib/openai_api.php';
 
-openaiAuthenticateApiRequest();
+$apiKey = openaiAuthenticateApiRequest();
 
-$models = openaiAvailableModels();
+$models = openaiAvailableModels($apiKey);
 
 header('Content-Type: application/json; charset=utf-8');
 echo json_encode([

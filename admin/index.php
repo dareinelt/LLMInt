@@ -5047,10 +5047,11 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         <h2>🔌 OpenAI-kompatible API</h2>
         <p class="hint" style="margin-bottom:12px">
             Externe Applikationen greifen über diese Basis-URLs auf die KI zu. API-Zugriffe verhalten sich wie
-            ein nicht angemeldeter Benutzer: Sie verwenden immer das Gast-Standardmodell
+            ein nicht angemeldeter Benutzer: Sie verwenden das Gast-Standardmodell
             (<code><?= htmlspecialchars(getGuestDefaultModel() !== '' ? getGuestDefaultModel() : '– nicht konfiguriert –') ?></code>),
             durchlaufen Routing und Lastverteilung wie ein direkter Zugriff und werden im Log mit <code>API</code> gekennzeichnet.
-            Ein <a href="api_keys.php">API-Key</a> ist optional und dient nur der Zuordnung im Log.
+            Ein <a href="api_keys.php">API-Key</a> ist optional. Er dient der Zuordnung im Log und kann optional ein
+            festes Modell festlegen; ohne Modell gilt das Standardmodell.
         </p>
         <?php foreach ([
             'openai-api-url'       => ['Ohne Tools', openaiPublicBaseUrl(false)],

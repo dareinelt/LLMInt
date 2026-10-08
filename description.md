@@ -31,9 +31,9 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | Pfad | Zeilen (ca.) | Zuständigkeit |
 |---|---:|---|
 | `index.php` | 3.520 | Chat-Oberfläche: PHP-Bootstrap (Session, Einstellungen), CSS, HTML, gesamtes Frontend-JS |
-| `db.php` | 1.774 | PDO-Verbindung, idempotentes Schema (`ensureRuntimeSchema`), Einstellungen, Logging, Routing-Stammdaten, Chat-Sessions, Intelligenzgruppen |
+| `db.php` | 2.130 | PDO-Verbindung, idempotentes Schema (`ensureRuntimeSchema`), Einstellungen, Logging, Routing-Stammdaten, Chat-Sessions, Intelligenzgruppen, Modellliste der aktiven Endpunkte |
 | `config.php` | 27 | Definiert `LMSTUDIO_BASE_URL` und `LMSTUDIO_TIMEOUT` aus erstem aktivem Endpunkt bzw. Einstellungen |
-| `setup.php` | 345 | Installer: Tabellen, Migrationen, Seed-Einstellungen, Standardadministrator `admin/admin` |
+| `setup.php` | 467 | Installer: Tabellen, Migrationen, Seed-Einstellungen, Standardadministrator `admin/admin` |
 | `login.php`, `logout.php`, `register.php` | 292/15/443 | Anmeldung (lokal, LDAP, SSO), Abmeldung, Selbstregistrierung mit E-Mail-Verifikation |
 | `sso.php`, `sso_fallback.php` | – | Windows-SSO über den Reverse-Proxy von lanpa (Header aus `PROXY_SSO_HEADER`) und Rückfallseite ohne Domänenanmeldung |
 | `api/chat.php` | 3.339 | Zentrale Chat-Pipeline: Prompt Security, Routing, Balancer, Tools, Streaming, Upgrade, Token-Abrechnung |
@@ -41,17 +41,17 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `api/embedding.php` | 541 | Embeddings erzeugen, Cache, Cosine-Similarity, Reranking, Chunk-Embeddings |
 | `api/upload_document.php` | 488 | Datei-Upload, Textextraktion, Chunking, Vision-Analyse |
 | `api/openai*/**` | – | OpenAI-kompatible Fassade (`v1/models`, `v1/chat/completions`) |
-| `admin/index.php` | 7.047 | Administration: Dashboard, Endpunkte, Routing, Balancer, RAG, LDAP/SMTP, Benutzer, Logs |
+| `admin/index.php` | 8.158 | Administration: Dashboard, Endpunkte, Routing, Balancer, RAG, LDAP/SMTP, Benutzer, Logs |
 | `admin/prompt_security.php` | 878 | Prompt-Security-Regeln, Logs und Einstellungen |
 | `admin/load_stats.php` | 317 | JSON-Livedaten für das Dashboard |
 | `admin/refresh_sys_stats.php` | 211 | SSH-Abfrage von RAM/CPU/Temperatur je Endpunkt |
-| `admin/api_keys.php` | 196 | API-Keys und kopierbare Basis-URLs der OpenAI-kompatiblen API |
+| `admin/api_keys.php` | 256 | API-Keys (optionales, fest am Key hinterlegtes Modell) und kopierbare Basis-URLs der OpenAI-kompatiblen API |
 | `admin/endpoint_tech.php` | – | Endpunkte technische Verwaltung: quickinfo-Pairing je Endpunkt und Live-Übersicht (CPU/GPU/RAM/VRAM, Temperaturen) |
 | `admin/quickinfo_stats.php` | – | JSON-Livedaten aller gekoppelten quickinfo-Instanzen (parallel per curl_multi) |
 | `lib/quickinfo.php` | – | Client für die quickinfo Management-Board-API (`/api/v1/status`, `info`, `history`) |
 | `lib/balancer_engine.php` | 468 | Gemeinsame Balancer-Logik für LLM, AUTOMATIC1111 und ComfyUI |
 | `lib/prompt_security.php` | 499 | Regelwerk, Normalisierung, Scoring, Entscheidung, Logging |
-| `lib/openai_api.php` | 209 | optionale API-Key-Erkennung, anonymer API-Kontext mit Log-Präfix, öffentliche Basis-URL, Payload-Normalisierung (Gast-Standardmodell), Fehlerformat |
+| `lib/openai_api.php` | 264 | optionale API-Key-Erkennung inkl. Modellbindung je Key, anonymer API-Kontext mit Log-Präfix, öffentliche Basis-URL, Payload-Normalisierung (Key- oder Gast-Standardmodell), Fehlerformat |
 | `lib/ldap_auth.php` | 320 | LDAP-Bind, Benutzerabgleich, Kerberos-SSO (direkt oder über Reverse-Proxy) |
 | `lib/reverse_proxy.php` | – | Betrieb hinter Reverse-Proxy (lanpa): `TRUSTED_PROXIES`, Client-IP, HTTPS, `X-Forwarded-Prefix`, Proxy-SSO-Header, `appPublicBaseUrl()` |
 | `lib/mailer.php` | 334 | Eigener SMTP-Client (kein PHPMailer) |
@@ -91,7 +91,7 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 |---|---|
 | `settings` | Key-Value-Konfiguration (`setting_key`, `setting_value`) |
 | `users` | Konten: `username`, `password_hash`, `email`, `email_verified`, `email_verification_token`, `password_reset_token`, `default_model`, `requires_password_change`, `can_upload_documents`, `role` (`user`/`admin`), `auth_source` (`local`/`ldap`), `ldap_dn`, `last_login` |
-| `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer |
+| `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer (optionales, fest am Key hinterlegtes Modell) |
 | `endpoints` | LLM-Endpunkte: `base_url`, `default_model`, `timeout`, `is_active`, Fähigkeiten (Tool Calling, Vision), Balancer-Gesundheit (`circuit_state`, `consecutive_failures`, `cooldown_until`, `avg_latency_ms`), SSH-Zugang (`ssh_*`), quickinfo-Pairing (`quickinfo_url`, `quickinfo_api_key`, `quickinfo_verify_tls`) |
 | `tasks` | Lebenszyklus jeder LLM-Anfrage: `endpoint_id`, `status` (`running`/`done`/`error`), Tokenzähler, `tokens_per_second` |
 | `endpoint_sys_stats` | per SSH gelesene Systemmetriken je Endpunkt |
@@ -368,8 +368,8 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
 | `api/admin_user_action.php` | POST | Admin + CSRF | Benutzerverwaltung |
 | `api/verify_email.php`, `api/reset_password.php` | GET/POST | Token | E-Mail-Verifikation, Passwort-Reset |
-| `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | anonym (API-Key optional, nur für Log) | OpenAI-kompatibel, ohne Tools; Gast-Standardmodell, Log-Präfix `[API]` |
-| `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | anonym (API-Key optional, nur für Log) | OpenAI-kompatibel, mit Tools; Gast-Standardmodell, Log-Präfix `[API]` |
+| `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | anonym (API-Key optional: Log-Zuordnung und optional festes Modell) | OpenAI-kompatibel, ohne Tools; Key-Modell bzw. Gast-Standardmodell, Log-Präfix `[API]` |
+| `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | anonym (API-Key optional: Log-Zuordnung und optional festes Modell) | OpenAI-kompatibel, mit Tools; Key-Modell bzw. Gast-Standardmodell, Log-Präfix `[API]` |
 
 `api/balancer.php`, `api/sd_balancer.php`, `api/comfy_balancer.php` und `api/embedding.php`
 sind reine Bibliotheken und werden eingebunden, nicht direkt aufgerufen.

@@ -168,12 +168,13 @@ Gemeinsame Balancer-Logik für LLM-, AUTOMATIC1111- und ComfyUI-Endpunkte.
 | `openaiApiKeyHash` | `openaiApiKeyHash(string $plainKey): string` | Berechnet den SHA-256-Hash eines API-Keys. |
 | `openaiGenerateApiKeyMaterial` | `openaiGenerateApiKeyMaterial(): array` | Generiert neues API-Key-Material (Klartext, Hash, Präfix). |
 | `openaiReadBearerToken` | `openaiReadBearerToken(): string` | Extrahiert das Bearer-Token aus dem `Authorization`-Header. |
-| `openaiAuthenticateApiRequest` | `openaiAuthenticateApiRequest(): ?array` | Erkennt einen optionalen API-Key; liefert `key_id`/`name` eines gültigen Keys, sonst `null` (anonym). Meldet nie als Key-Besitzer an. |
+| `openaiAuthenticateApiRequest` | `openaiAuthenticateApiRequest(): ?array` | Erkennt einen optionalen API-Key; liefert `key_id`/`name`/`model` eines gültigen Keys, sonst `null` (anonym). Meldet nie als Key-Besitzer an. |
 | `openaiBeginAnonymousApiRequest` | `openaiBeginAnonymousApiRequest(?array $apiKey): void` | Leert `$_SESSION` (keine PHP-Sitzung) und setzt das Log-Präfix `[API]` bzw. `[API · Key „Name“]` (`LLMINT_API_LOG_TAG`). |
 | `openaiPublicBaseUrl` | `openaiPublicBaseUrl(bool $withTools = false): string` | Öffentliche Basis-URL der API über `appPublicBaseUrl(true)` (berücksichtigt `X-Forwarded-Proto`/`-Host`/`-Prefix`) für die Anzeige im Admin-Bereich. |
-| `openaiAvailableModels` | `openaiAvailableModels(): array` | Liefert nur das Gast-Standardmodell (`getGuestDefaultModel()`). |
+| `openaiResolveApiKeyModel` | `openaiResolveApiKeyModel(?array $apiKey): string` | Liefert das am API-Key hinterlegte Modell, sofern es von einem aktiven Endpunkt angeboten wird; sonst das Gast-Standardmodell. |
+| `openaiAvailableModels` | `openaiAvailableModels(?array $apiKey = null): array` | Liefert das effektiv verwendete Modell (`openaiResolveApiKeyModel()`), also Key-Modell oder Gast-Standardmodell. |
 | `openaiNormalizeMessages` | `openaiNormalizeMessages(array $messages): array` | Normalisiert ein Nachrichtenarray ins OpenAI-Format inkl. Validierung. |
-| `openaiNormalizeChatPayload` | `openaiNormalizeChatPayload(array $input): array` | Normalisiert und validiert den eingehenden Chat-Completion-Request-Payload. |
+| `openaiNormalizeChatPayload` | `openaiNormalizeChatPayload(array $input, string $model = ''): array` | Normalisiert und validiert den eingehenden Chat-Completion-Request-Payload; `$model` überschreibt das im Request angeforderte Modell. |
 
 ## lib/reverse_proxy.php
 
@@ -472,8 +473,8 @@ Diese Dateien enthalten ausschließlich prozeduralen Code (kein top-level `funct
 | `api/sd_generate.php` | Bildgenerierung via AUTOMATIC1111 |
 | `api/test_ldap.php` | Ruft `ldapTestConnection()` auf |
 | `api/test_smtp.php` | Ruft `sendMail()` zum Testversand auf |
-| `api/openai_common/chat_completions.php` | Optionale Key-Erkennung, anonymer Kontext ohne PHP-Sitzung, Gast-Standardmodell, Zugriffs-Log, bindet `api/chat.php`-Logik ein |
-| `api/openai_common/models.php` | Optionale Key-Erkennung, ruft `openaiAvailableModels()` auf |
+| `api/openai_common/chat_completions.php` | Optionale Key-Erkennung, anonymer Kontext ohne PHP-Sitzung, Modell des API-Keys bzw. Gast-Standardmodell, Zugriffs-Log, bindet `api/chat.php`-Logik ein |
+| `api/openai_common/models.php` | Optionale Key-Erkennung, ruft `openaiAvailableModels($apiKey)` auf |
 | `api/openai/v1/chat/completions/index.php` | Setzt `LLMINT_OPENAI_TOOL_MODE='disabled'`, bindet `openai_common/chat_completions.php` ein |
 | `api/openai/v1/models/index.php` | Bindet `openai_common/models.php` ein |
 | `api/openai-tools/v1/chat/completions/index.php` | Setzt `LLMINT_OPENAI_TOOL_MODE='enabled'`, bindet `openai_common/chat_completions.php` ein |
@@ -513,7 +514,7 @@ Nur eine top-level Funktion:
 
 | Datei | Zweck |
 |---|---|
-| `admin/api_keys.php` | CRUD für OpenAI-kompatible API-Keys (erzeugen/aktivieren/löschen) und kopierbare API-Basis-URLs |
+| `admin/api_keys.php` | CRUD für OpenAI-kompatible API-Keys (erzeugen/aktivieren/löschen), Modellwahl je Key und kopierbare API-Basis-URLs |
 | `admin/endpoint_tech.php` | quickinfo-Pairing je Endpunkt (`pair_quickinfo`, `test_quickinfo`, `unpair_quickinfo`) und Live-Übersicht |
 | `admin/quickinfo_stats.php` | JSON: Modell, Ø Token/s (heute) und quickinfo-Metriken je Endpunkt |
 | `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients, SD/ComfyUI-Zahlen) |

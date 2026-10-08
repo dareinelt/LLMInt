@@ -73,9 +73,10 @@ function openaiReadBearerToken(): string
  *
  * Without an Authorization header – or with an unknown, inactive or expired
  * key – the request is accepted anonymously. A valid key is only used for
- * identification in the log – API clients never act as the key owner.
+ * identification in the log and for the optional model it pins – API clients
+ * never act as the key owner.
  *
- * @return array{key_id:int,name:string}|null Key info, or null without key.
+ * @return array{key_id:int,name:string,model:string}|null Key info, or null without key.
  */
 function openaiAuthenticateApiRequest(): ?array
 {
@@ -88,7 +89,7 @@ function openaiAuthenticateApiRequest(): ?array
 
     try {
         $stmt = getDb()->prepare(
-            'SELECT ak.id, ak.name
+            'SELECT ak.id, ak.name, ak.model
                FROM api_keys ak
               WHERE ak.api_key_hash = ?
                 AND ak.is_active = 1
@@ -116,6 +117,7 @@ function openaiAuthenticateApiRequest(): ?array
     return [
         'key_id' => (int) $row['id'],
         'name' => (string) $row['name'],
+        'model' => trim((string) ($row['model'] ?? '')),
     ];
 }
 
@@ -145,13 +147,29 @@ function openaiPublicBaseUrl(bool $withTools = false): string
 }
 
 /**
- * Models offered via the API. Like anonymous web visitors, API clients always
- * start with the guest default model; routing and load balancing take it from
- * there.
+ * Effective model of an OpenAI-compatible API request.
+ *
+ * A key can pin a model; it is used as long as an active endpoint still serves
+ * it. Without a pinned (or no longer available) model – and for anonymous
+ * requests – the guest default model applies.
  */
-function openaiAvailableModels(): array
+function openaiResolveApiKeyModel(?array $apiKey): string
 {
-    $model = getGuestDefaultModel();
+    $model = trim((string) ($apiKey['model'] ?? ''));
+    if ($model !== '' && in_array($model, listActiveEndpointModels(), true)) {
+        return $model;
+    }
+
+    return getGuestDefaultModel();
+}
+
+/**
+ * Models offered via the API: the model pinned to the API key, otherwise the
+ * guest default model. Routing and load balancing take it from there.
+ */
+function openaiAvailableModels(?array $apiKey = null): array
+{
+    $model = openaiResolveApiKeyModel($apiKey);
     return $model !== '' ? [$model] : [];
 }
 
@@ -195,11 +213,18 @@ function openaiNormalizeMessages(array $messages): array
     return $normalized;
 }
 
-function openaiNormalizeChatPayload(array $input): array
+/**
+ * @param string $model Model to use; empty string falls back to the guest
+ *                      default model (anonymous access or key without model).
+ */
+function openaiNormalizeChatPayload(array $input, string $model = ''): array
 {
-    // Like an anonymous web visitor, the API always uses the guest default
-    // model – the "model" field of the request is ignored.
-    $model = getGuestDefaultModel();
+    // Like an anonymous web visitor, the API uses the guest default model –
+    // unless the request carries an API key with a pinned model. The "model"
+    // field of the request is always ignored.
+    if ($model === '') {
+        $model = getGuestDefaultModel();
+    }
     if ($model === '') {
         openaiSendError(503, 'No default model configured.', 'server_error');
     }
