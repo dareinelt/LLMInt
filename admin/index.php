@@ -13,6 +13,7 @@ session_start();
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../lib/balancer_engine.php';
 require_once __DIR__ . '/../lib/openai_api.php';
+require_once __DIR__ . '/../lib/speech_dictation.php';
 
 requireAdminOrRedirect('login.php');
 
@@ -24,6 +25,27 @@ $visionModel = trim(getSetting('vision_model', ''));
 $pdfVisionEnabled  = getSetting('pdf_vision_enabled', '1') === '1';
 $pdfVisionDpi      = max(72, min(300, (int) getSetting('pdf_vision_dpi', '150')));
 $pdfVisionMaxPages = max(1, min(200, (int) getSetting('pdf_vision_max_pages', '30')));
+
+// ── Speech recognition / dictation ───────────────────────────────────────────
+// The URLs are read through the library so the admin card always shows the
+// value that is actually in effect (environment variables win over settings).
+$speechEnabled        = getSetting('speech_dictation_enabled', '1') === '1';
+$speechWhisperUrl     = speechDictationWhisperUrl();
+$speechWhisperUrlSrc  = speechDictationWhisperUrlSource();
+$speechWhisperModel   = speechDictationWhisperModel();
+$speechWhisperTimeout = speechDictationWhisperTimeout();
+$speechLanguage       = speechDictationLanguage();
+$speechQwenUrl        = speechDictationQwenUrl();
+$speechQwenUrlSrc     = speechDictationQwenUrlSource();
+$speechQwenModel      = speechDictationQwenModel();
+$speechQwenTimeout    = speechDictationQwenTimeout();
+$speechBufferWords    = speechDictationBufferWords();
+$speechStopTimeout    = speechDictationStopTimeoutSeconds();
+$speechMaxSegment     = speechDictationMaxSegmentSeconds();
+$speechMaxAudioMb     = (int) round(speechDictationMaxAudioBytes() / 1048576);
+$speechPillCount      = count(speechDictationPills());
+$speechCommandCount   = count(speechDictationCommands());
+
 $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
 $intelligenceUpgradeMessage = getSetting('intelligence_upgrade_message', '');
 if ($intelligenceUpgradeMessage === '') {
@@ -482,6 +504,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $flashOk = $newVisionModel === ''
                 ? 'Vision-Modell zurückgesetzt (Dokument-Upload deaktiviert).'
                 : 'Vision-Modell gespeichert.';
+
+        // ── Save speech recognition / dictation settings ──────────────────────
+        } elseif ($action === 'save_speech_dictation_settings') {
+            $newEnabled      = isset($_POST['speech_dictation_enabled']) ? '1' : '0';
+            $newWhisperUrl   = trim($_POST['speech_dictation_whisper_url'] ?? '');
+            $newWhisperModel = trim($_POST['speech_dictation_whisper_model'] ?? '');
+            $newLanguage     = trim($_POST['speech_dictation_language'] ?? '');
+            $newQwenUrl      = trim($_POST['speech_dictation_qwen_url'] ?? '');
+            $newQwenModel    = trim($_POST['speech_dictation_qwen_model'] ?? '');
+            $newBufferWords  = (int) ($_POST['speech_dictation_buffer_words'] ?? 4);
+            $newStopTimeout  = (int) ($_POST['speech_dictation_stop_timeout_seconds'] ?? 3);
+            $newMaxSegment   = (int) ($_POST['speech_dictation_max_segment_seconds'] ?? 15);
+            $newMaxAudioMb   = (int) ($_POST['speech_dictation_max_audio_mb'] ?? 10);
+            $newWhisperTmo   = (int) ($_POST['speech_dictation_whisper_timeout'] ?? 120);
+            $newQwenTmo      = (int) ($_POST['speech_dictation_qwen_timeout'] ?? 60);
+
+            // URLs are stored without a trailing slash and only when they are
+            // syntactically valid; everything else would end up in curl_init().
+            $urlErrors = [];
+            foreach ([['Whisper-URL', $newWhisperUrl], ['Qwen-URL', $newQwenUrl]] as [$label, $candidate]) {
+                if ($candidate === '') {
+                    continue;
+                }
+                if (!preg_match('#^https?://[A-Za-z0-9._\-]+(:\d+)?(/[^\s]*)?$#', $candidate)) {
+                    $urlErrors[] = $label . ' ist keine gültige http(s)-URL.';
+                }
+            }
+
+            if ($urlErrors) {
+                $flashError = implode(' ', $urlErrors);
+            } elseif ($newBufferWords < 1 || $newBufferWords > 50) {
+                $flashError = 'Die Anzahl gepufferter Wörter muss zwischen 1 und 50 liegen.';
+            } elseif ($newStopTimeout < 1 || $newStopTimeout > 60) {
+                $flashError = 'Die Wartezeit bis „Erkennung beenden" muss zwischen 1 und 60 Sekunden liegen.';
+            } elseif ($newMaxSegment < 3 || $newMaxSegment > 120) {
+                $flashError = 'Die maximale Segmentdauer muss zwischen 3 und 120 Sekunden liegen.';
+            } elseif ($newMaxAudioMb < 1 || $newMaxAudioMb > 100) {
+                $flashError = 'Die maximale Audiodateigröße muss zwischen 1 und 100 MB liegen.';
+            } elseif ($newWhisperTmo < 10 || $newWhisperTmo > 600) {
+                $flashError = 'Der Whisper-Timeout muss zwischen 10 und 600 Sekunden liegen.';
+            } elseif ($newQwenTmo < 10 || $newQwenTmo > 300) {
+                $flashError = 'Der Qwen-Timeout muss zwischen 10 und 300 Sekunden liegen.';
+            } else {
+                setSetting('speech_dictation_enabled', $newEnabled);
+                setSetting('speech_dictation_whisper_url', $newWhisperUrl === '' ? '' : rtrim($newWhisperUrl, '/'));
+                setSetting('speech_dictation_whisper_model', $newWhisperModel === '' ? 'small' : $newWhisperModel);
+                setSetting('speech_dictation_language', $newLanguage === '' ? 'de' : $newLanguage);
+                setSetting('speech_dictation_qwen_url', $newQwenUrl === '' ? '' : rtrim($newQwenUrl, '/'));
+                setSetting('speech_dictation_qwen_model', $newQwenModel === '' ? 'Qwen3.5-2B Q4' : $newQwenModel);
+                setSetting('speech_dictation_buffer_words', (string) $newBufferWords);
+                setSetting('speech_dictation_stop_timeout_seconds', (string) $newStopTimeout);
+                setSetting('speech_dictation_max_segment_seconds', (string) $newMaxSegment);
+                setSetting('speech_dictation_max_audio_mb', (string) $newMaxAudioMb);
+                setSetting('speech_dictation_whisper_timeout', (string) $newWhisperTmo);
+                setSetting('speech_dictation_qwen_timeout', (string) $newQwenTmo);
+
+                // Re-read through the accessors so the form shows the effective
+                // values (an environment variable may still win).
+                $speechEnabled        = getSetting('speech_dictation_enabled', '1') === '1';
+                $speechWhisperUrl     = speechDictationWhisperUrl();
+                $speechWhisperUrlSrc  = speechDictationWhisperUrlSource();
+                $speechWhisperModel   = speechDictationWhisperModel();
+                $speechWhisperTimeout = speechDictationWhisperTimeout();
+                $speechLanguage       = speechDictationLanguage();
+                $speechQwenUrl        = speechDictationQwenUrl();
+                $speechQwenUrlSrc     = speechDictationQwenUrlSource();
+                $speechQwenModel      = speechDictationQwenModel();
+                $speechQwenTimeout    = speechDictationQwenTimeout();
+                $speechBufferWords    = speechDictationBufferWords();
+                $speechStopTimeout    = speechDictationStopTimeoutSeconds();
+                $speechMaxSegment     = speechDictationMaxSegmentSeconds();
+                $speechMaxAudioMb     = (int) round(speechDictationMaxAudioBytes() / 1048576);
+
+                $flashOk = 'Spracherkennungs-Einstellungen gespeichert.';
+            }
 
         // ── Save SMTP settings ────────────────────────────────────────────────
         } elseif ($action === 'save_smtp_settings') {
@@ -1784,22 +1881,23 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         #dashboard-card { order: 1; }
         #usage-stats-card { order: 2; }
         #config-smtp-card { order: 3; }
-        #config-searxng-card { order: 4; }
-        #config-endpoints-card { order: 5; }
-        #config-request-handling-card { order: 6; }
-        #config-global-system-prompt-card { order: 7; }
-        #config-balancer-card { order: 8; }
-        #config-sd-card { order: 9; }
-        #config-comfy-card { order: 10; }
-        #config-routing-card { order: 11; }
-        #config-vector-store-card { order: 12; }
-        #config-embedding-card { order: 13; }
-        #config-hybrid-search-card { order: 14; }
-        #config-reranker-card { order: 15; }
-        #embedding-stats-card { order: 16; }
-        #config-system-messages-card { order: 17; }
-        #log-config-card { order: 18; }
-        #log-viewer-card { order: 19; }
+        #config-speech-card { order: 4; }
+        #config-searxng-card { order: 5; }
+        #config-endpoints-card { order: 6; }
+        #config-request-handling-card { order: 7; }
+        #config-global-system-prompt-card { order: 8; }
+        #config-balancer-card { order: 9; }
+        #config-sd-card { order: 10; }
+        #config-comfy-card { order: 11; }
+        #config-routing-card { order: 12; }
+        #config-vector-store-card { order: 13; }
+        #config-embedding-card { order: 14; }
+        #config-hybrid-search-card { order: 15; }
+        #config-reranker-card { order: 16; }
+        #embedding-stats-card { order: 17; }
+        #config-system-messages-card { order: 18; }
+        #log-config-card { order: 19; }
+        #log-viewer-card { order: 20; }
 
         /* ── Vektordatenbank ─────────────────────────────────────── */
         .vector-mode-grid {
@@ -2334,6 +2432,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <span class="sidebar-label">Konfiguration</span>
     <a href="#config-smtp-card">📧 E-Mail (SMTP)</a>
     <a href="#config-ldap-card">🏢 Active Directory</a>
+    <a href="#config-speech-card">🎙️ Spracherkennung</a>
     <a href="#config-searxng-card">🔎 Websuche</a>
     <a href="#config-endpoints-card">🔗 Endpunkte</a>
     <a href="#config-request-handling-card">📨 Anfragenhandling</a>
@@ -2921,6 +3020,162 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 </button>
                 <span id="ldap-test-result" style="font-size:.85rem"></span>
             </div>
+            </form>
+        </details>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Speech recognition / dictation
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="card" id="config-speech-card">
+        <details class="config-panel" id="config-speech" open>
+            <summary>🎙️ Spracherkennung / Diktat</summary>
+            <form method="POST">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+            <input type="hidden" name="action" value="save_speech_dictation_settings">
+
+            <div class="form-group">
+                <label style="display:flex;align-items:center;gap:8px">
+                    <input type="checkbox" name="speech_dictation_enabled" value="1"
+                           <?= $speechEnabled ? 'checked' : '' ?> style="width:auto">
+                    Spracherkennung aktiviert
+                </label>
+                <p class="hint">
+                    Blendet den Mikrofon-Button 🎙 in der Chat-Eingabe ein. Das Diktat steht
+                    angemeldeten Benutzern zur Verfügung.
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-whisper-url">Whisper-Server-URL (whisper.cpp)</label>
+                <input type="url" id="speech-whisper-url" name="speech_dictation_whisper_url"
+                       placeholder="http://whisper:8080"
+                       value="<?= htmlspecialchars($speechWhisperUrl) ?>">
+                <p class="hint">
+                    Basis-URL des whisper.cpp-HTTP-Servers, ohne Pfad – der Endpunkt
+                    <code>/inference</code> wird automatisch ergänzt.<br>
+                    Aktuell wirksam: <strong><?= htmlspecialchars(speechDictationSourceLabel($speechWhisperUrlSrc)) ?></strong><?php
+                    if ($speechWhisperUrlSrc === 'env'): ?> – die Umgebungsvariable
+                    <code>WHISPER_URL</code> hat Vorrang vor diesem Feld.<?php endif; ?><br>
+                    Leer lassen, um die Spracherkennung zu deaktivieren.
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-whisper-model">Whisper-Modell</label>
+                <input type="text" id="speech-whisper-model" name="speech_dictation_whisper_model"
+                       placeholder="small" value="<?= htmlspecialchars($speechWhisperModel) ?>">
+                <p class="hint">
+                    Bezeichnung des Modells, das der Whisper-Server geladen hat (z.&nbsp;B.
+                    <code>small</code>, <code>medium</code>, <code>large-v3</code>). Wird im
+                    Diktat-Container über <code>WHISPER_MODEL</code> gesetzt und hier nur dokumentiert.
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-language">Sprache</label>
+                <input type="text" id="speech-language" name="speech_dictation_language"
+                       placeholder="de" value="<?= htmlspecialchars($speechLanguage) ?>">
+                <p class="hint">
+                    Sprachcode für Whisper (z.&nbsp;B. <code>de</code>, <code>en</code>). Leer oder
+                    <code>auto</code> lässt die Sprache automatisch erkennen.
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-whisper-timeout">Whisper-Timeout (Sekunden)</label>
+                <input type="number" id="speech-whisper-timeout" name="speech_dictation_whisper_timeout"
+                       min="10" max="600" value="<?= (int) $speechWhisperTimeout ?>">
+                <p class="hint">Maximale Wartezeit für die Transkription eines Segments (10–600).</p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-qwen-url">Diktat-Modell-URL (llama.cpp / Qwen3.5-2B)</label>
+                <input type="url" id="speech-qwen-url" name="speech_dictation_qwen_url"
+                       placeholder="http://qwen:8080"
+                       value="<?= htmlspecialchars($speechQwenUrl) ?>">
+                <p class="hint">
+                    Basis-URL des llama.cpp-Servers mit dem Diktat-Modell, ohne Pfad – der
+                    OpenAI-kompatible Endpunkt <code>/v1/chat/completions</code> wird automatisch
+                    ergänzt.<br>
+                    Aktuell wirksam: <strong><?= htmlspecialchars(speechDictationSourceLabel($speechQwenUrlSrc)) ?></strong><?php
+                    if ($speechQwenUrlSrc === 'env'): ?> – die Umgebungsvariable
+                    <code>QWEN_URL</code> hat Vorrang vor diesem Feld.<?php endif; ?><br>
+                    Bleibt das Feld leer, wird das Diktat-Modell über den normalen
+                    <a href="#config-endpoints-card">Endpunkt-Pool</a> aufgelöst.
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-qwen-model">Diktat-Modell (Modellname)</label>
+                <input type="text" id="speech-qwen-model" name="speech_dictation_qwen_model"
+                       placeholder="Qwen3.5-2B Q4" value="<?= htmlspecialchars($speechQwenModel) ?>">
+                <p class="hint">
+                    Modellname für die Diktat-Verarbeitung. Muss zum <code>--alias</code> des
+                    llama.cpp-Servers passen bzw. – ohne eigene Diktat-URL – einem Modell im
+                    Endpunkt-Pool entsprechen.
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-qwen-timeout">Diktat-Modell-Timeout (Sekunden)</label>
+                <input type="number" id="speech-qwen-timeout" name="speech_dictation_qwen_timeout"
+                       min="10" max="300" value="<?= (int) $speechQwenTimeout ?>">
+                <p class="hint">Maximale Wartezeit für die Verarbeitung eines Textabschnitts (10–300).</p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-buffer-words">Anzahl gepufferter Wörter</label>
+                <input type="number" id="speech-buffer-words" name="speech_dictation_buffer_words"
+                       min="1" max="50" value="<?= (int) $speechBufferWords ?>">
+                <p class="hint">
+                    So viele Wörter werden zurückgehalten, bis der nachfolgende Kontext bekannt ist –
+                    erst dadurch sind Diktatbefehle wie <em>„neue Zeile"</em> zuverlässig erkennbar.
+                    Empfehlung: 3–4.
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-stop-timeout">Wartezeit bis „Erkennung beenden" (Sekunden)</label>
+                <input type="number" id="speech-stop-timeout" name="speech_dictation_stop_timeout_seconds"
+                       min="1" max="60" value="<?= (int) $speechStopTimeout ?>">
+                <p class="hint">
+                    Nach dieser Zeit ohne neu verarbeiteten Text erscheint die Schaltfläche
+                    „Erkennung beenden". Das Diktat läuft dabei weiter und kann fortgesetzt werden.
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-max-segment">Maximale Segmentdauer (Sekunden)</label>
+                <input type="number" id="speech-max-segment" name="speech_dictation_max_segment_seconds"
+                       min="3" max="120" value="<?= (int) $speechMaxSegment ?>">
+                <p class="hint">
+                    Die Mikrofonaufnahme wird in Segmente dieser Länge zerlegt und einzeln an
+                    Whisper gesendet. Kürzere Segmente liefern schnelleres Feedback, längere
+                    sind effizienter. Empfehlung: 10–20.
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label for="speech-max-audio">Maximale Audiodateigröße (MB)</label>
+                <input type="number" id="speech-max-audio" name="speech_dictation_max_audio_mb"
+                       min="1" max="100" value="<?= (int) $speechMaxAudioMb ?>">
+                <p class="hint">Größere Segmente werden verworfen und protokolliert (1–100 MB).</p>
+            </div>
+
+            <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
+                <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                <button type="button" id="speech-whisper-test-btn" class="btn">🔌 Whisper testen</button>
+                <button type="button" id="speech-qwen-test-btn" class="btn">🧠 Diktat-Modell testen</button>
+                <span id="speech-test-result" style="font-size:.85rem"></span>
+            </div>
+
+            <p class="hint" style="margin-top:12px">
+                Diktatbefehle: <strong><?= (int) $speechCommandCount ?></strong> Phrasen aktiv
+                (z.&nbsp;B. „Punkt", „Neue Zeile", „Lösche letztes Wort").
+                Kurzbefehle nach dem Diktat: <strong><?= (int) $speechPillCount ?></strong> Pills.
+                Die Kurzbefehle werden vom Standardmodell ausgeführt, nicht vom Diktat-Modell.
+            </p>
             </form>
         </details>
     </div>
@@ -5672,6 +5927,47 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     });
 })();
 
+// ── Speech recognition connection tests ──────────────────────────────────────
+(function () {
+    'use strict';
+
+    const whisperBtn = document.getElementById('speech-whisper-test-btn');
+    const qwenBtn    = document.getElementById('speech-qwen-test-btn');
+    const result     = document.getElementById('speech-test-result');
+
+    if (!whisperBtn || !qwenBtn || !result) { return; }
+
+    /** Probe one target through api/speech_health.php and report the result. */
+    async function probe(button, label, target) {
+        button.disabled    = true;
+        const original     = button.textContent;
+        button.textContent = '⟳ Teste …';
+        result.textContent = '';
+        try {
+            const res  = await fetch('../api/speech_health.php?target=' + encodeURIComponent(target));
+            const data = await res.json();
+            const part = data && data[target];
+            if (data && data.ok && part && part.ok) {
+                result.style.color = 'var(--success)';
+                result.textContent = '✓ ' + label + ': ' + part.message;
+            } else {
+                result.style.color = 'var(--error)';
+                result.textContent = '✗ ' + label + ': '
+                    + ((part && part.message) || (data && data.message) || 'Unbekannter Fehler');
+            }
+        } catch (e) {
+            result.style.color = 'var(--error)';
+            result.textContent = '✗ Netzwerkfehler: ' + e.message;
+        } finally {
+            button.disabled    = false;
+            button.textContent = original;
+        }
+    }
+
+    whisperBtn.addEventListener('click', () => probe(whisperBtn, 'Whisper', 'whisper'));
+    qwenBtn.addEventListener('click',    () => probe(qwenBtn, 'Diktat-Modell', 'qwen'));
+})();
+
 // ── Vector store (docvecwizard / Milvus) card ────────────────────────────────
 (function () {
     'use strict';
@@ -7812,6 +8108,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     const sectionIds = [
         'dashboard-card', 'usage-stats-card', 'config-smtp-card', 'config-ldap-card', 'config-searxng-card',
+        'config-speech-card',
         'config-endpoints-card', 'config-request-handling-card', 'config-global-system-prompt-card',
         'config-sd-card', 'config-comfy-card', 'config-system-messages-card',
         'config-vector-store-card', 'config-embedding-card', 'config-hybrid-search-card', 'config-reranker-card', 'embedding-stats-card',

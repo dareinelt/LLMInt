@@ -458,6 +458,14 @@ psLoadRules() → psNormalise() → psMatchRules() → psComputeScore()
   `csrf_token` an `api/upload_document.php`, Statusanzeige über `loadStatus()`/
   `renderUploads()`.
 - Präsenz: `sendHeartbeat()` gegen `api/heartbeat.php`.
+- Spracherkennung/Diktat (eigenes IIFE ab `#dictate-btn`): `loadConfig()` holt die
+  Konfiguration über `api/speech_config.php`; `start()` öffnet den `MediaRecorder`,
+  `armSegmentTimer()`/`startSegment()`/`safeCut()` schneiden Segmente, `transcribeSegment()`
+  ruft `api/speech_transcribe.php`, `processFragment()` ruft `api/speech_process.php` und
+  schreibt das Ergebnis über `insertText()` in das Feld. `drainBuffer()`/`enqueue()`/
+  `drainQueue()` serialisieren die Verarbeitung, `armStopTimer()` beendet die Erkennung nach
+  der eingestellten Stille. Nach dem Ende zeigen `showPills()`/`applyPill()` die
+  Schnellbefehl-Pillen, die das reguläre Standardmodell über `api/chat.php` ausführt.
 
 ---
 
@@ -469,15 +477,17 @@ CSRF-Token, u. a. `add_endpoint`, `update_endpoint`, `delete_endpoint`,
 `save_routing_settings`, `add_routing_category`, `save_hybrid_search_settings`,
 `save_reranker_settings`, `save_smtp_settings`, `save_ldap_settings`,
 `add_sd_endpoint`, `add_comfy_endpoint`, `add_embedding_endpoint`,
-`create_api_key`, `toggle_api_key`, `delete_api_key`, `change_password`
-u. v. m. (vollständige Liste in [`functions.md`](functions.md#adminindexphp)).
+`create_api_key`, `toggle_api_key`, `delete_api_key`, `change_password`,
+`save_speech_dictation_settings` u. v. m. (vollständige Liste in
+[`functions.md`](functions.md#adminindexphp)).
 
 Die Oberfläche ist in Karten mit stabilen IDs gegliedert (`dashboard-card`,
 `config-endpoints-card`, `config-balancer-card`, `config-routing-card`,
 `config-sd-card`, `config-comfy-card`, `config-vector-store-card`,
 `config-embedding-card`, `config-hybrid-search-card`, `config-reranker-card`,
-`config-global-system-prompt-card`, `config-smtp-card`, `config-ldap-card`,
-`log-viewer-card`, `users-card`, `openai-api-card`, `api-keys-card`, `password-card` u. a.).
+`config-global-system-prompt-card`, `config-speech-card`, `config-smtp-card`,
+`config-ldap-card`, `log-viewer-card`, `users-card`, `openai-api-card`,
+`api-keys-card`, `password-card` u. a.).
 
 Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 `admin/refresh_sys_stats.php` (SSH-Metriken),
@@ -505,6 +515,10 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/sd_generate.php`, `api/comfy_generate.php` | POST | Session | Bildgenerierung |
 | `api/sd_checkpoints.php`, `api/comfy_checkpoints.php` | GET | – | verfügbare Checkpoints |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
+| `api/speech_config.php` | GET | Session | Diktat-Konfiguration und CSRF-Token für die Oberfläche |
+| `api/speech_transcribe.php` | POST | Session + CSRF | Audiodatei → Rohtext (whisper.cpp) |
+| `api/speech_process.php` | POST | Session + CSRF | Diktat-Fragment → bereinigter Text (Diktat-Modell) |
+| `api/speech_health.php` | GET | Session | Verbindungstest, `target=whisper\|qwen\|both` |
 | `api/admin_user_action.php` | POST | Admin + CSRF | Benutzerverwaltung |
 | `api/verify_email.php`, `api/reset_password.php` | GET/POST | Token | E-Mail-Verifikation, Passwort-Reset |
 | `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | anonym (API-Key optional: Log-Zuordnung und optional festes Modell) | OpenAI-kompatibel, ohne Tools; Key-Modell bzw. Gast-Standardmodell, Log-Präfix `[API]` |
@@ -526,19 +540,67 @@ eingebunden, nicht direkt aufgerufen.
   `python-docx`, `openpyxl`, `xlrd`, `python-pptx`, `odfpy`, `striprtf`,
   `beautifulsoup4`/`lxml`. Läuft als unprivilegierter Nutzer, kein veröffentlichter
   Port – nur im Compose-Netz erreichbar.
+- `Dockerfile.whisper`: nativer Build des whisper.cpp-Servers (Multi-Stage,
+  `debian:bookworm-slim`). Nötig, weil das Upstream-Image nur `linux/amd64`
+  veröffentlicht und unter Emulation auf arm64-Hosts mit `SIGILL` abbricht. Setzt
+  `-DGGML_NATIVE=OFF` und pinnt die Architektur über `GGML_CPU_ARM_ARCH`
+  (`WHISPER_ARM_ARCH`, Standard `armv8.2-a+fp16+dotprod`), weil die Linux-VM von
+  Docker Desktop die Host-CPU nicht sieht. Das Ergebnis ist ein Drop-in-Ersatz für
+  das Upstream-Image (gleiche Binaries, gleicher Pfad für
+  `download-ggml-model.sh`).
 - `docker-compose.yml`: Dienste `db` (MySQL 8.0 mit Healthcheck), `web` (Port
   `HTTP_PORT`, Standard 8080), `docconvert` (interner Konverter), `milvus`
   (Milvus Standalone mit eingebettetem etcd und lokalem Storage, nur im
-  Compose-Netz erreichbar, für den Modus `local` der Wissensdatenbank) und
-  `phpmyadmin` (Port `PMA_PORT`, Standard 8081, per HTTP Basic Auth geschützt).
+  Compose-Netz erreichbar, für den Modus `local` der Wissensdatenbank),
+  `whisper` (whisper.cpp-HTTP-Server für die Spracherkennung, Modell im Volume
+  `whisper_models`) und `qwen` (llama.cpp mit Qwen3.5-2B Q4 für die
+  Diktat-Nachbearbeitung, GGUF im Volume `qwen_cache`) sowie `phpmyadmin`
+  (Port `PMA_PORT`, Standard 8081, per HTTP Basic Auth geschützt).
   Volumes: `db_data`, `doc_uploads`, `sd_output`, `docconvert_cache`,
-  `milvus_data`, `vector_imports`.
+  `milvus_data`, `vector_imports`, `whisper_models`, `qwen_cache`.
+- `docker-compose.test.yml`: Override für arm64-Hosts und schnelle lokale Tests.
+  Ersetzt das whisper-Image durch `Dockerfile.whisper`, setzt `platform` zurück und
+  lässt Milvus, phpMyAdmin und den Konverter weg.
 - `.env.example`: `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_ROOT_PASS`, `HTTP_PORT`,
   `PMA_PORT`, `PMA_BASIC_AUTH_USER`, `PMA_BASIC_AUTH_PASSWORD`, `TZ`,
   `DOCCONVERT_URL`, `DOCCONVERT_TOKEN`, `DOCCONVERT_TIMEOUT`,
   `DOCCONVERT_CACHE_TTL`, `DOCCONVERT_MAX_BYTES`, `DOCCONVERT_MAX_CHARS`,
   `DOCCONVERT_OVERLAP`, `DOCCONVERT_CACHE_MAX`, `MILVUS_VERSION`, `MILVUS_URL`,
-  `MILVUS_METRICS_URL`, `MILVUS_MEM_LIMIT`.
+  `MILVUS_METRICS_URL`, `MILVUS_MEM_LIMIT`, `WHISPER_URL`, `WHISPER_TOKEN`,
+  `WHISPER_TIMEOUT`, `WHISPER_MODEL`, `WHISPER_LANGUAGE`, `WHISPER_THREADS`,
+  `WHISPER_IMAGE_TAG`, `QWEN_URL`, `QWEN_TOKEN`, `QWEN_TIMEOUT`,
+  `QWEN_GGUF_REPO`, `QWEN_GGUF_FILE`, `QWEN_MODEL_ALIAS`, `QWEN_CTX_SIZE`,
+  `QWEN_THREADS`, `QWEN_IMAGE_TAG`.
+
+### 13.1 Diktat-Pipeline
+
+```
+Browser (MediaRecorder)
+  │  Segment (WebM/Opus)
+  ├─ POST api/speech_transcribe.php ──► whisper-Container  /inference ──► Rohtext
+  └─ POST api/speech_process.php ─────► qwen-Container      /v1/chat/completions
+                                          └─ bereinigter, befehlsverarbeiteter Text
+```
+
+- `lib/speech_dictation.php` ist die einzige Stelle mit Kenntnis von Whisper- und
+  Diktat-Modell. `speechDictationResolveCompletionTarget()` wählt zwischen dem
+  dedizierten Qwen-Container (`QWEN_URL`) und dem regulären Endpunkt-Pool.
+- Der Diktat-Aufruf sendet `chat_template_kwargs.enable_thinking=false` **und**
+  `reasoning_budget: 0`. Manche llama.cpp-Builds reichen das Jinja-Flag nicht an das
+  Chat-Template weiter; ohne `reasoning_budget: 0` füllt das Modell dann den
+  Token-Puffer mit einem Denkblock und die Antwort kommt leer zurück.
+- `speechDictationApplyCommands()` ist der deterministische Regel-Fallback und greift
+  nur, wenn das Modell nicht erreichbar ist – so geht kein erkannter Text verloren.
+- Struktur und Kontext macht die Pipeline, nicht das Modell:
+  `speechDictationSplitAtBreaks()` entfernt „Neue Zeile"/„Neuer Absatz" vor dem
+  Aufruf und `speechDictationProcessFragment()` setzt die Umbrüche wieder ein; der
+  bereits geschriebene Text steht in der Systemnachricht
+  (`speechDictationBuildSystemMessage()`), weil das Modell ihn als Nutzernachricht
+  im Ergebnis wiederholt. `speechDictationMatchLeadingCase()` und
+  `speechDictationDropInventedSentenceEnd()` halten die diktierten Groß-/
+  Kleinschreibung bzw. das Satzende fest.
+- Erkannte Texte werden nicht gespeichert; `speechDictationLogText()` protokolliert
+  nur eine Längenangabe.
 
 ---
 
