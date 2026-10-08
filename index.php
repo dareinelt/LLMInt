@@ -138,6 +138,16 @@ require_once __DIR__ . '/api/doc_convert.php';
 $docConvertAvailable = docConvertEnabled();
 $documentUploadEnabled = $loggedIn && $canUploadDocuments && ($visionModelConfigured || $docConvertAvailable);
 
+// Speech recognition / dictation: the microphone button is only offered when
+// an administrator enabled the feature and whisper is configured. The dictation
+// model itself is probed lazily so a slow container never delays the page.
+require_once __DIR__ . '/lib/speech_dictation.php';
+$speechDictationEnabled = speechDictationEnabled();
+// The dictation endpoints require an authenticated session (like the other
+// upload endpoints), so the microphone button is only offered to logged-in
+// users – guests keep the plain chat interface.
+$speechDictationReady   = $speechDictationEnabled && $loggedIn && speechDictationConfigured();
+
 // Login banner settings.
 $loginBannerEnabled = getSetting('login_banner_enabled', '0') === '1';
 $loginBannerText    = getSetting('login_banner_text', '');
@@ -1060,6 +1070,142 @@ $csrfToken = $_SESSION['csrf_token'];
 
         .cmd-suggestion:hover,
         .cmd-suggestion.selected { background: var(--surface-alt); }
+
+        /* ── Speech recognition / dictation ─────────────────────────── */
+        #dictate-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: .95rem;
+            transition: background .15s, color .15s;
+        }
+
+        #dictate-btn:hover:not(:disabled) { background: var(--surface-alt); color: var(--text); }
+        #dictate-btn:disabled { opacity: .5; cursor: progress; }
+
+        /* Recording: the button turns red and pulses while the microphone is
+           open, so the state is unmistakable even without reading the bar. */
+        #dictate-btn.recording {
+            color: #ff5a5a;
+            background: rgba(255,90,90,.14);
+            animation: dictate-pulse 1.4s ease-in-out infinite;
+        }
+
+        #dictate-btn.busy { color: var(--accent); }
+
+        @keyframes dictate-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255,90,90,.45); }
+            50%      { box-shadow: 0 0 0 6px rgba(255,90,90,0); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            #dictate-btn.recording { animation: none; }
+        }
+
+        /* Status bar above the composer: recording indicator, state text,
+           pending buffer size and the stop button. */
+        #dictate-bar {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 0 2px 8px;
+            font-size: .78rem;
+            color: var(--text-muted);
+        }
+
+        #dictate-bar.visible { display: flex; }
+
+        #dictate-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ff5a5a;
+            flex-shrink: 0;
+        }
+
+        #dictate-bar.processing #dictate-indicator {
+            background: var(--accent);
+            animation: dictate-blink 1s ease-in-out infinite;
+        }
+
+        #dictate-bar.stopping #dictate-indicator { background: #f5b301; }
+
+        #dictate-bar.error #dictate-indicator { background: var(--error, #ff5a5a); }
+
+        @keyframes dictate-blink {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: .25; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            #dictate-bar.processing #dictate-indicator { animation: none; }
+        }
+
+        #dictate-status { flex: 1; min-width: 0; }
+
+        #dictate-buffer {
+            font-variant-numeric: tabular-nums;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        /* The stop button only appears after the configured inactivity and
+           stays while dictation continues in the background. */
+        #dictate-stop-btn {
+            display: none;
+            border: 1px solid rgba(108,99,255,.45);
+            background: rgba(108,99,255,.15);
+            color: var(--accent);
+            border-radius: 999px;
+            padding: 4px 12px;
+            font-size: .78rem;
+            font-weight: 600;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background .15s;
+        }
+
+        #dictate-stop-btn:hover { background: rgba(108,99,255,.28); }
+
+        #dictate-bar.stop-available #dictate-stop-btn { display: inline-block; }
+
+        /* Quick-command pills shown once dictation has ended. */
+        #dictate-pills {
+            display: none;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            padding: 0 2px 8px;
+        }
+
+        #dictate-pills.visible { display: flex; }
+
+        .dictate-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(108,99,255,.13);
+            color: var(--accent);
+            border: 1px solid rgba(108,99,255,.4);
+            border-radius: 999px;
+            padding: 3px 12px;
+            font-size: .78rem;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: background .15s;
+        }
+
+        .dictate-pill:hover:not(:disabled) { background: rgba(108,99,255,.26); }
+        .dictate-pill:disabled { opacity: .5; cursor: progress; }
 
         #clear-btn {
             width: 32px;
@@ -2174,6 +2320,19 @@ $csrfToken = $_SESSION['csrf_token'];
         </div>
 <?php endif; ?>
 
+        <!-- Speech recognition / dictation: recording status, the pending word
+             buffer and the "Erkennung beenden" button that appears after the
+             configured inactivity. -->
+        <div id="dictate-bar" aria-live="polite">
+            <span id="dictate-indicator" aria-hidden="true"></span>
+            <span id="dictate-status"></span>
+            <span id="dictate-buffer"></span>
+            <button type="button" id="dictate-stop-btn" title="Diktat beenden und Text übernehmen">Erkennung beenden</button>
+        </div>
+
+        <!-- Quick-command pills offered after dictation ended -->
+        <div id="dictate-pills"></div>
+
         <!-- Main input container -->
         <div id="input-box">
             <div id="cmd-autocomplete" role="listbox" aria-label="Prompt-Funktionen"></div>
@@ -2202,6 +2361,9 @@ $csrfToken = $_SESSION['csrf_token'];
                    accept=".pdf,.docx,.xlsx,.xlsm,.xls,.pptx,.odt,.ods,.odp,.rtf,.csv,.tsv,.txt,.md,.json,.xml,.html,.htm,.yaml,.yml,.png,.jpg,.jpeg,.webp,.gif"
                    multiple style="display:none">
             <button id="attach-doc-btn" title="Dokument anhängen (PDF, Word, Excel, PowerPoint, Text …)">📎</button>
+<?php endif; ?>
+<?php if ($speechDictationReady): ?>
+            <button id="dictate-btn" title="Diktat starten (Spracherkennung)">🎙</button>
 <?php endif; ?>
             <button id="clear-btn" title="Verlauf löschen">🗑</button>
             <button id="send-btn" title="Senden">↑</button>
@@ -2569,6 +2731,23 @@ $csrfToken = $_SESSION['csrf_token'];
         return def ? key : null;
     }
 
+    /* Prompt additions registered at runtime (e.g. the quick-command pills the
+       dictation feature shows after stopping). They behave exactly like the
+       built-in "/command" functions: the instruction is appended to the system
+       prompt of the next request only, and the pill is removable. */
+    const DYNAMIC_COMMANDS = {};
+
+    function promptCommandDef(key) {
+        return PROMPT_COMMANDS[key] || DYNAMIC_COMMANDS[key] || null;
+    }
+
+    /** Register a runtime prompt addition and activate it for the next message. */
+    function activatePromptAddition(key, def) {
+        DYNAMIC_COMMANDS[key] = def;
+        if (!activeCommands.includes(key)) activeCommands.push(key);
+        renderCommandPills();
+    }
+
     /* Prompt functions active for the next message, in the order they were added. */
     let activeCommands = [];
 
@@ -2576,7 +2755,8 @@ $csrfToken = $_SESSION['csrf_token'];
         if (!cmdPillsEl) return;
         cmdPillsEl.innerHTML = '';
         activeCommands.forEach(key => {
-            const def = PROMPT_COMMANDS[key];
+            const def = promptCommandDef(key);
+            if (!def) return;
             const pill = document.createElement('span');
             pill.className = 'cmd-pill';
             pill.title = 'Prompt-Funktion: /' + key;
@@ -2626,7 +2806,7 @@ $csrfToken = $_SESSION['csrf_token'];
         if (!changed) return;
         userInput.value = text;
         renderCommandPills();
-        setStatus('Prompt-Funktion(en) aktiv: ' + activeCommands.map(k => PROMPT_COMMANDS[k].label).join(', '), 'info');
+        setStatus('Prompt-Funktion(en) aktiv: ' + activeCommands.map(k => (promptCommandDef(k) || { label: k }).label).join(', '), 'info');
         autoResizeTextarea(userInput);
     }
 
@@ -2942,6 +3122,14 @@ $csrfToken = $_SESSION['csrf_token'];
     // Exposed so the separate document-upload script can report into the
     // same status bar.
     window.setChatStatus = setStatus;
+
+    /* Hooks for the dictation script (see the "Spracherkennung / Diktat"
+       section further down): it activates a runtime prompt addition for the
+       quick-command pills and sends the dictated text through the regular
+       chat pipeline with the normal default model. */
+    window.llmintActivatePromptAddition = activatePromptAddition;
+    window.llmintSendMessage = sendMessage;
+    window.llmintGetInput = () => userInput.value;
 
     /* Auto-follow is paused as soon as the user scrolls up (e.g. to re-read
        older text while an answer is still being generated) and resumes once
@@ -4168,8 +4356,13 @@ $csrfToken = $_SESSION['csrf_token'];
         // fixed instruction that is appended to the system prompt for this
         // single request only.
         if (activeCommands.length > 0) {
-            const additions = activeCommands.map(k => PROMPT_COMMANDS[k].addition).join('\n\n');
-            sysPrompt = sysPrompt ? sysPrompt + '\n\n' + additions : additions;
+            const additions = activeCommands
+                .map(k => (promptCommandDef(k) || {}).addition || '')
+                .filter(Boolean)
+                .join('\n\n');
+            if (additions) {
+                sysPrompt = sysPrompt ? sysPrompt + '\n\n' + additions : additions;
+            }
             activeCommands = [];
             renderCommandPills();
         }
@@ -5324,5 +5517,626 @@ $csrfToken = $_SESSION['csrf_token'];
     });
 })();
 </script>
+<?php if ($speechDictationReady): ?>
+<script>
+/* ── Speech recognition / dictation ────────────────────────────────────────
+   Pipeline: microphone → MediaRecorder → whisper.cpp
+   (api/speech_transcribe.php) → word buffer → dictation model
+   (api/speech_process.php) → input field.
+
+   The microphone is recorded in fixed segments
+   (speech_dictation_max_segment_seconds). Every segment is a self-contained,
+   independently decodable recording, so each upload is complete and can be
+   transcribed on its own. Segments are transcribed and processed strictly in
+   order through a single promise chain, which is what keeps the inserted text
+   in order, free of duplicates and free of gaps.
+
+   The last speech_dictation_buffer_words words are deliberately held back:
+   dictation commands ("neue zeile", "lösche letztes wort", …) are only
+   unambiguous once the following words are known. Held-back words are flushed
+   when more speech arrives or when dictation ends – never dropped. */
+(function () {
+    'use strict';
+
+    const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    const btn      = document.getElementById('dictate-btn');
+    const bar      = document.getElementById('dictate-bar');
+    const statusEl = document.getElementById('dictate-status');
+    const bufferEl = document.getElementById('dictate-buffer');
+    const stopBtn  = document.getElementById('dictate-stop-btn');
+    const pillsEl  = document.getElementById('dictate-pills');
+    const input    = document.getElementById('user-input');
+    if (!btn || !bar || !statusEl || !stopBtn || !input) return;
+
+    /* UI states of the dictation state machine (§13). */
+    const STATE = Object.freeze({
+        IDLE: 'idle',
+        RECORDING: 'recording',
+        PROCESSING: 'processing',
+        WAITING: 'waiting',      /* stop button visible */
+        STOPPING: 'stopping',
+        FINISHED: 'finished'
+    });
+
+    /* Status text per state; transient messages override it until the next
+       state change. */
+    const STATUS_TEXT = {
+        [STATE.RECORDING]:  'Aufnahme aktiv – bitte sprechen.',
+        [STATE.PROCESSING]: 'Text wird verarbeitet …',
+        [STATE.WAITING]:    'Aufnahme aktiv – keine neuen Daten.',
+        [STATE.STOPPING]:   'Diktat wird abgeschlossen …'
+    };
+
+    /* Number of consecutive whisper failures tolerated before the dictation is
+       ended cleanly (§19). */
+    const MAX_WHISPER_FAILURES = 3;
+    /* Extra slack on top of the server-side timeouts before the browser aborts
+       a request, so the server always reports the error first (§19). */
+    const REQUEST_SLACK_MS = 15000;
+
+    let cfg          = null;             /* config from api/speech_config.php */
+    let cfgPromise   = null;
+    let state        = STATE.IDLE;
+    let session      = false;            /* dictation running (until finished) */
+    let stopping     = false;            /* stop requested, teardown in progress */
+    let stopVisible  = false;            /* "Erkennung beenden" shown */
+    let stream       = null;
+    let recorder     = null;
+    let segmentTimer = null;
+    let stopTimer    = null;
+    let uploadChain  = Promise.resolve();
+    let pendingWords = [];               /* recognized, not yet sent to the model */
+    let inflight     = 0;                /* running transcribe/process requests */
+    let statusText   = '';
+    let errorFlag    = false;
+    let whisperFailures = 0;
+    let commandPhrases  = [];            /* normalized command phrases, as words */
+    let maxPhraseWords  = 1;
+
+    /* ── Rendering ───────────────────────────────────────────────────── */
+
+    function refreshState() {
+        if (!session) {
+            state = STATE.IDLE;
+        } else if (stopping) {
+            state = STATE.STOPPING;
+        } else if (inflight > 0) {
+            state = STATE.PROCESSING;
+        } else if (stopVisible) {
+            state = STATE.WAITING;
+        } else {
+            state = STATE.RECORDING;
+        }
+
+        const active = session;
+        bar.classList.toggle('visible', active);
+        bar.classList.toggle('processing', state === STATE.PROCESSING);
+        bar.classList.toggle('stopping', state === STATE.STOPPING);
+        bar.classList.toggle('stop-available', stopVisible && active && !stopping);
+        bar.classList.toggle('error', errorFlag && active);
+        btn.classList.toggle('recording', state === STATE.RECORDING);
+        btn.classList.toggle('busy', state === STATE.PROCESSING || state === STATE.STOPPING);
+        btn.disabled = state === STATE.STOPPING;
+        btn.setAttribute('aria-pressed', state === STATE.RECORDING ? 'true' : 'false');
+        btn.title = state === STATE.RECORDING
+            ? 'Diktat beenden (Spracherkennung stoppen)'
+            : 'Diktat starten (Spracherkennung)';
+
+        statusEl.textContent = statusText || STATUS_TEXT[state] || '';
+        bufferEl.textContent = pendingWords.length > 0
+            ? pendingWords.length + ' Wort' + (pendingWords.length === 1 ? '' : 'e') + ' im Puffer'
+            : '';
+    }
+
+    function setDictationStatus(text, isError) {
+        statusText = text || '';
+        errorFlag  = !!isError;
+        refreshState();
+    }
+
+    /* ── Helpers ─────────────────────────────────────────────────────── */
+
+    function log(message) {
+        if (window.console && console.warn) console.warn('[Diktat] ' + message);
+    }
+
+    function loadConfig() {
+        if (cfg) return Promise.resolve(cfg);
+        if (cfgPromise) return cfgPromise;
+        cfgPromise = fetch('api/speech_config.php', { credentials: 'same-origin', cache: 'no-store' })
+            .then(r => r.json())
+            .then(data => {
+                if (!data || !data.ok) throw new Error((data && data.message) || 'Konfiguration nicht verfügbar');
+                cfg = data;
+                commandPhrases = (data.commands || [])
+                    .map(c => String(c.phrase || '').toLowerCase().split(/\s+/).filter(Boolean))
+                    .filter(p => p.length > 0);
+                maxPhraseWords = commandPhrases.reduce((m, p) => Math.max(m, p.length), 1);
+                return cfg;
+            })
+            .catch(err => {
+                cfgPromise = null;
+                throw err;
+            });
+        return cfgPromise;
+    }
+
+    /** Fetch with a hard client-side timeout so a hung request can never leave
+        a blocked UI behind (§19). */
+    function request(url, options, timeoutMs) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        const opts = Object.assign({ credentials: 'same-origin' }, options, { signal: controller.signal });
+        return fetch(url, opts).finally(() => clearTimeout(timer));
+    }
+
+    async function postForm(url, fields, timeoutMs) {
+        const fd = new FormData();
+        Object.keys(fields).forEach(k => fd.append(k, fields[k]));
+        const res = await request(url, { method: 'POST', body: fd }, timeoutMs);
+        try { return await res.json(); } catch (e) { return { ok: false, error: 'Ungültige Serverantwort (' + res.status + ').' }; }
+    }
+
+    async function postJson(url, payload, timeoutMs) {
+        const res = await request(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }, timeoutMs);
+        try { return await res.json(); } catch (e) { return { ok: false, error: 'Ungültige Serverantwort (' + res.status + ').' }; }
+    }
+
+    function describeMicError(err) {
+        const name = (err && err.name) || '';
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            return 'Mikrofonzugriff wurde abgelehnt. Bitte die Berechtigung im Browser erlauben.';
+        }
+        if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+            return 'Kein Mikrofon gefunden. Bitte ein Mikrofon anschließen.';
+        }
+        if (name === 'NotReadableError' || name === 'TrackStartError') {
+            return 'Das Mikrofon wird bereits von einem anderen Programm verwendet.';
+        }
+        if (name === 'AbortError') {
+            return 'Mikrofonzugriff wurde abgebrochen.';
+        }
+        return 'Mikrofon konnte nicht geöffnet werden' + (err && err.message ? ': ' + err.message : '.');
+    }
+
+    function pickMimeType() {
+        if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
+        const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+        for (const type of candidates) {
+            if (MediaRecorder.isTypeSupported(type)) return type;
+        }
+        return '';
+    }
+
+    /* ── Text insertion ──────────────────────────────────────────────── */
+
+    /** Append dictated text to the input field without losing what is already
+        there and without introducing duplicated words (§12). */
+    function insertText(text) {
+        const value = String(text == null ? '' : text);
+        if (!value) return;
+        let addition = value;
+        const current = input.value;
+        if (current && !/[\s\n]$/.test(current)) {
+            /* Closing punctuation stays attached to the previous word. */
+            addition = /^[.,;:!?…)\]}»"']/.test(addition) ? addition : ' ' + addition;
+        }
+        input.value = current + addition;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.scrollTop = input.scrollHeight;
+    }
+
+    /** Already dictated text, handed to the dictation model as read-only
+        context so it can continue the sentence it started. */
+    function dictationContext() {
+        const current = input.value.replace(/\s+$/, '');
+        return current.length > 400 ? current.slice(-400) : current;
+    }
+
+    /* ── Buffer ──────────────────────────────────────────────────────── */
+
+    /** Whether a word sequence is a proper prefix of a multi-word command. */
+    function endsWithCommandPrefix(fragment) {
+        if (fragment.length === 0 || commandPhrases.length === 0) return false;
+        const maxLen = Math.min(maxPhraseWords - 1, fragment.length);
+        for (let len = 1; len <= maxLen; len++) {
+            const tail = fragment.slice(fragment.length - len).join(' ').toLowerCase();
+            for (const phrase of commandPhrases) {
+                if (phrase.length > len && phrase.join(' ').startsWith(tail)) return true;
+            }
+        }
+        return false;
+    }
+
+    /** How many buffered words may be handed to the dictation model right now.
+        Everything except the trailing buffer window is processable, but the cut
+        is moved back while the fragment would end in the middle of a multi-word
+        command, so a command is never split across the buffer boundary (§5). */
+    function safeCut() {
+        const buffer = (cfg && cfg.buffer_words) || 4;
+        let cut = Math.max(0, pendingWords.length - buffer);
+        while (cut > 0 && endsWithCommandPrefix(pendingWords.slice(0, cut))) cut--;
+        return cut;
+    }
+
+    /** Hand every processable buffered word to the dictation model. */
+    function drainBuffer() {
+        const cut = safeCut();
+        if (cut <= 0) return;
+        const fragment = pendingWords.slice(0, cut);
+        pendingWords = pendingWords.slice(cut);
+        enqueue(() => processFragment(fragment));
+    }
+
+    /* ── Ordered request queue ───────────────────────────────────────── */
+
+    function enqueue(task) {
+        inflight++;
+        refreshState();
+        uploadChain = uploadChain
+            .then(task)
+            .catch(err => { log('Verarbeitungsschritt fehlgeschlagen: ' + ((err && err.message) || err)); })
+            .then(() => { inflight = Math.max(0, inflight - 1); refreshState(); });
+        return uploadChain;
+    }
+
+    /** Wait until no further step extends the queue while we are draining it. */
+    async function drainQueue() {
+        let previous;
+        do {
+            previous = uploadChain;
+            await previous;
+        } while (uploadChain !== previous);
+    }
+
+    /* ── Recording ───────────────────────────────────────────────────── */
+
+    function clearSegmentTimer() {
+        if (segmentTimer) { clearTimeout(segmentTimer); segmentTimer = null; }
+    }
+
+    function armSegmentTimer() {
+        clearSegmentTimer();
+        const seconds = (cfg && cfg.max_segment_seconds) || 15;
+        segmentTimer = setTimeout(() => {
+            segmentTimer = null;
+            if (recorder && recorder.state !== 'inactive') {
+                try { recorder.stop(); } catch (e) { log('Segment konnte nicht beendet werden.'); }
+            }
+        }, seconds * 1000);
+    }
+
+    function startSegment() {
+        if (!stream || stopping) return;
+        const mime = pickMimeType();
+        let rec;
+        try {
+            rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+        } catch (err) {
+            log('Aufnahme konnte nicht gestartet werden: ' + err.message);
+            endSession('Aufnahme konnte nicht gestartet werden: ' + err.message);
+            return;
+        }
+
+        recorder = rec;
+        const chunks = [];
+        rec.addEventListener('dataavailable', e => {
+            if (e.data && e.data.size > 0) chunks.push(e.data);
+        });
+        rec.addEventListener('error', e => {
+            log('Recorder-Fehler: ' + ((e && e.error && e.error.name) || 'unbekannt'));
+        });
+        rec.addEventListener('stop', () => {
+            clearSegmentTimer();
+            if (recorder === rec) recorder = null;
+            const blob = new Blob(chunks, { type: rec.mimeType || mime || 'audio/webm' });
+            if (blob.size > 0) enqueue(() => transcribeSegment(blob));
+            /* Continue with the next segment unless the user ended dictation. */
+            if (!stopping && stream) startSegment();
+        });
+
+        try {
+            rec.start();
+        } catch (err) {
+            log('Aufnahme konnte nicht gestartet werden: ' + err.message);
+            endSession('Aufnahme konnte nicht gestartet werden: ' + err.message);
+            return;
+        }
+        armSegmentTimer();
+    }
+
+    /* ── Inactivity timer for the "Erkennung beenden" button ─────────── */
+
+    /** Restart the inactivity countdown and hide the stop button again.
+
+        The decisive signal is processed content coming back from the dictation
+        model (§7); recognised words that are still on their way through the
+        pipeline count as activity too, because the pipeline is then working,
+        not idle. */
+    function armStopTimer() {
+        if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
+        if (stopVisible || errorFlag) { stopVisible = false; errorFlag = false; refreshState(); }
+        if (!session || stopping) return;
+        const seconds = (cfg && cfg.stop_timeout_seconds) || 3;
+        stopTimer = setTimeout(() => {
+            stopTimer = null;
+            if (!session || stopping) return;
+            stopVisible = true;
+            refreshState();
+        }, Math.max(1, seconds) * 1000);
+    }
+
+    /* ── whisper → buffer ────────────────────────────────────────────── */
+
+    async function transcribeSegment(blob) {
+        if (blob.size > cfg.max_audio_bytes) {
+            log('Segment verworfen: ' + blob.size + ' Bytes überschreiten das Limit.');
+            return;
+        }
+        let res;
+        try {
+            res = await postForm('api/speech_transcribe.php',
+                { audio: blob, csrf_token: CSRF },
+                (cfg.whisper_timeout_seconds || 120) * 1000 + REQUEST_SLACK_MS);
+        } catch (err) {
+            onWhisperFailure(err);
+            return;
+        }
+        if (!res || !res.ok) {
+            onWhisperFailure(new Error((res && (res.error || res.message)) || 'Unbekannter Fehler'));
+            return;
+        }
+        whisperFailures = 0;
+        const text = String(res.text || '').trim();
+        /* An empty result simply means the segment contained no speech. */
+        if (!text) return;
+        pendingWords.push(...text.split(/\s+/).filter(Boolean));
+        armStopTimer();
+        refreshState();
+        drainBuffer();
+    }
+
+    function onWhisperFailure(err) {
+        whisperFailures++;
+        const reason = (err && err.name === 'AbortError')
+            ? 'Zeitüberschreitung bei der Spracherkennung.'
+            : 'Spracherkennung nicht erreichbar' + (err && err.message ? ': ' + err.message : '.');
+        log(reason + ' (Versuch ' + whisperFailures + '/' + MAX_WHISPER_FAILURES + ')');
+        if (window.setChatStatus) window.setChatStatus(reason, 'error');
+        setDictationStatus(reason, true);
+        if (whisperFailures >= MAX_WHISPER_FAILURES) {
+            endSession('Spracherkennung nicht erreichbar – Diktat wurde beendet.');
+        }
+    }
+
+    /* ── buffer → dictation model → input field ──────────────────────── */
+
+    async function processFragment(fragment) {
+        const raw = fragment.join(' ');
+        if (!raw) return;
+        let res = null;
+        try {
+            res = await postJson('api/speech_process.php',
+                { fragment: raw, context: dictationContext(), csrf_token: CSRF },
+                (cfg.qwen_timeout_seconds || 60) * 1000 + REQUEST_SLACK_MS);
+        } catch (err) {
+            res = null;
+            log('Diktatmodell nicht erreichbar: ' + ((err && err.message) || err));
+        }
+
+        if (!res || !res.ok) {
+            /* The server falls back to deterministic command processing on its
+               own. Reaching this branch means the request never arrived, so the
+               raw words are inserted instead – recognised text is never lost
+               (§19). */
+            insertText(raw);
+            if (window.setChatStatus) {
+                window.setChatStatus('Diktatmodell nicht erreichbar – Rohtext wurde übernommen.', 'error');
+            }
+            armStopTimer();
+            return;
+        }
+
+        if (res.warning) {
+            log('Hinweis des Diktatmodells: ' + res.warning);
+            if (window.setChatStatus) window.setChatStatus(res.warning, 'error');
+        }
+        insertText(res.text || raw);
+        /* Processed content came back: the inactivity countdown starts over and
+           the stop button disappears again (§7, §8). */
+        armStopTimer();
+    }
+
+    /* ── Session lifecycle ───────────────────────────────────────────── */
+
+    async function start() {
+        if (session || stopping) return;
+        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function'
+            || typeof MediaRecorder === 'undefined') {
+            if (window.setChatStatus) {
+                window.setChatStatus('Spracherkennung wird von diesem Browser nicht unterstützt.', 'error');
+            }
+            return;
+        }
+
+        btn.disabled = true;
+        try {
+            await loadConfig();
+        } catch (err) {
+            btn.disabled = false;
+            if (window.setChatStatus) {
+                window.setChatStatus('Spracherkennung nicht verfügbar: ' + err.message, 'error');
+            }
+            return;
+        }
+        btn.disabled = false;
+
+        if (!cfg.enabled) {
+            if (window.setChatStatus) window.setChatStatus('Spracherkennung ist deaktiviert.', 'error');
+            return;
+        }
+        if (!cfg.whisper_ready) {
+            if (window.setChatStatus) {
+                window.setChatStatus('Spracherkennung nicht verfügbar: kein Whisper-Server konfiguriert.', 'error');
+            }
+            return;
+        }
+
+        let media;
+        try {
+            media = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+            if (window.setChatStatus) window.setChatStatus(describeMicError(err), 'error');
+            return;
+        }
+
+        stream          = media;
+        session         = true;
+        stopping        = false;
+        stopVisible     = false;
+        pendingWords    = [];
+        inflight        = 0;
+        uploadChain     = Promise.resolve();
+        whisperFailures = 0;
+        hidePills();
+        statusText = '';
+        errorFlag  = false;
+        refreshState();
+        if (window.setChatStatus) window.setChatStatus('Diktat gestartet.', 'info');
+        startSegment();
+        armStopTimer();
+    }
+
+    /** End the dictation session: finish pending work, flush the buffer, insert
+        the remaining text, release the microphone and stop every timer (§9). */
+    async function endSession(errorMessage) {
+        if (!session || stopping) return;
+        stopping = true;
+        stopVisible = false;
+        if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
+        clearSegmentTimer();
+        refreshState();
+
+        /* 1. Stop the recorder cleanly; the final partial segment is queued by
+              the recorder's own stop handler. */
+        const rec = recorder;
+        if (rec && rec.state !== 'inactive') {
+            await new Promise(resolve => {
+                rec.addEventListener('stop', resolve, { once: true });
+                try { rec.stop(); } catch (e) { resolve(); }
+            });
+        }
+
+        /* 2. Drain the running whisper/dictation-model requests. */
+        await drainQueue();
+
+        /* 3. Process the remaining buffer and insert it. */
+        if (pendingWords.length > 0) {
+            const rest = pendingWords;
+            pendingWords = [];
+            refreshState();
+            try {
+                await processFragment(rest);
+            } catch (err) {
+                insertText(rest.join(' '));
+            }
+        }
+        await drainQueue();
+
+        /* 4. Release the microphone, stop the timers, reset the state. */
+        recorder = null;
+        if (stream) {
+            stream.getTracks().forEach(track => { try { track.stop(); } catch (e) { /* ignore */ } });
+            stream = null;
+        }
+        clearSegmentTimer();
+        stopping = false;
+        session  = false;
+        statusText = '';
+        errorFlag  = false;
+        refreshState();
+
+        if (window.setChatStatus) {
+            window.setChatStatus(errorMessage || 'Diktat beendet.', errorMessage ? 'error' : 'success');
+        }
+        if (!errorMessage) showPills();
+    }
+
+    /* ── Quick-command pills (§10, §11) ──────────────────────────────── */
+
+    function hidePills() {
+        if (!pillsEl) return;
+        pillsEl.classList.remove('visible');
+        pillsEl.innerHTML = '';
+    }
+
+    function showPills() {
+        if (!pillsEl || !cfg || !cfg.pills || cfg.pills.length === 0) return;
+        /* Nothing to apply a quick command to. */
+        if (!input.value.trim()) return;
+        pillsEl.innerHTML = '';
+        cfg.pills.forEach(pill => {
+            const pillBtn = document.createElement('button');
+            pillBtn.type = 'button';
+            pillBtn.className = 'dictate-pill';
+            pillBtn.textContent = (pill.emoji ? pill.emoji + ' ' : '') + pill.label;
+            pillBtn.title = 'Kurzbefehl auf den diktierten Text anwenden';
+            pillBtn.addEventListener('click', () => applyPill(pill));
+            pillsEl.appendChild(pillBtn);
+        });
+        pillsEl.classList.add('visible');
+    }
+
+    /** Run a quick command through the regular chat pipeline with the normal
+        default model – no parallel model selection (§10, §11, §25). */
+    function applyPill(pill) {
+        if (session || stopping) return;
+        if (!input.value.trim()) {
+            if (window.setChatStatus) window.setChatStatus('Kein Text für den Kurzbefehl vorhanden.', 'error');
+            return;
+        }
+        const activate = window.llmintActivatePromptAddition;
+        const send     = window.llmintSendMessage;
+        if (typeof activate !== 'function' || typeof send !== 'function') {
+            if (window.setChatStatus) window.setChatStatus('Kurzbefehl nicht verfügbar.', 'error');
+            return;
+        }
+        activate(pill.id, {
+            emoji: pill.emoji || '✨',
+            label: pill.label,
+            addition: pill.instruction
+        });
+        hidePills();
+        send();
+    }
+
+    /* ── Wiring ──────────────────────────────────────────────────────── */
+
+    btn.addEventListener('click', () => {
+        if (session) {
+            endSession();
+        } else {
+            start();
+        }
+    });
+
+    stopBtn.addEventListener('click', () => endSession());
+
+    /* Warm the configuration cache once the page is idle so the first click on
+       the microphone button is instant. */
+    const warmUp = () => { loadConfig().catch(() => { /* reported on first use */ }); };
+    if (window.requestIdleCallback) {
+        window.requestIdleCallback(warmUp, { timeout: 3000 });
+    } else {
+        setTimeout(warmUp, 1500);
+    }
+})();
+</script>
+<?php endif; ?>
 </body>
 </html>

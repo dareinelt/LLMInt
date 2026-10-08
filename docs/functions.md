@@ -20,6 +20,7 @@ kompakte Navigationshilfe siehe [`agent_index.md`](agent_index.md).
 - [lib/openai_api.php](#libopenai_apiphp)
 - [lib/prompt_security.php](#libprompt_securityphp)
 - [lib/reverse_proxy.php](#libreverse_proxyphp)
+- [lib/speech_dictation.php](#libspeech_dictationphp)
 - [api/chat.php](#apichatphp)
 - [api/balancer.php](#apibalancerphp)
 - [api/embedding.php](#apiembeddingphp)
@@ -221,6 +222,84 @@ Wird per `auto_prepend_file` (`docker/php.ini`) und aus `db.php` geladen (idempo
 | `psLog` | `psLog(string $originalInput, int $score, string $decision, array $matchedRules, string $aiModel, ?int $userId, string $sessionId, string $ipAddress): void` | Protokolliert das Sicherheitsereignis in `prompt_security_logs`. |
 | `psEvaluate` | `psEvaluate(string $rawInput, ?int $userId = null, string $sessionId = '', string $ipAddress = ''): array` | Führt die vollständige Sicherheitspipeline aus und liefert Entscheidung/Score/Regeln/Meldung. |
 | `psPurgeLogs` | `psPurgeLogs(): void` | Löscht `prompt_security_logs`-Einträge, die älter als die Aufbewahrungsfrist sind. |
+
+---
+
+## lib/speech_dictation.php
+
+Spracherkennung und Diktat: Whisper-Aufruf, Diktatbefehle, Prompt für das
+Diktat-Modell (Qwen3.5-2B Q4 über llama.cpp), Regel-Fallback und der
+Chat-Completion-Aufruf. Details zur Pipeline in
+[`architecture.md`](architecture.md#131-diktat-pipeline).
+
+**Konstanten:** `SPEECH_DICTATION_CONTEXT_CHARS` (400) – Zeichen des bereits im
+Eingabefeld stehenden Textes, der dem Diktat-Modell als Kontext mitgegeben wird.
+
+### Standardwerte und Befehle
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `speechDictationDefaultCommands` | `speechDictationDefaultCommands(): array` | Eingebaute Diktatbefehle (17 Phrasen: Satzzeichen, Klammern, Anführung, Umbruch, Löschen) als `{phrase, type, value}`. |
+| `speechDictationDefaultPills` | `speechDictationDefaultPills(): array` | Eingebaute Schnellbefehl-Pillen (`serioeser`, `kuerzer`, `professioneller`, `freundlicher`, `zusammenfassen`, `englisch`) mit Label, Emoji und Anweisung. |
+| `speechDictationDefaultPrompt` | `speechDictationDefaultPrompt(): string` | Standard-Systemprompt des Diktat-Modells: Regeln als Stichpunkte, eingebettete Befehlsliste und sechs Beispiele. |
+| `speechDictationPromptCommandList` | `speechDictationPromptCommandList(bool $includeBreaks = true): string` | Gruppiert die konfigurierten Befehle zu einer Zeile (`Satzzeichen: … Klammern: …`), damit der Prompt kurz bleibt; mit `$includeBreaks = false` werden die Umbruchbefehle weggelassen (Standardprompt). |
+| `speechDictationCommandPreview` | `speechDictationCommandPreview(array $cmd): string` | Menschenlesbare Vorschau eines Befehls (`"punkt" → "."`, `"neue zeile" → Zeilenumbruch`). |
+| `speechDictationCommands` | `speechDictationCommands(): array` | Aktive Befehle aus `speech_dictation_commands`, bei ungültigem JSON die Standardliste. |
+| `speechDictationPills` | `speechDictationPills(): array` | Aktive Pillen aus `speech_dictation_pills`, bei ungültigem JSON die Standardliste. |
+| `speechDictationPill` | `speechDictationPill(string $id): ?array` | Eine einzelne Pille per ID oder `null`. |
+
+### Einstellungen und Konfiguration
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `speechDictationIntSetting` | `speechDictationIntSetting(string $key, string $default, int $min, int $max): int` | Liest eine numerische Einstellung und begrenzt sie auf `min`/`max`. |
+| `speechDictationEnabled` | `speechDictationEnabled(): bool` | Ist das Diktat aktiviert (`speech_dictation_enabled`)? |
+| `speechDictationWhisperUrl` | `speechDictationWhisperUrl(): string` | Adresse des Whisper-Dienstes (`WHISPER_URL` hat Vorrang vor der Einstellung). |
+| `speechDictationWhisperModel` | `speechDictationWhisperModel(): string` | ggml-Modellname für die Erkennung. |
+| `speechDictationWhisperTimeout` | `speechDictationWhisperTimeout(): int` | Timeout einer Transkription in Sekunden. |
+| `speechDictationWhisperToken` | `speechDictationWhisperToken(): string` | Optionaler Shared Secret für den Whisper-Dienst. |
+| `speechDictationLanguage` | `speechDictationLanguage(): string` | Sprache für die Erkennung (`de`, `auto`, …). |
+| `speechDictationQwenModel` | `speechDictationQwenModel(): string` | Modell-ID des Diktat-Modells (muss dem `--alias` des Containers entsprechen). |
+| `speechDictationQwenUrl` | `speechDictationQwenUrl(): string` | Adresse des Diktat-Modells; leer bedeutet: regulärer Endpunkt-Pool. |
+| `speechDictationQwenTimeout` | `speechDictationQwenTimeout(): int` | Timeout der Diktat-Nachbearbeitung in Sekunden. |
+| `speechDictationQwenToken` | `speechDictationQwenToken(): string` | Optionaler Bearer-Token für das Diktat-Modell. |
+| `speechDictationSettingSource` | `speechDictationSettingSource(string $envName, string $settingKey): string` | Ermittelt, ob ein Wert aus der Umgebung, der Datenbank oder dem Standard stammt. |
+| `speechDictationWhisperUrlSource` | `speechDictationWhisperUrlSource(): string` | Quelle der Whisper-URL (`env`/`db`/`default`). |
+| `speechDictationQwenUrlSource` | `speechDictationQwenUrlSource(): string` | Quelle der Diktat-Modell-URL (`env`/`db`/`default`). |
+| `speechDictationSourceLabel` | `speechDictationSourceLabel(string $source): string` | Übersetzt die Quelle in das Label der Admin-Oberfläche. |
+| `speechDictationBufferWords` | `speechDictationBufferWords(): int` | Wörter im Puffer bis zum Segmentabschnitt (Empfehlung 10–20). |
+| `speechDictationStopTimeoutSeconds` | `speechDictationStopTimeoutSeconds(): int` | Stille bis zum automatischen Beenden der Erkennung. |
+| `speechDictationMaxSegmentSeconds` | `speechDictationMaxSegmentSeconds(): int` | Maximale Länge eines Segments. |
+| `speechDictationMaxAudioBytes` | `speechDictationMaxAudioBytes(): int` | Maximale Größe eines Segments in Bytes. |
+| `speechDictationPrompt` | `speechDictationPrompt(): string` | Aktiver Systemprompt (`speech_dictation_prompt`, leer → Standard). |
+| `speechDictationConfigured` | `speechDictationConfigured(): bool` | Sind die Voraussetzungen für den Mikrofon-Button erfüllt? |
+
+### Gesundheit, Transkription und Modellaufruf
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `speechDictationWhisperHealth` | `speechDictationWhisperHealth(): array` | Prüft den Whisper-Dienst über `/health`. |
+| `speechDictationTranscribeFile` | `speechDictationTranscribeFile(string $path, string $filename, string $mime): array` | Schickt eine Audiodatei als `multipart/form-data` an `/inference` und liefert den Rohtext. |
+| `speechDictationQwenHealth` | `speechDictationQwenHealth(): array` | Prüft das Diktat-Modell über `/health`. |
+| `speechDictationResolveCompletionTarget` | `speechDictationResolveCompletionTarget(string $model): array` | Wählt zwischen dediziertem Diktat-Modell (`QWEN_URL`) und regulärem Endpunkt-Pool. |
+| `speechDictationRunChatCompletion` | `speechDictationRunChatCompletion(string $model, array $messages, array $options = []): array` | Ruft `/v1/chat/completions` auf; sendet `enable_thinking: false` **und** `reasoning_budget: 0`, damit das Modell keinen Denkblock ausgibt. |
+| `speechDictationBuildSystemMessage` | `speechDictationBuildSystemMessage(string $context): string` | Systemnachricht aus Prompt und – falls vorhanden – dem bereits im Feld stehenden Text. Der Kontext gehört in die Systemnachricht; in der Nutzernachricht gibt das Modell ihn als Teil der Antwort zurück. |
+| `speechDictationBuildUserMessage` | `speechDictationBuildUserMessage(string $fragment): string` | Nutzernachricht mit dem neuen Fragment; der bereits geschriebene Text steht in der Systemnachricht. |
+
+### Nachbearbeitung, Fallback und Logging
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `speechDictationCleanModelOutput` | `speechDictationCleanModelOutput(string $text): string` | Entfernt Denkblöcke, Code-Fences, Ausgabe-Labels und Anführungszeichen; normalisiert Leerzeichen vor Zeilenumbrüchen. |
+| `speechDictationApplyCommands` | `speechDictationApplyCommands(string $text): string` | Deterministische Befehlsverarbeitung – greift nur, wenn das Modell nicht erreichbar ist. |
+| `speechDictationApplyCommand` | `speechDictationApplyCommand(string $out, array $cmd): string` | Wendet einen einzelnen Befehl (`insert`, `newline`, `paragraph`, `delete_word`, `delete_sentence`) auf den Text an. |
+| `speechDictationAppendWord` | `speechDictationAppendWord(string $out, string $word): string` | Hängt ein Wort mit korrekter Abstandsetzung an. |
+| `speechDictationSplitAtBreaks` | `speechDictationSplitAtBreaks(string $fragment): array` | Zerlegt ein Fragment an den Umbruchbefehlen (`neue zeile`, `neuer absatz`) in eine Folge von Text- und Umbruch-Teilen (`{text, break}`); die Befehlsphrasen stammen aus der Konfiguration. |
+| `speechDictationLimitContext` | `speechDictationLimitContext(string $context): string` | Begrenzt den Kontext auf `SPEECH_DICTATION_CONTEXT_CHARS` Zeichen; wird pro Textsegment erneut angewendet. |
+| `speechDictationMatchLeadingCase` | `speechDictationMatchLeadingCase(string $source, string $produced): string` | Setzt ein Segment, das klein diktiert wurde, wieder auf klein – jedes Segment ist eine eigene Completion und das Modell beginnt es sonst groß. |
+| `speechDictationDropInventedSentenceEnd` | `speechDictationDropInventedSentenceEnd(string $fragment, string $text): string` | Entfernt ein abschließendes Satzzeichen, das nicht diktiert wurde, damit ein pausiertes Fragment den Satz nicht vorzeitig beendet. |
+| `speechDictationProcessFragment` | `speechDictationProcessFragment(string $fragment, string $context = ''): array` | Führt einen Diktat-Durchlauf aus und liefert `{ok, text, fallback, model, warning}`; jedes Textsegment geht einzeln an das Modell, die Umbrüche setzt die Pipeline selbst; fällt bei Modellfehlern auf die Regelverarbeitung zurück. |
+| `speechDictationLogText` | `speechDictationLogText(string $text): string` | Fasst erkannten Text zu einer Längenangabe für das Log zusammen – der Text selbst wird nicht gespeichert. |
 
 ---
 
@@ -473,6 +552,10 @@ Diese Dateien enthalten ausschließlich prozeduralen Code (kein top-level `funct
 | `api/sd_generate.php` | Bildgenerierung via AUTOMATIC1111 |
 | `api/test_ldap.php` | Ruft `ldapTestConnection()` auf |
 | `api/test_smtp.php` | Ruft `sendMail()` zum Testversand auf |
+| `api/speech_config.php` | Liefert die Diktat-Konfiguration an die Chat-Oberfläche und stellt ein CSRF-Token bereit |
+| `api/speech_transcribe.php` | Nimmt ein Audiosegment als Upload entgegen und ruft `speechDictationTranscribeFile()` auf |
+| `api/speech_process.php` | Ruft `speechDictationProcessFragment()` für ein Fragment auf |
+| `api/speech_health.php` | Ruft `speechDictationWhisperHealth()`/`speechDictationQwenHealth()` auf (`target=whisper\|qwen\|both`) |
 | `api/openai_common/chat_completions.php` | Optionale Key-Erkennung, anonymer Kontext ohne PHP-Sitzung, Modell des API-Keys bzw. Gast-Standardmodell, Zugriffs-Log, bindet `api/chat.php`-Logik ein |
 | `api/openai_common/models.php` | Optionale Key-Erkennung, ruft `openaiAvailableModels($apiKey)` auf |
 | `api/openai/v1/chat/completions/index.php` | Setzt `LLMINT_OPENAI_TOOL_MODE='disabled'`, bindet `openai_common/chat_completions.php` ein |
@@ -502,7 +585,8 @@ Nur eine top-level Funktion:
 `update_routing_category`, `delete_routing_category`, `import_prompt_txt`,
 `save_log_config`, `add_embedding_endpoint`, `update_embedding_endpoint`,
 `delete_embedding_endpoint`, `save_hybrid_search_settings`, `save_reranker_settings`,
-`create_api_key`, `toggle_api_key`, `delete_api_key`, `change_password`.
+`create_api_key`, `toggle_api_key`, `delete_api_key`, `change_password`,
+`save_speech_dictation_settings`.
 
 ## admin/refresh_sys_stats.php
 

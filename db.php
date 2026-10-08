@@ -833,6 +833,31 @@ function ensureRuntimeSchema(PDO $pdo): void
         }
     }
 
+    // ── Speech recognition / dictation defaults ──────────────────────────────
+    // Insert-only seeding: an existing value (set by an administrator) is never
+    // overwritten. Service URLs and tokens are deliberately not seeded – they
+    // are read from the environment first and only fall back to the settings
+    // table, exactly like the docconvert URL.
+    $speechDefaults = [
+        'speech_dictation_enabled'               => '1',
+        'speech_dictation_whisper_model'         => 'small',
+        'speech_dictation_language'              => 'de',
+        'speech_dictation_buffer_words'          => '4',
+        'speech_dictation_stop_timeout_seconds'  => '3',
+        'speech_dictation_max_segment_seconds'   => '15',
+        'speech_dictation_max_audio_mb'          => '10',
+        'speech_dictation_qwen_model'            => 'Qwen3.5-2B Q4',
+        'speech_dictation_qwen_timeout'          => '60',
+    ];
+    $speechPlaceholders = implode(', ', array_fill(0, count($speechDefaults), '(?, ?)'));
+    $speechParams = [];
+    foreach ($speechDefaults as $speechKey => $speechValue) {
+        $speechParams[] = $speechKey;
+        $speechParams[] = $speechValue;
+    }
+    $pdo->prepare('INSERT IGNORE INTO settings (setting_key, setting_value) VALUES ' . $speechPlaceholders)
+        ->execute($speechParams);
+
     $epCount = (int) $pdo->query('SELECT COUNT(*) FROM endpoints')->fetchColumn();
     if ($epCount > 0) {
         $pdo->prepare(
