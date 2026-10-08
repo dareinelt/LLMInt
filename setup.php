@@ -63,6 +63,7 @@ $db->exec("
         user_id      INT             NOT NULL,
         name         VARCHAR(150)    NOT NULL DEFAULT '',
         description  VARCHAR(255)    NOT NULL DEFAULT '',
+        model        VARCHAR(255)    NOT NULL DEFAULT '',
         key_prefix   VARCHAR(20)     NOT NULL DEFAULT '',
         api_key_hash CHAR(64)        NOT NULL,
         created_at   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,

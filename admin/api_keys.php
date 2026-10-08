@@ -26,6 +26,8 @@ $flashOk = '';
 $flashError = '';
 $newApiKey = '';
 
+$availableModels = listActiveEndpointModels();
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (($_POST['csrf_token'] ?? '') !== $csrfToken) {
         $flashError = 'Ungültiger CSRF-Token.';
@@ -36,11 +38,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $name = trim((string) ($_POST['name'] ?? ''));
             $description = trim((string) ($_POST['description'] ?? ''));
             $expiresAt = trim((string) ($_POST['expires_at'] ?? ''));
+            $model = trim((string) ($_POST['model'] ?? ''));
 
             if ($name === '') {
                 $flashError = 'Name darf nicht leer sein.';
             } elseif (mb_strlen($name) > 150) {
                 $flashError = 'Name darf maximal 150 Zeichen enthalten.';
+            } elseif ($model !== '' && !in_array($model, $availableModels, true)) {
+                $flashError = 'Ungültiges Modell.';
             } else {
                 $expiresAtSql = null;
                 if ($expiresAt !== '') {
@@ -55,12 +60,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($flashError === '') {
                     $material = openaiGenerateApiKeyMaterial();
                     $db->prepare(
-                        'INSERT INTO api_keys (user_id, name, description, key_prefix, api_key_hash, created_at, expires_at, is_active)
-                         VALUES (?, ?, ?, ?, ?, NOW(), ?, 1)'
+                        'INSERT INTO api_keys (user_id, name, description, model, key_prefix, api_key_hash, created_at, expires_at, is_active)
+                         VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, 1)'
                     )->execute([
                         $userId,
                         $name,
                         mb_substr($description, 0, 255),
+                        $model,
                         $material['prefix'],
                         $material['hash'],
                         $expiresAtSql,
@@ -88,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $keys = $db->prepare(
-    'SELECT id, name, description, key_prefix, created_at, last_used_at, expires_at, is_active
+    'SELECT id, name, description, model, key_prefix, created_at, last_used_at, expires_at, is_active
        FROM api_keys
       WHERE user_id = ?
       ORDER BY id DESC'
@@ -106,7 +112,7 @@ $apiKeys = $keys->fetchAll(PDO::FETCH_ASSOC);
         body{font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;background:#212121;color:#ececf1;margin:0;padding:24px}
         .wrap{max-width:1080px;margin:0 auto}
         .card{background:#2f2f2f;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:18px;margin-bottom:16px}
-        input,textarea{width:100%;background:#212121;border:1px solid rgba(255,255,255,.1);border-radius:10px;color:#ececf1;padding:8px}
+        input,textarea,select{width:100%;background:#212121;border:1px solid rgba(255,255,255,.1);border-radius:10px;color:#ececf1;padding:8px}
         table{width:100%;border-collapse:collapse}
         th,td{padding:10px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;font-size:.9rem}
         .btn{background:#6c63ff;color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer}
@@ -133,7 +139,7 @@ $apiKeys = $keys->fetchAll(PDO::FETCH_ASSOC);
 
     <div class="card">
         <h2>OpenAI-kompatible API</h2>
-        <p style="color:#8e8ea0;font-size:.9rem">Basis-URL für externe Applikationen. Ein API-Key ist optional und dient nur der Zuordnung im Log – API-Zugriffe verhalten sich immer wie ein nicht angemeldeter Benutzer.</p>
+        <p style="color:#8e8ea0;font-size:.9rem">Basis-URL für externe Applikationen. Ein API-Key ist optional und dient der Zuordnung im Log sowie – wenn ein Modell gewählt wurde – der Festlegung des verwendeten Modells. API-Zugriffe verhalten sich immer wie ein nicht angemeldeter Benutzer.</p>
         <?php foreach (['Ohne Tools' => openaiPublicBaseUrl(false), 'Mit Tools' => openaiPublicBaseUrl(true)] as $apiUrlLabel => $apiUrlValue): ?>
             <label><?= htmlspecialchars($apiUrlLabel) ?></label>
             <div style="display:flex;gap:8px;margin-bottom:10px">
@@ -162,6 +168,24 @@ $apiKeys = $keys->fetchAll(PDO::FETCH_ASSOC);
                 <label>Beschreibung (optional)</label>
                 <textarea name="description" rows="2" maxlength="255"></textarea>
             </div>
+            <div style="margin-top:10px">
+                <label for="api-key-model">Modell (optional)</label>
+                <select id="api-key-model" name="model">
+                    <option value="">Standardmodell verwenden</option>
+                    <?php foreach ($availableModels as $availableModel): ?>
+                        <option value="<?= htmlspecialchars($availableModel) ?>"><?= htmlspecialchars($availableModel) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <p style="color:#8e8ea0;font-size:.8rem;margin:6px 0 0">
+                    Anfragen mit diesem API-Key verwenden das gewählte Modell. Ohne Auswahl gilt das Standardmodell für
+                    nicht angemeldete Zugriffe. Zur Auswahl stehen die Modelle der aktiven Endpunkte.
+                </p>
+                <?php if (empty($availableModels)): ?>
+                    <p style="color:#f59e0b;font-size:.8rem;margin:6px 0 0">
+                        Aktuell ist kein aktives Endpunkt-Modell verfügbar. Bitte zuerst unter <strong>Endpunkte</strong> ein Standard-Modell konfigurieren.
+                    </p>
+                <?php endif; ?>
+            </div>
             <p style="margin-top:10px"><button class="btn" type="submit">API-Key erzeugen</button></p>
         </form>
     </div>
@@ -169,7 +193,7 @@ $apiKeys = $keys->fetchAll(PDO::FETCH_ASSOC);
     <div class="card">
         <h2>Vorhandene API-Keys</h2>
         <table>
-            <thead><tr><th>Name</th><th>Prefix</th><th>Erstellt</th><th>Letzter Zugriff</th><th>Ablauf</th><th>Status</th><th>Aktionen</th></tr></thead>
+            <thead><tr><th>Name</th><th>Prefix</th><th>Modell</th><th>Erstellt</th><th>Letzter Zugriff</th><th>Ablauf</th><th>Status</th><th>Aktionen</th></tr></thead>
             <tbody>
             <?php foreach ($apiKeys as $key): ?>
                 <tr>
@@ -178,6 +202,13 @@ $apiKeys = $keys->fetchAll(PDO::FETCH_ASSOC);
                         <span style="color:#8e8ea0;font-size:.8rem"><?= htmlspecialchars((string) $key['description']) ?></span>
                     </td>
                     <td><code><?= htmlspecialchars((string) $key['key_prefix']) ?>…</code></td>
+                    <td>
+                        <?php if (trim((string) $key['model']) !== ''): ?>
+                            <code><?= htmlspecialchars((string) $key['model']) ?></code>
+                        <?php else: ?>
+                            <span style="color:#8e8ea0">Standardmodell</span>
+                        <?php endif; ?>
+                    </td>
                     <td><?= htmlspecialchars((string) $key['created_at']) ?></td>
                     <td><?= $key['last_used_at'] ? htmlspecialchars((string) $key['last_used_at']) : '–' ?></td>
                     <td><?= $key['expires_at'] ? htmlspecialchars((string) $key['expires_at']) : '–' ?></td>
@@ -199,7 +230,7 @@ $apiKeys = $keys->fetchAll(PDO::FETCH_ASSOC);
                     </td>
                 </tr>
             <?php endforeach; ?>
-            <?php if (empty($apiKeys)): ?><tr><td colspan="7" style="color:#8e8ea0">Noch keine API-Keys.</td></tr><?php endif; ?>
+            <?php if (empty($apiKeys)): ?><tr><td colspan="8" style="color:#8e8ea0">Noch keine API-Keys.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>

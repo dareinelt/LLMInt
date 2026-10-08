@@ -415,6 +415,7 @@ function ensureRuntimeSchema(PDO $pdo): void
             user_id      INT             NOT NULL,
             name         VARCHAR(150)    NOT NULL DEFAULT '',
             description  VARCHAR(255)    NOT NULL DEFAULT '',
+            model        VARCHAR(255)    NOT NULL DEFAULT '',
             key_prefix   VARCHAR(20)     NOT NULL DEFAULT '',
             api_key_hash CHAR(64)        NOT NULL,
             created_at   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -427,6 +428,12 @@ function ensureRuntimeSchema(PDO $pdo): void
             KEY idx_api_expires (expires_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
+
+    // Optional model pinned to an API key: requests with that key use it
+    // instead of the guest default model. Empty = default model.
+    try {
+        $pdo->exec("ALTER TABLE api_keys ADD COLUMN model VARCHAR(255) NOT NULL DEFAULT '' AFTER description");
+    } catch (Throwable $_e) { /* column already exists */ }
 
     // Document uploads: one row per uploaded file, including vision-model analysis result.
     $pdo->exec("
@@ -1191,6 +1198,37 @@ function getClientIp(): string
 }
 
 /**
+ * Distinct model names served by active endpoints, in endpoint priority order
+ * (`sort_order`, then `id`). Used for model selection lists (e.g. API keys)
+ * and availability checks.
+ *
+ * @return array<int,string> Model names without duplicates; empty if none.
+ */
+function listActiveEndpointModels(): array
+{
+    try {
+        $rows = getDb()->query(
+            "SELECT default_model FROM endpoints
+              WHERE is_active = 1 AND default_model <> ''
+              ORDER BY sort_order ASC, id ASC"
+        )->fetchAll(PDO::FETCH_COLUMN);
+    } catch (PDOException $e) {
+        // Ignore – endpoints table may not exist yet (before setup.php is run).
+        return [];
+    }
+
+    $models = [];
+    foreach ($rows as $model) {
+        $model = trim((string) $model);
+        if ($model !== '' && !in_array($model, $models, true)) {
+            $models[] = $model;
+        }
+    }
+
+    return $models;
+}
+
+/**
  * Model used for visitors who are not logged in (setting 'default_model').
  * Falls back to the model of the first active endpoint; returns '' if none.
  */
@@ -1201,18 +1239,8 @@ function getGuestDefaultModel(): string
         return $model;
     }
 
-    try {
-        $ep = getDb()->query(
-            "SELECT default_model FROM endpoints WHERE is_active = 1 AND default_model != '' ORDER BY sort_order ASC, id ASC LIMIT 1"
-        )->fetch();
-        if ($ep) {
-            return trim((string) $ep['default_model']);
-        }
-    } catch (PDOException $e) {
-        // Ignore – endpoints table may not exist yet (before setup.php is run).
-    }
-
-    return '';
+    $models = listActiveEndpointModels();
+    return $models[0] ?? '';
 }
 
 /**

@@ -140,7 +140,7 @@ migrieren.
 |---|---|
 | `settings` | Key-Value-Konfiguration (`setting_key`, `setting_value`) |
 | `users` | Konten: Anmeldedaten, Rolle (`user`/`admin`), `auth_source` (`local`/`ldap`), Dokument-Upload-Recht, Standardmodell |
-| `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer |
+| `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer (optionales, fest am Key hinterlegtes Modell) |
 | `endpoints` | LLM-Endpunkte: `base_url`, `default_model`, `timeout`, `is_active`, Fähigkeiten (Tool Calling, Vision), Balancer-Gesundheit (`circuit_state`, `consecutive_failures`, `cooldown_until`, `avg_latency_ms`) |
 | `tasks` | Lebenszyklus jeder LLM-Anfrage (`endpoint_id`, `status`, Tokenzähler, `tokens_per_second`) |
 | `endpoint_sys_stats` | per SSH gelesene Systemmetriken je Endpunkt |
@@ -505,8 +505,8 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
 | `api/admin_user_action.php` | POST | Admin + CSRF | Benutzerverwaltung |
 | `api/verify_email.php`, `api/reset_password.php` | GET/POST | Token | E-Mail-Verifikation, Passwort-Reset |
-| `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | anonym (API-Key optional, nur für Log) | OpenAI-kompatibel, ohne Tools; Gast-Standardmodell, Log-Präfix `[API]` |
-| `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | anonym (API-Key optional, nur für Log) | OpenAI-kompatibel, mit Tools; Gast-Standardmodell, Log-Präfix `[API]` |
+| `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | anonym (API-Key optional: Log-Zuordnung und optional festes Modell) | OpenAI-kompatibel, ohne Tools; Key-Modell bzw. Gast-Standardmodell, Log-Präfix `[API]` |
+| `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | anonym (API-Key optional: Log-Zuordnung und optional festes Modell) | OpenAI-kompatibel, mit Tools; Key-Modell bzw. Gast-Standardmodell, Log-Präfix `[API]` |
 
 `api/balancer.php`, `api/sd_balancer.php`, `api/comfy_balancer.php`,
 `api/embedding.php` und `api/vector_store.php` sind reine Bibliotheken und werden

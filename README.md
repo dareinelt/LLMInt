@@ -503,19 +503,23 @@ Die Verwaltung ist unter `admin/prompt_security.php` verfügbar. Dort lassen sic
 
 | Pfad | Methode | Zweck |
 |---|---|---|
-| `api/openai/v1/models` | GET | Gast-Standardmodell (einziges angebotenes Modell) |
+| `api/openai/v1/models` | GET | Key-Modell bzw. Gast-Standardmodell (ohne Key das Standardmodell) |
 | `api/openai/v1/chat/completions` | POST | Chat Completions ohne Tools |
-| `api/openai-tools/v1/models` | GET | Gast-Standardmodell (einziges angebotenes Modell) |
+| `api/openai-tools/v1/models` | GET | Key-Modell bzw. Gast-Standardmodell (ohne Key das Standardmodell) |
 | `api/openai-tools/v1/chat/completions` | POST | Chat Completions mit Web-, RAG- und Bild-Tools |
 
 LLMInt arbeitet für externe Applikationen als Reverse-Proxy vor den LLM-Endpunkten. Per API zugreifende Applikationen verhalten sich wie ein **nicht angemeldeter Benutzer**:
 
 - Es wird keine PHP-Sitzung verwendet; ein mitgesendetes Session-Cookie wird ignoriert. Bildanhänge, Intelligenzgruppen (`@@…`) und benutzerbezogene Dokumente stehen daher – wie für Gäste – nicht zur Verfügung.
-- Das Feld `model` wird ignoriert; jede Anfrage startet mit dem Gast-Standardmodell (Einstellung `default_model`). Danach greifen Prompt Security, Entscheidungsmodell/Routing, Balancer, Fallback und Warteschlange genau wie bei einem direkten Zugriff. Reasoning lässt sich per `!!`-Präfix oder `reasoning_effort` aktivieren.
-- Ein API-Key im Header `Authorization: Bearer <key>` ist optional. Unbekannte, deaktivierte oder abgelaufene Keys (z. B. Platzhalter, die manche Clients zwingend senden) werden wie ein Zugriff ohne Key behandelt; ein gültiger Key dient nur der Zuordnung im Log, nicht der Anmeldung als Key-Besitzer.
-- Alle Log-Einträge einer API-Anfrage tragen das Präfix `[API]` bzw. `[API · Key „Name“]` und werden im Log-Viewer als Badge hervorgehoben; ein Eintrag „Zugriff über OpenAI-kompatible API …“ protokolliert Client-IP, Tool-Modus sowie angefordertes und verwendetes Modell.
+- Das Feld `model` der Anfrage wird ignoriert. Jede Anfrage startet mit dem am API-Key hinterlegten Modell (siehe `admin/api_keys.php`); ist dort keines gesetzt oder wird die Anfrage ohne gültigen Key gestellt, gilt das Gast-Standardmodell (Einstellung `default_model`). Ein am Key hinterlegtes Modell wird nur verwendet, solange es von einem aktiven Endpunkt angeboten wird – sonst greift das Standardmodell. Danach greifen Prompt Security, Entscheidungsmodell/Routing, Balancer, Fallback und Warteschlange genau wie bei einem direkten Zugriff. Reasoning lässt sich per `!!`-Präfix oder `reasoning_effort` aktivieren.
+- Ein API-Key im Header `Authorization: Bearer <key>` ist optional. Unbekannte, deaktivierte oder abgelaufene Keys (z. B. Platzhalter, die manche Clients zwingend senden) werden wie ein Zugriff ohne Key behandelt; ein gültiger Key dient der Zuordnung im Log und kann optional ein festes Modell festlegen, nicht der Anmeldung als Key-Besitzer.
+- Alle Log-Einträge einer API-Anfrage tragen das Präfix `[API]` bzw. `[API · Key „Name“]` und werden im Log-Viewer als Badge hervorgehoben; ein Eintrag „Zugriff über OpenAI-kompatible API …“ protokolliert Client-IP, Tool-Modus, angefordertes und verwendetes Modell sowie die Herkunft des Modells (API-Key-Modell oder Standardmodell).
 
-Die Basis-URLs zum Kopieren zeigt der Admin-Bereich unter **Verwaltung → 🔌 OpenAI-API** sowie die Seite `admin/api_keys.php`. API-Keys werden als Hash gespeichert und dort verwaltet.
+Die Basis-URLs zum Kopieren zeigt der Admin-Bereich unter **Verwaltung → 🔌 OpenAI-API** sowie die Seite `admin/api_keys.php`. API-Keys werden als Hash gespeichert und dort verwaltet; beim Erstellen lässt sich das zu verwendende Modell aus den Modellen der aktiven Endpunkte auswählen.
+
+![API-Key anlegen mit Modellauswahl im Dropdown](docs/images/api-keys-modell-dropdown.png)
+
+Im Screenshot zeigt das Formular „OpenAI API-Key erstellen“ das Dropdown **Modell (optional)** – zur Auswahl stehen die Standard-Modelle aller aktiven Endpunkte; die Option „Standardmodell verwenden“ lässt den Key ohne feste Modellbindung. Darunter listet „Vorhandene API-Keys“ in der Spalte **Modell** das fest gebundene Modell bzw. den Hinweis „Standardmodell“.
 
 ```python
 from openai import OpenAI
@@ -526,7 +530,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="khwf-ki",  # wird ignoriert, es gilt das Gast-Standardmodell
+    model="khwf-ki",  # wird ignoriert, es gilt das Modell des API-Keys bzw. das Gast-Standardmodell
     messages=[{"role": "user", "content": "Hallo"}],
 )
 print(response.choices[0].message.content)
@@ -576,7 +580,7 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 
 | Gruppe | Tabellen |
 |---|---|
-| Konfiguration und Konten | `settings`, `users`, `api_keys` |
+| Konfiguration und Konten | `settings`, `users`, `api_keys` (optionales Modell je Key) |
 | LLM-Betrieb | `endpoints`, `tasks`, `endpoint_sys_stats`, `app_logs` |
 | Chat und Routing | `conversation_sessions`, `routing_categories`, `routing_rules`, `search_logs` |
 | Dokumente und Embeddings | `document_uploads`, `document_chunks`, `embedding_endpoints`, `embedding_cache`, `embedding_logs` |

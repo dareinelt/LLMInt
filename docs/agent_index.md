@@ -55,7 +55,7 @@ Ollama) with multi-model routing, load balancing, hybrid RAG, image generation
 | `admin/prompt_security.php` | Prompt security rule management |
 | `admin/load_stats.php` | Live dashboard stats (JSON) |
 | `admin/refresh_sys_stats.php` | SSH system metrics per endpoint |
-| `admin/api_keys.php` | OpenAI-compatible API key management |
+| `admin/api_keys.php` | OpenAI-compatible API key management (optional model binding per key) |
 | `admin/endpoint_tech.php` | quickinfo pairing per endpoint + live technical overview (CPU/GPU/RAM/VRAM, temps) |
 | `admin/quickinfo_stats.php` | JSON live metrics of all paired quickinfo instances |
 | `lib/quickinfo.php` | Client for the quickinfo Management-Board API (`/api/v1/*`) |
@@ -99,6 +99,8 @@ domain:
   `pickComfyEndpoint()`/`completeComfyTask()` (`api/comfy_balancer.php`).
 - **OpenAI-compatible API**: `api/openai/v1/**` (no tools), `api/openai-tools/v1/**`
   (with tools), shared via `api/openai_common/*.php` and `lib/openai_api.php`.
+  Optional API key = log attribution plus an optional pinned model
+  (`api_keys.model`); without it the guest default model applies.
 
 ---
 
@@ -108,7 +110,7 @@ domain:
 |---|---|
 | `settings` | Key-value config (`setting_key`, `setting_value`) |
 | `users` | Accounts: username, password hash, email, role (user/admin), auth_source, can_upload_documents, default_model |
-| `api_keys` | OpenAI API key hashes per user |
+| `api_keys` | OpenAI API key hashes per user (optional pinned model) |
 | `endpoints` | LLM endpoints: base_url, default_model, timeout, is_active, capabilities, balancer health fields |
 | `tasks` | LLM request lifecycle: endpoint_id, status, token counters |
 | `endpoint_sys_stats` | SSH system metrics per endpoint |

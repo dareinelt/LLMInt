@@ -19,7 +19,7 @@ if (!is_array($decoded)) {
     openaiSendError(400, 'Invalid JSON body.');
 }
 
-$payload = openaiNormalizeChatPayload($decoded);
+$payload = openaiNormalizeChatPayload($decoded, openaiResolveApiKeyModel($apiKey));
 
 $GLOBALS['LLMINT_OPENAI_STRICT_MODE'] = true;
 $GLOBALS['LLMINT_OPENAI_TOOL_MODE'] = ((string) ($GLOBALS['LLMINT_OPENAI_TOOL_MODE'] ?? 'disabled')) === 'enabled'
@@ -33,6 +33,8 @@ $requestedModel = trim((string) ($decoded['model'] ?? ''));
 writeLog('info', 'Zugriff über OpenAI-kompatible API von ' . getClientIp()
     . ($GLOBALS['LLMINT_OPENAI_TOOL_MODE'] === 'enabled' ? ' (mit Tools)' : ' (ohne Tools)')
     . '; angefordertes Modell: ' . ($requestedModel !== '' ? mb_substr($requestedModel, 0, 100) : '–')
-    . ', verwendet: Gast-Standardmodell ' . $payload['model'] . '.');
+    . ', verwendet: ' . $payload['model']
+    . ($apiKey !== null && ($apiKey['model'] ?? '') !== '' ? ' (API-Key-Modell)' : ' (Standardmodell)')
+    . '.');
 
 require __DIR__ . '/../chat.php';
