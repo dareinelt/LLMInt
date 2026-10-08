@@ -1,33 +1,14 @@
-# Test override for local verification of the speech/dictation feature.
-# Drops the services that are irrelevant for that check (Milvus, phpMyAdmin,
-# docconvert) so the stack starts fast on a laptop.
+# Test override for local verification of the dictation feature.
 #
-# Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+# The compute-heavy speech services (whisper.cpp and the llama.cpp dictation
+# model) no longer run inside this stack: they live in the separate SpeechInt
+# project (https://github.com/dareinelt/SpeechInt), usually on another Docker
+# host. Point SPEECHINT_URL at such a service – see .env.example – and start
+# only the services this check needs:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db web
 services:
   web:
     depends_on: !override
       db:
         condition: service_healthy
-      whisper:
-        condition: service_started
-      qwen:
-        condition: service_started
-  whisper:
-    # The upstream image (ghcr.io/ggml-org/whisper.cpp) is linux/amd64 only and
-    # aborts with SIGILL under emulation on Apple Silicon, so build whisper.cpp
-    # natively instead. On an amd64 host the upstream image can be kept by
-    # omitting this `build:` block and the `platform` reset below.
-    image: llmint-whisper:local
-    build:
-      context: .
-      dockerfile: Dockerfile.whisper
-    platform: !reset null
-    # Keep the production default model ("small"): it is what real deployments
-    # use, and its German accuracy is markedly better than "tiny".
-    environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-small}
-      WHISPER_THREADS: ${WHISPER_THREADS:-4}
-  qwen:
-    environment:
-      QWEN_THREADS: ${QWEN_THREADS:-8}

@@ -81,7 +81,6 @@ function runSearxngSearch(string $baseUrl, string $query, int $timeout = 15): ar
     $body = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr = curl_error($ch);
-    curl_close($ch);
 
     if ($curlErr !== '') {
         throw new RuntimeException('Suchdienstanbieter nicht erreichbar: ' . $curlErr);
@@ -251,7 +250,6 @@ function fetchWebPage(string $url, int $timeout = 15, int $maxChars = 6000): arr
         $contentType = strtolower((string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
 
         if ($curlErr !== '') {
-            curl_close($ch);
             throw new RuntimeException('Seite nicht erreichbar: ' . $curlErr);
         }
 
@@ -263,14 +261,12 @@ function fetchWebPage(string $url, int $timeout = 15, int $maxChars = 6000): arr
             try {
                 $finalUrl = assertFetchableWebUrl($location)['url'];
             } catch (RuntimeException $e) {
-                curl_close($ch);
                 throw new RuntimeException('Weiterleitung blockiert: ' . $e->getMessage());
             }
             continue;
         }
         break;
     }
-    curl_close($ch);
 
     if ($httpCode < 200 || $httpCode >= 300) {
         throw new RuntimeException('Seite lieferte HTTP ' . $httpCode . '.');
@@ -513,7 +509,6 @@ function callSdGenerate(array $params, int $timeout = 120): array
     $body     = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr  = curl_error($ch);
-    curl_close($ch);
 
     if ($curlErr !== '') {
         completeSdTask($taskId, 'error');
@@ -1197,7 +1192,6 @@ function callComfyGenerate(array $params, int $timeout = 120): array
         ]);
         $infoBody = curl_exec($infoCh);
         $infoData = json_decode((string) $infoBody, true);
-        curl_close($infoCh);
 
         $ckptList = $infoData['CheckpointLoaderSimple']['input']['required']['ckpt_name'][0] ?? [];
         if (is_array($ckptList) && !empty($ckptList)) {
@@ -1261,7 +1255,6 @@ function callComfyGenerate(array $params, int $timeout = 120): array
     $body     = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr  = curl_error($ch);
-    curl_close($ch);
 
     if ($curlErr !== '') {
         completeComfyTask($taskId, 'error');
@@ -1289,7 +1282,6 @@ function callComfyGenerate(array $params, int $timeout = 120): array
         ]);
         $hBody = curl_exec($hCh);
         $hCode = curl_getinfo($hCh, CURLINFO_HTTP_CODE);
-        curl_close($hCh);
 
         if ($hCode !== 200) {
             continue;
@@ -1343,7 +1335,6 @@ function callComfyGenerate(array $params, int $timeout = 120): array
     $imageData = curl_exec($imgCh);
     $imgCode   = curl_getinfo($imgCh, CURLINFO_HTTP_CODE);
     $imgErr    = curl_error($imgCh);
-    curl_close($imgCh);
 
     if ($imgErr !== '' || $imgCode !== 200 || $imageData === false || $imageData === '') {
         completeComfyTask($taskId, 'error');
@@ -2021,7 +2012,6 @@ function streamChatCompletionRequest(
     curl_exec($ch);
     $curlErr  = curl_error($ch);
     $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
 
     if ($buffer !== '') {
         $processLine(rtrim($buffer, "\r"));
@@ -2442,7 +2432,6 @@ if ($routingDecisionModel !== '' && $intelligenceGroup === null) {
                 $routingBody = curl_exec($rch);
                 $routingHttpCode = (int) curl_getinfo($rch, CURLINFO_HTTP_CODE);
                 $routingCurlErr  = curl_error($rch);
-                curl_close($rch);
 
                 completeTask($routingTaskId, ($routingCurlErr !== '' || $routingHttpCode !== 200) ? 'error' : 'done');
 
@@ -3081,7 +3070,6 @@ if ($useTools) {
             $body = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             $curlErr = curl_error($ch);
-            curl_close($ch);
             $data = null;
         }
 
@@ -3441,7 +3429,6 @@ if ($stream) {
         curl_exec($chStream);
         $streamCurlErr  = curl_error($chStream);
         $streamHttpCode = (int) curl_getinfo($chStream, CURLINFO_HTTP_CODE);
-        curl_close($chStream);
 
         // Process any trailing line left in the buffer (stream ended without a
         // final newline after the last "data: ..." event).
@@ -3554,7 +3541,6 @@ do {
     $body     = curl_exec($ch);
     $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr  = curl_error($ch);
-    curl_close($ch);
 
     header('Content-Type: application/json; charset=utf-8');
 

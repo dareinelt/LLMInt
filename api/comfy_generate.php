@@ -169,7 +169,6 @@ if ($checkpoint === '') {
     ]);
     $infoBody = curl_exec($infoCh);
     $infoData = json_decode((string) $infoBody, true);
-    curl_close($infoCh);
 
     $ckptList = $infoData['CheckpointLoaderSimple']['input']['required']['ckpt_name'][0] ?? [];
     if (is_array($ckptList) && !empty($ckptList)) {
@@ -203,7 +202,6 @@ curl_setopt_array($ch, [
 $body     = curl_exec($ch);
 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $curlErr  = curl_error($ch);
-curl_close($ch);
 
 if ($curlErr !== '') {
     $taskFinished = true;
@@ -243,7 +241,6 @@ while (time() < $deadline) {
     ]);
     $hBody = curl_exec($hCh);
     $hCode = curl_getinfo($hCh, CURLINFO_HTTP_CODE);
-    curl_close($hCh);
 
     if ($hCode !== 200) {
         continue;
@@ -324,7 +321,6 @@ curl_setopt_array($imgCh, [
 $imageData = curl_exec($imgCh);
 $imgCode   = curl_getinfo($imgCh, CURLINFO_HTTP_CODE);
 $imgErr    = curl_error($imgCh);
-curl_close($imgCh);
 
 if ($imgErr !== '' || $imgCode !== 200 || $imageData === false || $imageData === '') {
     $taskFinished = true;

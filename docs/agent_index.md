@@ -19,8 +19,9 @@ operator-facing manual.
 **LLMInt** (internally also "KHWF KI") – A self-hosted PHP/MySQL chat front end for local
 LLMs (LM Studio, vLLM, llama.cpp, Ollama) with multi-endpoint load balancing, hybrid RAG,
 a central Milvus knowledge base, image generation (AUTOMATIC1111 / ComfyUI),
-prompt-injection protection, LDAP/Windows-SSO login, speech dictation (whisper.cpp +
-Qwen3), and an OpenAI-compatible API.
+prompt-injection protection, LDAP/Windows-SSO login, speech dictation via the separate
+[SpeechInt](https://github.com/dareinelt/SpeechInt) service (whisper.cpp + Qwen3), and an
+OpenAI-compatible API.
 
 - **Language**: PHP 8.2+ (no framework, no Composer, no build step; PHP 8.0+ works for a
   classic install)
@@ -31,8 +32,9 @@ Qwen3), and an OpenAI-compatible API.
   JSON/SSE endpoints, `lib/*.php` are shared libraries
 - **Runtime containers**: `web` (PHP 8.2 Apache), `db` (MySQL 8.0), `docconvert`
   (Python/FastAPI document converter), `milvus` (vector DB for the local knowledge base),
-  `whisper` (whisper.cpp speech-to-text), `qwen` (optional llama.cpp + Qwen3.5-2B for
-  dictation post-processing), `phpmyadmin`
+  `phpmyadmin`. Speech-to-text and dictation post-processing moved out of this repo into
+  [SpeechInt](https://github.com/dareinelt/SpeechInt); LLMInt only talks to it over HTTP
+  (see [Dictation](#dictation-speech-to-text))
 - **Entry points**:
   - `index.php` – Chat UI (~5,300 lines)
   - `admin/index.php` – Admin dashboard (~8,400 lines)
@@ -61,7 +63,7 @@ Qwen3), and an OpenAI-compatible API.
 | `lib/reverse_proxy.php` | Running behind a reverse proxy (lanpa `auth` container, `/ki/`): `TRUSTED_PROXIES`, client IP, HTTPS detection, `X-Forwarded-Prefix`, proxy SSO header (`PROXY_SSO_HEADER`), `appPublicBaseUrl()`; loaded via `auto_prepend_file` and `db.php` |
 | `lib/mailer.php` | Custom SMTP client (no PHPMailer): registration/verification and password-reset mail |
 | `lib/quickinfo.php` | Client for the quickinfo Management-Board API (`/api/v1/*`) used for live CPU/GPU/RAM/VRAM metrics |
-| `lib/speech_dictation.php` | Dictation: Whisper transcription call, dictation commands + quick-command pills, prompt for the dictation model, deterministic rule fallback, chat-completion call to the local Qwen3.5-2B (see [Dictation](#dictation-speech-to-text)) |
+| `lib/speech_dictation.php` | Dictation as HTTP client of a SpeechInt endpoint: endpoint table access, transcription, post-processing, dictation commands + quick-command pills, prompt, health/config probes, deterministic rule fallback (see [Dictation](#dictation-speech-to-text)) |
 | `lib/prompt.txt` | Seed/fallback routing categories (imported into `routing_categories`) |
 | `api/chat.php` | **Main chat pipeline** (~3,650 lines): prompt security → routing → balancer → tools (search, web fetch, RAG, vector store, image gen) → streaming → token accounting |
 | `api/balancer.php` | `pickEndpointForModel()`, `completeTask()`, upgrade suggestions, model availability, intelligence scoring |
@@ -85,21 +87,20 @@ Qwen3), and an OpenAI-compatible API.
 | `api/openai_common/*.php` | Shared request handling for both OpenAI endpoint families |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php`, `api/test_vector_store.php` | Admin connection tests |
 | `api/speech_config.php` | Dictation config + CSRF bootstrap for the chat UI |
-| `api/speech_transcribe.php` | Audio segment → raw text via the `whisper` container |
-| `api/speech_process.php` | Dictation fragment → cleaned text via the dictation model |
-| `api/speech_health.php` | Admin connection test for `whisper` / `qwen` (`target=whisper\|qwen\|both`) |
+| `api/speech_transcribe.php` | Audio segment → raw text via `POST /v1/audio/transcriptions` of the active SpeechInt endpoint |
+| `api/speech_process.php` | Dictation fragment → cleaned text via `POST /v1/dictate/process` |
+| `api/speech_health.php` | Admin connection test for one SpeechInt endpoint (`/v1/ready` resp. `/v1/health`, plus `/v1/config` for `host` dimensioning); optional `url`/`token` |
 | `api/admin_user_action.php` | Admin user management actions |
 | `api/verify_email.php`, `api/reset_password.php` | Token-based email verification and password reset |
 | `docconvert/` | Python/FastAPI container converting Office & text files into structured chunks (TTL disk cache); unit tests in `docconvert/tests/` |
 | `admin/index.php` | Admin UI: endpoints, routing, balancer, RAG/embeddings, vector store, LDAP/SMTP, users, logs, OpenAI API keys, usage statistics |
 | `admin/prompt_security.php` | Prompt security dashboard, rule management, logs, settings |
-| `admin/load_stats.php` | Live dashboard stats (JSON), incl. `vector_store` status |
+| `admin/load_stats.php` | Live dashboard stats (JSON), incl. `vector_store` status and `speech_endpoints`/`speech_status` for the dashboard graphic |
 | `admin/usage_stats.php` | Daily usage statistics JSON (clients, users, tasks, failures, searches) for the chart |
 | `admin/refresh_sys_stats.php` | SSH system metrics per endpoint |
 | `admin/endpoint_tech.php` | quickinfo pairing per endpoint + live technical overview (CPU/GPU/RAM/VRAM, temps) |
 | `admin/quickinfo_stats.php` | JSON live metrics of all paired quickinfo instances |
-| `Dockerfile.whisper` | Native arm64 build of the whisper.cpp server (upstream image is amd64-only and dies with SIGILL under emulation) |
-| `docker-compose.test.yml` | Override that uses `Dockerfile.whisper`, resets `platform`, and drops Milvus/phpMyAdmin/docconvert for fast local stacks |
+| `docker-compose.test.yml` | Override for fast local dictation tests: only `db` + `web`, expecting an external SpeechInt host via `SPEECHINT_URL` |
 | `admin/api_keys.php` | Legacy redirect to the `#api-keys-card` section of `admin/index.php` |
 | `admin/login.php`, `admin/logout.php` | Admin login (own entry point) and logout |
 | `docker/` | Apache config, PHP ini, entrypoint, phpMyAdmin Basic-Auth config, Milvus etcd config |
@@ -275,15 +276,32 @@ psLoadRules() → psNormalise() → psMatchRules() → psComputeScore()
 
 ## Dictation (speech-to-text)
 
-`lib/speech_dictation.php` + the `whisper` and `qwen` containers. Entered from
-`index.php` (mic button `#dictate-btn`); the server side is stateless and never
-persists recognised text.
+`lib/speech_dictation.php` + the [SpeechInt](https://github.com/dareinelt/SpeechInt)
+service (whisper.cpp `small` + Qwen3.5-2B Q4 in llama.cpp), which runs on a separate
+Docker host. Entered from `index.php` (mic button `#dictate-btn`); LLMInt is a pure
+client, the server side is stateless and never persists recognised text. Prompt, command
+table, context, model name and temperature are sent with every request.
 
 ```
 Browser MediaRecorder
-  ├─ POST api/speech_transcribe.php ─► whisper.cpp /inference ─► raw fragment text
-  └─ POST api/speech_process.php ────► qwen /v1/chat/completions ─► cleaned text
+  ├─ POST api/speech_transcribe.php ─► SpeechInt POST /v1/audio/transcriptions ─► raw fragment text
+  └─ POST api/speech_process.php ────► SpeechInt POST /v1/dictate/process ─────► cleaned text
 ```
+
+Endpoints live in the `speech_endpoints` table (`alias`, `base_url`, `token`, `timeout`,
+`is_active`, `sort_order`); `SPEECHINT_URL`/`SPEECHINT_TOKEN`/`SPEECHINT_TIMEOUT` take
+precedence over the active row, exactly like `DOCCONVERT_*`
+(`speechDictationUrl()`/`speechDictationUrlSource()`). Tokens are shown masked
+(`speechDictationMaskToken()`) and never logged. **Minimum host requirement: 6 CPU cores
+with AVX2 and 16 GB RAM** — surfaced by `GET /v1/config` (`host.meets_minimum`,
+`host.warnings`).
+
+**Loading phase:** while SpeechInt is still loading its models it answers `503
+service_loading` with a German `message` and `Retry-After`. LLMInt must treat this as
+"please wait", never as an error and never as a reason for the rule fallback: keep the
+fragment, show the message, retry after `Retry-After` (browser side up to 60 attempts,
+`retryWhileLoading()` in `index.php`). Only `unreachable`/`error`/`unconfigured` and
+`502`/`504` lead to `speechDictationProcessFallback()`.
 
 Client-side (IIFE in `index.php`, starts at `#dictate-btn`): `loadConfig()`
 (`api/speech_config.php`), `start()`, `armSegmentTimer()` / `startSegment()` /
@@ -292,13 +310,15 @@ Client-side (IIFE in `index.php`, starts at `#dictate-btn`): `loadConfig()`
 `showPills()` / `applyPill()`.
 
 Server-side: `speechDictationProcessFragment()` is the single entry point;
-`speechDictationResolveCompletionTarget()` picks between the dedicated `QWEN_URL`
-and the regular endpoint pool; `speechDictationApplyCommands()` is the
-**deterministic fallback used only when the model is unreachable**.
+`speechDictationActiveEndpoint()` picks the endpoint (selected row, else the first
+active one); `speechDictationApplyCommands()` is the **deterministic fallback used only
+when the endpoint is unreachable or fails hard**. The endpoint state for the admin card
+and the dashboard tile comes from `speechDictationHealth()` /
+`speechDictationDashboardStatus()` (20 s cache in `speech_dictation_status_cache`).
 
 Two non-obvious constraints — change these only with the surrounding comment:
 
-- The completion call sends `chat_template_kwargs.enable_thinking=false` **and**
+- The completion call (now inside SpeechInt) sends `chat_template_kwargs.enable_thinking=false` **and**
   `reasoning_budget: 0`. Some llama.cpp builds never pass the Jinja flag through to
   the chat template; without `reasoning_budget: 0` the model spends the whole
   token budget on a ` thinking` block and returns empty `content` with
@@ -306,26 +326,25 @@ Two non-obvious constraints — change these only with the surrounding comment:
 - The default prompt is deliberately terse (bulleted rules, command list collapsed
   into one line by `speechDictationPromptCommandList()`, six worked examples).
   Verbose prompt variants measured *worse* on a model this small.
-- Line-break commands are **not** the model's job. `speechDictationSplitAtBreaks()`
-  cuts `neue zeile`/`neuer absatz` out of the fragment before the model sees it
-  and `speechDictationProcessFragment()` re-inserts `\n`/`\n\n` afterwards. Asking
-  the model for the break does not work: it consumes the command word but writes a
-  space instead of a line break (measured reproducibly). The prompt therefore lists
-  only the non-structural commands (`speechDictationPromptCommandList(false)`) and
-  tells the model to stay on one line.
-- The already written field text belongs in the **system** message
-  (`speechDictationBuildSystemMessage()`), never in the user turn: as a user turn
-  the model treats it as something to answer and echoes it into the result
-  (measured 8/8). Because each segment is its own completion,
-  `speechDictationMatchLeadingCase()` restores the dictated lower case and
-  `speechDictationDropInventedSentenceEnd()` removes a closing mark that was not
-  dictated.
+- Line-break commands are **not** the model's job. SpeechInt cuts `neue zeile`/`neuer
+  absatz` out of the fragment before the model sees it and re-inserts `\n`/`\n\n`
+  afterwards. Asking the model for the break does not work: it consumes the command word
+  but writes a space instead of a line break (measured reproducibly). The prompt
+  therefore lists only the non-structural commands
+  (`speechDictationPromptCommandList(false)`) and tells the model to stay on one line.
+- The already written field text belongs in the **system** message, never in the user
+  turn: as a user turn the model treats it as something to answer and echoes it into the
+  result (measured 8/8). Because each segment is its own completion, SpeechInt restores
+  the dictated lower case and removes a closing mark that was not dictated.
 
 Commands and pills are admin-editable JSON (`speech_dictation_commands`,
 `speech_dictation_pills`). Pills are executed by the **regular default model** via
 `api/chat.php`, not by the dictation model. Everything is configured in the
-`#config-speech-card` card of `admin/index.php`
-(`save_speech_dictation_settings`).
+`#config-speech-card` card of `admin/index.php` (`save_speech_dictation_settings` plus
+`add_speech_endpoint`/`update_speech_endpoint`/`delete_speech_endpoint`/
+`move_speech_endpoint` for the endpoint table). The active endpoint also appears as a
+tile in the admin dashboard graphic (`renderLoadTree()` in `admin/index.php`, fed by
+`admin/load_stats.php`).
 
 ---
 
@@ -429,11 +448,11 @@ domain:
   `quickinfoBuildMetricRow()`.
 - **Dictation** (`lib/speech_dictation.php`): `speechDictationProcessFragment()` (main
   entry), `speechDictationPrompt()`/`speechDictationDefaultPrompt()`,
-  `speechDictationRunChatCompletion()` (sends `reasoning_budget: 0`),
   `speechDictationCleanModelOutput()`, `speechDictationApplyCommands()` (rule fallback),
-  `speechDictationTranscribeFile()`, `speechDictationWhisperHealth()`/`speechDictationQwenHealth()`,
-  `speechDictationCommands()`, `speechDictationPills()`,
-  `speechDictationResolveCompletionTarget()`, `speechDictationLogText()`.
+  `speechDictationTranscribeFile()`, `speechDictationHealth()`,
+  `speechDictationDashboardStatus()`, `speechDictationRemoteConfig()`,
+  `speechDictationCommands()`, `speechDictationPills()`, `speechDictationUrl()`,
+  `speechDictationActiveEndpoint()`, `speechDictationLogText()`.
 
 ---
 
@@ -457,9 +476,9 @@ domain:
 | `api/sd_checkpoints.php`, `api/comfy_checkpoints.php` | GET | – | Available checkpoints |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | admin | Connection tests |
 | `api/speech_config.php` | GET | session | Dictation config + CSRF token for the chat UI |
-| `api/speech_transcribe.php` | POST | session + CSRF field | Audio segment → text (`whisper`) |
-| `api/speech_process.php` | POST | session + CSRF field | Fragment → cleaned text (`qwen`) |
-| `api/speech_health.php` | GET | session | Dictation connection test (`target=whisper\|qwen\|both`) |
+| `api/speech_transcribe.php` | POST | session + CSRF field | Audio segment → text (`/v1/audio/transcriptions`) |
+| `api/speech_process.php` | POST | session + CSRF field | Fragment → cleaned text (`/v1/dictate/process`) |
+| `api/speech_health.php` | GET | session | Dictation connection test for one endpoint (optional `url`/`token`) |
 | `api/admin_user_action.php` | POST | admin + CSRF | User management |
 | `api/verify_email.php`, `api/reset_password.php` | GET/POST | token | Email verification, password reset |
 | `api/openai*/v1/models`, `api/openai*/v1/chat/completions` | GET/POST | anonymous (API key optional) | OpenAI-compatible API |
@@ -548,7 +567,7 @@ Full data model description: [`architecture.md`](architecture.md#4-datenmodell-�
 | LDAP/AD & SSO | `ldap_enabled`, `ldap_host`, `ldap_port`, `ldap_use_ssl`, `ldap_domain`, `ldap_base_dn`, `ldap_bind_dn`, `ldap_bind_password`, `ldap_user_attr`, `ldap_email_attr`, `ldap_display_name_attr`, `ldap_sspi_enabled` |
 | Logging | `log_level`, `log_retention_days` |
 | Prompt security | `prompt_security_enabled`, `prompt_security_mode`, `prompt_security_warn_limit`, `prompt_security_score_limit`, `prompt_security_block_message`, `prompt_security_log`, `prompt_security_log_input`, `prompt_security_log_retention_days`, `prompt_security_fail_open`, `prompt_security_ai_enabled`, `prompt_security_ai_endpoint`, `prompt_security_ai_model` |
-| Dictation | `speech_dictation_enabled`, `speech_dictation_language`, `speech_dictation_whisper_model`, `speech_dictation_whisper_url`, `speech_dictation_whisper_token`, `speech_dictation_whisper_timeout`, `speech_dictation_qwen_model`, `speech_dictation_qwen_url`, `speech_dictation_qwen_token`, `speech_dictation_qwen_timeout`, `speech_dictation_prompt`, `speech_dictation_commands`, `speech_dictation_pills`, `speech_dictation_buffer_words`, `speech_dictation_stop_timeout_seconds`, `speech_dictation_max_segment_seconds`, `speech_dictation_max_audio_mb` |
+| Dictation | `speech_dictation_enabled`, `speech_dictation_language`, `speech_dictation_endpoint_id` (selected row of `speech_endpoints`), `speech_dictation_prompt`, `speech_dictation_commands`, `speech_dictation_pills`, `speech_dictation_buffer_words`, `speech_dictation_stop_timeout_seconds`, `speech_dictation_max_segment_seconds`, `speech_dictation_max_audio_mb`, `speech_dictation_status_cache` (runtime cache) |
 
 Legacy keys (still read as fallback): `lmstudio_base_url`, `lmstudio_timeout`,
 `endpoints_bootstrapped`.
@@ -613,7 +632,7 @@ Legacy keys (still read as fallback): `lmstudio_base_url`, `lmstudio_timeout`,
 | OpenAI API changes | `lib/openai_api.php`, `api/openai_common/**`, `api/openai*/**` |
 | Image generation | `api/sd_*.php`, `api/comfy_*.php`, `lib/balancer_engine.php` |
 | Frontend chat behaviour | `index.php` (SSE handling, prefixes, sessions, uploads) |
-| Dictation / speech-to-text | `lib/speech_dictation.php` (server), `index.php` (dictation IIFE + `#dictate-btn`), `admin/index.php` (`config-speech-card`), `Dockerfile.whisper` / `docker-compose.test.yml` (arm64 whisper) |
+| Dictation / speech-to-text | `lib/speech_dictation.php` (SpeechInt client), `api/speech_*.php`, `index.php` (dictation IIFE + `#dictate-btn`), `admin/index.php` (`config-speech-card`, `speech_endpoints` CRUD, dashboard tile) |
 
 ### Admin POST actions (`admin/index.php`)
 
@@ -629,7 +648,8 @@ Legacy keys (still read as fallback): `lmstudio_base_url`, `lmstudio_timeout`,
 `delete_embedding_endpoint`, `save_hybrid_search_settings`, `save_reranker_settings`,
 `save_vector_store_settings`, `vector_store_reset_local`, `create_api_key`,
 `toggle_api_key`, `delete_api_key`, `change_password`,
-`save_speech_dictation_settings`.
+`save_speech_dictation_settings`, `add_speech_endpoint`, `update_speech_endpoint`,
+`delete_speech_endpoint`, `move_speech_endpoint`.
 
 Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card`,
 `config-routing-card`, `config-decision-card`, `config-request-handling-card`,
@@ -654,25 +674,22 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
   an unprivileged user with no published port.
 - `docker-compose.yml` – Services `db` (MySQL 8.0 with healthcheck), `web` (`HTTP_PORT`,
   default 8080), `docconvert`, `milvus` (Standalone with embedded etcd + local storage,
-  internal only), `whisper` (speech-to-text, internal only) and `phpmyadmin`
-  (`PMA_PORT`, default 8081, HTTP Basic Auth). The optional `qwen` service runs
-  llama.cpp with Qwen3.5-2B for dictation post-processing. Volumes:
-  `db_data`, `doc_uploads`, `sd_output`, `docconvert_cache`, `milvus_data`,
-  `vector_imports`, `whisper_models`, `qwen_cache`.
-- `Dockerfile.whisper` – native build of the whisper.cpp server. Required on
-  Apple Silicon: the upstream `ghcr.io/ggml-org/whisper.cpp` image is amd64-only and
-  crashes with `SIGILL` under emulation. The build **must** pass
-  `-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+fp16+dotprod`, because Docker Desktop's
-  Linux VM hides the host CPU and the default `-march=native` flags then fail to compile.
-- `docker-compose.test.yml` – optional override for fast local stacks: uses
-  `Dockerfile.whisper`, resets the whisper `platform` pin, and keeps only
-  `db` / `web` / `whisper` / `qwen`.
+  internal only) and `phpmyadmin` (`PMA_PORT`, default 8081, HTTP Basic Auth).
+  Speech-to-text and dictation post-processing are **not** part of this stack any more;
+  they run in [SpeechInt](https://github.com/dareinelt/SpeechInt) on a separate Docker
+  host (minimum 6 CPU cores with AVX2, 16 GB RAM) and are reached through
+  `SPEECHINT_URL` / `SPEECHINT_TOKEN`. Volumes: `db_data`, `doc_uploads`, `sd_output`,
+  `docconvert_cache`, `milvus_data`, `vector_imports`.
+- `docker-compose.test.yml` – optional override for a fast local stack: keeps only
+  `db` / `web` (`depends_on` reduced to `db`) and expects an external SpeechInt host via
+  `SPEECHINT_URL`.
 - `docker-compose.lanpa.yml` – optional override that attaches `web` to the external
   `llmint-proxy` network and sets `TRUSTED_PROXIES` / `PROXY_SSO_HEADER` for publishing
   under `https://<lanpa-host>/ki/`.
 - `.env.example` – `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_ROOT_PASS`, `HTTP_PORT`,
   `PMA_PORT`, `PMA_BASIC_AUTH_USER`, `PMA_BASIC_AUTH_PASSWORD`, `TZ`, `TRUSTED_PROXIES`,
-  `PROXY_SSO_HEADER`, `DOCCONVERT_*`, `MILVUS_*`, `WHISPER_*`, `QWEN_*`.
+  `PROXY_SSO_HEADER`, `DOCCONVERT_*`, `MILVUS_*`, `SPEECHINT_URL`, `SPEECHINT_TOKEN`,
+  `SPEECHINT_TIMEOUT`.
 
 ---
 
@@ -701,7 +718,7 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 ├── README.md              # Operator docs
 ├── Demo.md                # Non-technical demo guide
 ├── docker-compose.yml / docker-compose.lanpa.yml / docker-compose.test.yml
-├── Dockerfile / Dockerfile.whisper / .env.example
+├── Dockerfile / .env.example
 ├── docs/
 │   ├── agent_index.md     # This file
 │   ├── architecture.md    # System architecture & diagrams
@@ -746,7 +763,7 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 │   ├── healthcheck.php
 │   ├── reverse_proxy.php
 │   ├── quickinfo.php
-│   ├── speech_dictation.php   # Whisper + dictation model, commands, fallback
+│   ├── speech_dictation.php   # SpeechInt client, commands, fallback
 │   └── prompt.txt         # Fallback/seed routing categories
 ├── docconvert/            # Python/FastAPI converter (app/, tests/)
 ├── doc_uploads/           # Runtime uploads (protected)

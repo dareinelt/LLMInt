@@ -57,7 +57,7 @@ Weitere Dokumente im Repository:
 - **Endpunkte technische Verwaltung:** jeder LLM-Endpunkt lässt sich mit einer [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz koppeln (Server-URL + API-Schlüssel der Management-Board-API). Die Seite `admin/endpoint_tech.php` zeigt je Endpunkt in einer Zeile Modell, Ø Token/s, CPU-/GPU-Last, CPU-/GPU-Temperatur (mit 24h-Min./Max.) sowie RAM-/VRAM-Auslastung; ein Klick auf die Zeile öffnet quickinfo im neuen Tab.
 - **Nutzungsstatistik:** Liniendiagramm im Adminbereich (retinatauglich, umschaltbar auf 3, 7, 14, 30, 90, 180 Tage oder ein Jahr) mit Clients, angemeldeten Nutzern, durchgeführten Tasks, Websuchen und fehlgeschlagenen Tasks je Tag.
 - **Prompt Security:** mehrstufige Prüfung von Chat-Eingaben mit konfigurierbaren Regeln, Bewertung und Protokollierung.
-- **Spracherkennung und Diktat:** Diktat per Mikrofon-Button direkt in das Eingabefeld – Whisper transkribiert in Segmenten, ein lokales Qwen3.5-2B formuliert die Fragmente aus und wandelt gesprochene Diktatbefehle („Punkt", „Neue Zeile", „Lösche letztes Wort") in Zeichen und Formatierung um; nach dem Sprechen schlägt die Oberfläche passende Befehle als Pillen zur Korrektur vor.
+- **Spracherkennung und Diktat:** Diktat per Mikrofon-Button direkt in das Eingabefeld – ein [SpeechInt](https://github.com/dareinelt/SpeechInt)-Dienst transkribiert die Segmente mit whisper.cpp und formuliert die Fragmente mit einem Qwen3.5-2B aus; gesprochene Diktatbefehle („Punkt", „Neue Zeile", „Lösche letztes Wort") werden in Zeichen und Formatierung umgewandelt. Nach dem Sprechen schlägt die Oberfläche passende Befehle als Pillen zur Korrektur vor. Die rechenintensiven Modelle laufen nicht mehr in diesem Stack, sondern auf einem oder mehreren separaten SpeechInt-Hosts.
 
 ## Architektur
 
@@ -67,7 +67,7 @@ Weitere Dokumente im Repository:
 | API | `api/chat.php`, Routing, RAG, Uploads, Bildgenerierung und OpenAI-Endpunkte |
 | Administration | `admin/` für Endpunkte, Benutzer, Einstellungen, API-Keys und Statistik |
 | Persistenz | MySQL oder MariaDB; das Schema wird idempotent durch `setup.php` und `db.php` erweitert |
-| Externe Dienste | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP, SMTP, AUTOMATIC1111 und ComfyUI; für das Diktat zusätzlich die mitgelieferten Container `whisper` (whisper.cpp) und `qwen` (llama.cpp mit Qwen3.5-2B Q4) |
+| Externe Dienste | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP, SMTP, AUTOMATIC1111 und ComfyUI; für das Diktat ein oder mehrere [SpeechInt](https://github.com/dareinelt/SpeechInt)-Dienste (whisper.cpp + Qwen3.5-2B), die auf einem separaten Docker-Host laufen |
 
 Wichtige Komponenten:
 
@@ -77,9 +77,10 @@ Wichtige Komponenten:
 - `api/embedding.php` erstellt Embeddings, führt Ähnlichkeitssuche und optionales Reranking aus.
 - `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an; `api/doc_convert.php`, `api/pdf_render.php` und `api/vision.php` kapseln Konverter-Dienst, PDF-Rendering und Vision-Analyse.
 - `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
-- `lib/speech_dictation.php` kapselt das Diktat: Whisper-Aufruf, Diktatbefehle und
-  Befehls-Pillen, Prompt für das Diktat-Modell, deterministischer Regel-Fallback sowie der
-  Chat-Completion-Aufruf an das lokale Qwen3.5-2B.
+- `lib/speech_dictation.php` kapselt das Diktat als HTTP-Client eines
+  SpeechInt-Dienstes: Transkription, Nachbearbeitung, Diktatbefehle und Befehls-Pillen,
+  Prompt für das Diktat-Modell, Health-/Konfigurationsabfragen und der deterministische
+  Regel-Fallback, wenn kein Dienst erreichbar ist.
 - `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
 
 Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Build-Schritt: Jede URL entspricht einer PHP-Datei, Abhängigkeiten werden über `require_once` geladen, und Frontend-CSS/-JavaScript liegen inline in `index.php` beziehungsweise `admin/index.php`. Eine vollständige technische Referenz mit Funktions-, Tabellen- und Einstellungsnamen enthält [`description.md`](description.md); eine grafisch aufbereitete Architekturübersicht mit Diagrammen bietet [`docs/architecture.md`](docs/architecture.md), eine vollständige Funktionsreferenz [`docs/functions.md`](docs/functions.md) und eine kompakte Navigationshilfe für Coding-Agenten [`docs/agent_index.md`](docs/agent_index.md).
@@ -97,8 +98,8 @@ Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Bu
 | `api/` | JSON- und SSE-Endpunkte sowie die Bibliotheken für Balancer und Embeddings |
 | `lib/` | Balancer-Engine, Prompt Security, Spracherkennung/Diktat (`speech_dictation.php`), OpenAI-Hilfsfunktionen, LDAP-Anbindung, SMTP-Client, Routing-Prompt, Reverse-Proxy-Unterstützung |
 | `admin/` | Administration, Dashboard-Livedaten, Nutzungsstatistik, SSH-Systemmetriken, API-Keys, Prompt Security |
-| `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth sowie der Dienste `whisper` und `qwen` für das Diktat |
-| `Dockerfile.whisper`, `docker-compose.test.yml` | nativer whisper.cpp-Build für arm64-Hosts und der zugehörige Compose-Override (siehe [Spracherkennung und Diktat](#spracherkennung-und-diktat)) |
+| `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth |
+| `docker-compose.test.yml` | Compose-Override für einen schnellen lokalen Stack beim Testen des Diktats (siehe [Spracherkennung und Diktat](#spracherkennung-und-diktat)) |
 | `docker-compose.lanpa.yml` | optionaler Override für den Betrieb hinter dem `auth`-Container von lanpa |
 | `docconvert/` | Python/FastAPI-Container zur Konvertierung von Office- und Textdateien in strukturierte Chunks |
 | `doc_uploads/`, `sd_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
@@ -351,12 +352,10 @@ Persistente Docker-Volumes:
 - `docconvert_cache` für den Konvertierungs-Cache
 - `milvus_data` für die lokale Milvus-Vektordatenbank (Modus `local` der Wissensdatenbank)
 - `vector_imports` für docvecwizard-Exportarchive, die serverseitig importiert werden sollen
-- `whisper_models` für das GGML-Modell der Spracherkennung (wird nur beim ersten Start geladen)
-- `qwen_cache` für das GGUF-Modell der Diktat-Nachbearbeitung (`LLAMA_CACHE`)
 
 Der `milvus`-Service (Standalone mit eingebettetem etcd, ca. 2 GB RAM) wird nur im Modus `local` der Wissensdatenbank benötigt. Wer ausschließlich die docvecwizard-API nutzt, kann ihn mit `docker compose stop milvus` anhalten.
 
-Die Dienste `whisper` und `qwen` werden nur für das Diktat benötigt; ohne sie bleibt der Chat vollständig nutzbar, und die Diktat-Karte im Adminbereich meldet die fehlende Verbindung. Beide veröffentlichen keinen Host-Port und sind ausschließlich im Compose-Netz erreichbar. Details und die Option für arm64-Hosts stehen unter [Spracherkennung und Diktat](#spracherkennung-und-diktat).
+Die rechenintensiven Diktat-Modelle (whisper.cpp und Qwen3.5-2B) laufen **nicht** in diesem Stack, sondern im separaten Projekt [SpeechInt](https://github.com/dareinelt/SpeechInt) auf einem eigenen Docker-Host. LLMInt spricht ihn über HTTP an; ist kein SpeechInt-Endpunkt konfiguriert oder erreichbar, bleibt der Chat vollständig nutzbar, das Diktat ist dann deaktiviert. Details und die Mindestanforderung an den SpeechInt-Host stehen unter [Spracherkennung und Diktat](#spracherkennung-und-diktat).
 
 Häufige Befehle:
 
@@ -508,11 +507,21 @@ Der Button erscheint nur, wenn die Spracherkennung aktiviert ist. Der rote Rahme
 ### Ablauf
 
 1. **Aufnahme:** Der Browser sammelt Sprache und schneidet ein Segment ab, sobald eine konfigurierte Anzahl Wörter im Puffer liegt oder die Stille größer als das Stopp-Timeout ist. Sehr lange Segmente werden an der Segmentgrenze geteilt, zu große anhand der Byte-Grenze verworfen.
-2. **Transkription:** `api/speech_transcribe.php` schickt das Segment als `multipart/form-data` an den `whisper`-Container (`/inference`). Whisper liefert den Rohtext des Fragments.
-3. **Nachbearbeitung:** `api/speech_process.php` übergibt das Fragment an das Diktat-Modell (Qwen3.5-2B Q4 über llama.cpp), den bereits im Feld stehenden Text als Kontext. Das Modell entfernt Füllwörter, setzt Groß-/Kleinschreibung und Zeichensetzung und wandelt gesprochene Diktatbefehle in Zeichen um; die Zeilenumbrüche setzt die Pipeline selbst.
+2. **Transkription:** `api/speech_transcribe.php` schickt das Segment als `multipart/form-data` an `POST /v1/audio/transcriptions` des aktiven SpeechInt-Endpunkts. Der Dienst transkribiert mit whisper.cpp und liefert den Rohtext des Fragments.
+3. **Nachbearbeitung:** `api/speech_process.php` übergibt das Fragment an `POST /v1/dictate/process`, zusammen mit dem bereits im Feld stehenden Text als Kontext, dem Systemprompt und der Befehlsliste aus den LLMInt-Einstellungen. Das Qwen3.5-2B des Dienstes entfernt Füllwörter, setzt Groß-/Kleinschreibung und Zeichensetzung und wandelt gesprochene Diktatbefehle in Zeichen und Umbrüche um.
 4. **Pillen:** Nach dem Beenden der Erkennung bietet die Oberfläche die konfigurierten Schnellbefehle als Pillen an. Diese werden **nicht** vom Diktat-Modell, sondern vom regulären Standardmodell über `api/chat.php` ausgeführt.
 
-Die erkannten Texte werden nicht gespeichert; im Log steht nur eine Längenangabe (`speechDictationLogText()`).
+Die erkannten Texte werden nicht gespeichert und verlassen den Server nicht; im Log steht nur eine Längenangabe (`speechDictationLogText()`).
+
+### Lade-Feedback
+
+Nach einem Neustart lädt SpeechInt erst die Modelle (whisper.cpp das GGML-Modell, llama.cpp die GGUF-Gewichte). Solange antwortet der Dienst mit `503` und `{"error":"service_loading"}` samt deutschem Hinweistext und `Retry-After`. LLMInt behandelt das **nicht** als Fehler und weicht auch **nicht** auf den Regel-Fallback aus: Der Diktat-Knopf zeigt in der Statuszeile „Spracheingabe wird verarbeitet …", behält das bereits erkannte Fragment und fragt nach der von `Retry-After` vorgegebenen Zeit erneut an (maximal 60 Versuche). Erst wenn ein Endpunkt nicht erreichbar ist oder einen echten Fehler meldet (`unreachable`, `error`, `unconfigured`, `502`, `504`), greift der Regel-Fallback.
+
+Die Statuszeile nennt damit das, was aus Sicht der bedienenden Person passiert: Die Äußerung wird verarbeitet. Welche Komponente des Dienstes noch lädt und warum gewartet wird, steht im Browser-Protokoll (Konsole) und im Diktat-Protokoll des Servers – nicht in der Oberfläche. Die Diktat-Karte im Adminbereich und der Dashboard-Knoten zeigen dagegen weiterhin den technischen Zustand des Endpunkts (`Modelle werden geladen …`).
+
+![Ladehinweis während SpeechInt die Modelle lädt](docs/images/sprach-diktat-ladehinweis.png)
+
+Im Screenshot ist der Fall direkt nach dem Start eines Diktats zu sehen: Die Statuszeile meldet, dass die Spracheingabe verarbeitet wird, im Puffer stehen die bereits erkannten vier Wörter – sie werden nicht verworfen, sondern nach Ablauf von `Retry-After` an denselben Endpunkt erneut geschickt.
 
 ### Diktatbefehle
 
@@ -530,33 +539,34 @@ Die Umwandlung übernimmt das Diktat-Modell anhand des konfigurierten Prompts; d
 
 ### Diktat-Modell
 
-Das Diktat nutzt bewusst ein kleines, lokales Modell (Qwen3.5-2B Q4) statt eines großen Chat-Modells: Die Aufgabe ist eng umrissen, die Latenz soll niedrig bleiben und der Text verlässt den Server nicht. Vier Punkte sind dafür entscheidend und im Code fest hinterlegt:
+Das Diktat nutzt bewusst ein kleines Modell (Qwen3.5-2B Q4) statt eines großen Chat-Modells: Die Aufgabe ist eng umrissen, die Latenz soll niedrig bleiben und der Text verlässt den eigenen Server nicht. Das Modell läuft in SpeechInt, der Aufruf ist ein einzelner JSON-POST an `/v1/dictate/process`; LLMInt sendet Prompt, Befehlsliste, Kontext und Modellnamen mit, der Dienst ist damit zustandslos. Vier Punkte sind dafür entscheidend:
 
-- **Reasoning ist hart abgeschaltet.** Der Aufruf sendet neben `chat_template_kwargs.enable_thinking=false` zusätzlich llama.cpps natives `reasoning_budget: 0`. Ohne das zweite Feld ignorieren manche llama.cpp-Builds das Jinja-Flag, das Modell füllt den Token-Puffer mit einem Denkblock und die Antwort kommt leer zurück.
-- **Der Prompt ist auf das Modell zugeschnitten.** Die Regeln stehen als kurze Stichpunkte, die Befehlsliste ist zu einer Zeile gruppiert (`speechDictationPromptCommandList()`) und es gibt sechs Beispiele. Ausführlichere Varianten wurden gemessen und waren messbar schlechter.
-- **Zeilenumbrüche macht nicht das Modell.** `speechDictationSplitAtBreaks()` schneidet „Neue Zeile" und „Neuer Absatz" heraus, bevor das Modell das Fragment sieht, und `speechDictationProcessFragment()` setzt die Umbrüche danach fest wieder ein. Das Modell verbraucht das Befehlswort zwar zuverlässig, schreibt an die Stelle aber ein Leerzeichen statt eines Umbruchs – deshalb listet der Prompt nur die übrigen Befehle (`speechDictationPromptCommandList(false)`) und verlangt eine einzige Zeile.
-- **Kontext und Satzgrenzen setzt die Pipeline deterministisch.** Der bereits geschriebene Text steht in der Systemnachricht (`speechDictationBuildSystemMessage()`) – in der Nutzernachricht wiederholt das Modell ihn im Ergebnis. Weil jedes Segment eine eigene Completion ist, stellt `speechDictationMatchLeadingCase()` die klein diktierte Groß-/Kleinschreibung wieder her und `speechDictationDropInventedSentenceEnd()` entfernt ein abschließendes Satzzeichen, das nicht diktiert wurde.
+- **Reasoning ist hart abgeschaltet.** Der Dienst sendet neben `chat_template_kwargs.enable_thinking=false` zusätzlich llama.cpps natives `reasoning_budget: 0`. Ohne das zweite Feld ignorieren manche llama.cpp-Builds das Jinja-Flag, das Modell füllt den Token-Puffer mit einem Denkblock und die Antwort kommt leer zurück.
+- **Der Prompt ist auf das Modell zugeschnitten.** Die Regeln stehen als kurze Stichpunkte, die Befehlsliste ist zu einer Zeile gruppiert und es gibt sechs Beispiele. Ausführlichere Varianten wurden gemessen und waren messbar schlechter.
+- **Zeilenumbrüche macht nicht das Modell.** „Neue Zeile" und „Neuer Absatz" werden herausgeschnitten, bevor das Modell das Fragment sieht, und danach fest wieder eingesetzt. Das Modell verbraucht das Befehlswort zwar zuverlässig, schreibt an die Stelle aber ein Leerzeichen statt eines Umbruchs – deshalb listet der Prompt nur die übrigen Befehle und verlangt eine einzige Zeile.
+- **Kontext und Satzgrenzen setzt die Pipeline deterministisch.** Der bereits geschriebene Text steht in der Systemnachricht – in der Nutzernachricht wiederholt das Modell ihn im Ergebnis. Weil jedes Segment eine eigene Completion ist, wird die klein diktierte Groß-/Kleinschreibung wiederhergestellt und ein abschließendes Satzzeichen entfernt, das nicht diktiert wurde.
 
-Der Systemprompt ist unter **Verwaltung → 🎙️ Spracherkennung / Diktat** editierbar; das Feld `speech_dictation_prompt` ist standardmäßig leer und verwendet dann `speechDictationDefaultPrompt()`.
+Der Systemprompt und die Befehlsliste sind unter **Verwaltung → 🎙️ Spracherkennung / Diktat** editierbar (`speech_dictation_prompt`, `speech_dictation_commands`); beide werden bei jeder Anfrage an SpeechInt mitgeschickt. Ist das Feld `speech_dictation_prompt` leer, gilt der Standardprompt des Dienstes (`speechDictationDefaultPrompt()`).
 
 ### Administration
 
-Die Karte **🎙️ Spracherkennung / Diktat** bündelt Aktivierung, Sprache, Whisper-Modell und Timeouts, die Puffer- und Segmentgrenzen, die Modell-URLs sowie den Prompt und die Befehlsliste.
+Die Karte **🎙️ Spracherkennung / Diktat** bündelt Aktivierung, aktiven Endpunkt, Sprache, die Puffer- und Segmentgrenzen sowie den Prompt und die Befehlsliste. Darunter lassen sich die SpeechInt-Endpunkte verwalten.
 
 ![Spracherkennung-Karte im Adminbereich](docs/images/sprach-diktat-admin.png)
 
-Über die beiden Buttons lässt sich die Verbindung zu den Containern direkt prüfen (`api/speech_health.php`):
+Über **Verbindung testen** lässt sich der Endpunkt direkt prüfen (`api/speech_health.php`); die Antwort zeigt Zustand, Modellnamen, Antwortzeit und die Dimensionierung des Hosts:
 
-![Verbindungstest für Whisper und Diktat-Modell](docs/images/sprach-diktat-verbindungstest.png)
+![Verbindungstest für einen SpeechInt-Endpunkt](docs/images/sprach-diktat-verbindungstest.png)
 
-Einstellungen (URL, Token und Timeout zusätzlich per `.env` vorbelegbar):
+#### Speech-Endpunkte
+
+Ein Endpunkt besteht aus Adresse (`base_url`), optionalem Token und Timeout. Ein Endpunkt pro Anfrage: LLMInt verwaltet beliebig viele Endpunkte und nutzt den aktiven; die Reihenfolge in der Tabelle bestimmt die Vorschlagsliste. Der Token wird nur maskiert angezeigt und nie im Log ausgegeben.
 
 | Einstellung | Bedeutung |
 |---|---|
 | `speech_dictation_enabled` | Diktat ein- oder ausschalten |
+| `speech_dictation_endpoint_id` | ID des aktiven Endpunkts aus der Tabelle `speech_endpoints` (0 = noch keiner gewählt) |
 | `speech_dictation_language` | Sprache für die Erkennung (`de`, `auto`, …) |
-| `speech_dictation_whisper_url`, `speech_dictation_whisper_model`, `speech_dictation_whisper_timeout`, `speech_dictation_whisper_token` | Adresse, ggml-Modell, Timeout und optionaler Token des Whisper-Dienstes |
-| `speech_dictation_qwen_url`, `speech_dictation_qwen_model`, `speech_dictation_qwen_timeout`, `speech_dictation_qwen_token` | Adresse, Modell-ID, Timeout und optionaler Token des Diktat-Modells |
 | `speech_dictation_buffer_words` | Wörter im Puffer, bevor ein Segment abgeschnitten wird (Empfehlung 3–4) |
 | `speech_dictation_stop_timeout_seconds` | Stille bis zum automatischen Beenden der Erkennung |
 | `speech_dictation_max_segment_seconds` | Maximale Länge eines Segments (Empfehlung 10–20) |
@@ -564,28 +574,28 @@ Einstellungen (URL, Token und Timeout zusätzlich per `.env` vorbelegbar):
 | `speech_dictation_prompt` | Systemprompt des Diktat-Modells (leer = Standard) |
 | `speech_dictation_commands`, `speech_dictation_pills` | Diktatbefehle und Schnellbefehl-Pillen als JSON |
 
-Die Umgebungsvariablen `WHISPER_URL`, `WHISPER_TOKEN`, `WHISPER_TIMEOUT`, `QWEN_URL`, `QWEN_TOKEN` und `QWEN_TIMEOUT` haben Vorrang vor den Datenbankwerten; bei den beiden URL-Feldern zeigt die Karte unter „Aktuell wirksam" an, woher der Wert stammt.
+Die Tabelle `speech_endpoints` speichert `alias`, `base_url`, `token`, `timeout`, `is_active` und `sort_order`. Die Umgebungsvariablen `SPEECHINT_URL`, `SPEECHINT_TOKEN` und `SPEECHINT_TIMEOUT` belegen den Standard-Endpunkt vor und haben – wie bei docconvert – Vorrang vor der Datenbank; die Karte zeigt unter „Aktuell wirksam" an, woher der Wert stammt. Zusätzlich veröffentlicht die Admin-Oberfläche einen Sprach-Endpunkt als Knoten in der Dashboard-Grafik.
 
-### Container
+### SpeechInt-Dienst
 
-`docker-compose.yml` startet zwei zusätzliche Dienste. Beide sind ausschließlich im Compose-Netz erreichbar und veröffentlichen keinen Host-Port:
+Die rechenintensiven Bestandteile des Diktats – whisper.cpp mit dem `small`-Modell und llama.cpp mit Qwen3.5-2B Q4 – wurden in das Projekt [SpeechInt](https://github.com/dareinelt/SpeechInt) extrahiert. LLMInt startet sie nicht mehr selbst, sondern spricht einen oder mehrere SpeechInt-Endpunkte über HTTP an:
 
-- **`whisper`** – `ghcr.io/ggml-org/whisper.cpp`, HTTP-Server auf Port 8080 (`/inference`, `/health`). Das GGML-Modell wird beim ersten Start in das Volume `whisper_models` geladen. Standardmodell ist `small`: Es liefert für deutsche Sprache brauchbare Ergebnisse und bleibt beim Download und Speicherbedarf klein.
-- **`qwen`** – `ghcr.io/ggml-org/llama.cpp` mit dem OpenAI-kompatiblen Server auf Port 8080 (`/v1/chat/completions`, `/health`). Das GGUF wird beim ersten Start von Hugging Face geholt und im Volume `qwen_cache` zwischengespeichert.
+| Aufruf in LLMInt | Endpunkt in SpeechInt |
+|---|---|
+| Transkription eines Segments | `POST /v1/audio/transcriptions` (multipart) |
+| Nachbearbeitung eines Fragments | `POST /v1/dictate/process` (JSON) |
+| Verbindungstest | `GET /v1/ready` (ohne Token) bzw. `GET /v1/health` (mit Token) |
+| Fähigkeiten, Vorgaben und Dimensionierung | `GET /v1/config` |
 
-Der Start dauert beim ersten Mal einige Minuten: Whisper lädt das Modell (Healthcheck-`start_period` 300 s), llama.cpp rund 1,1 GB Gewichte (600 s). Der Web-Container wartet nur auf den *Start* beider Dienste, damit der Chat nicht blockiert – ist ein Dienst noch nicht bereit, meldet das Diktat einen Fehler und das Admin-Feld zeigt den Verbindungstest als fehlgeschlagen. Ohne die Dienste bleibt der Chat vollständig nutzbar.
+Der Dienst ist zustandslos: Prompt, Befehlsliste, Modellname und Temperatur kommen bei jeder Anfrage aus den LLMInt-Einstellungen mit. Die Authentifizierung erfolgt über den Header `X-Auth-Token`; ohne konfiguriertes Token sind die Routen offen.
 
-#### arm64-Hosts (Apple Silicon)
+**Mindestanforderung an den SpeechInt-Host:** mindestens **6 CPU-Kerne mit AVX2** und **16 GB RAM**. Die Modelle laufen ausschließlich auf der CPU; die Angabe ist die Dimensionierungsgrundlage für die Standardkonfiguration (`small` + Qwen3.5-2B Q4). Der Verbindungstest liest die tatsächliche Ausstattung über `/v1/config` aus und warnt im Adminbereich, wenn der Host darunter liegt (`host.meets_minimum`, `host.warnings`).
 
-Das offizielle whisper.cpp-Image wird nur für `linux/amd64` veröffentlicht. Unter Emulation bricht die Transkription auf arm64-Hosts mit `SIGILL` ab. Deshalb gibt es `Dockerfile.whisper` und den Override `docker-compose.test.yml`, der whisper.cpp nativ für arm64 baut:
+Ohne erreichbaren Endpunkt bleibt der Chat vollständig nutzbar; das Diktat ist dann deaktiviert bzw. meldet den Zustand in der Karte. Ein lokaler Testaufbau lässt sich mit dem Compose-Override `docker-compose.test.yml` starten, der nur `db` und `web` benötigt und auf einen externen SpeechInt-Host zeigt:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+SPEECHINT_URL=http://speech-host:8080 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
 ```
-
-Der Override ersetzt das Upstream-Image durch den lokalen Build, setzt `platform` zurück und lässt Milvus, phpMyAdmin und den Konverter weg, damit der Stack auf einem Laptop schnell startet. Auf einem amd64-Host kann derselbe Befehl ohne Override verwendet werden.
-
-Der Build setzt bewusst `-DGGML_NATIVE=OFF` und wählt die Architektur explizit über `WHISPER_ARM_ARCH` (`armv8.2-a+fp16+dotprod`): Die Linux-VM von Docker Desktop sieht die Host-CPU nicht, `-mcpu=native` landet deshalb auf einem Basis-armv8-a ohne FP16-Vektorbefehle und der Build scheitert mit „target specific option mismatch". Für andere arm64-Hardware lässt sich der Wert per `--build-arg` überschreiben.
 
 ## API
 
@@ -645,7 +655,7 @@ print(response.choices[0].message.content)
 | Bildgenerierung | `api/sd_generate.php`, `api/sd_checkpoints.php`, `api/comfy_generate.php`, `api/comfy_checkpoints.php` |
 | Integrationen | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` |
 | Benutzer und Status | `api/verify_email.php`, `api/reset_password.php`, `api/admin_user_action.php`, `api/heartbeat.php` |
-| Spracherkennung und Diktat | `api/speech_config.php` (Konfiguration und CSRF für die Oberfläche), `api/speech_transcribe.php` (Audiodatei → Rohtext), `api/speech_process.php` (Fragment → bereinigter Text), `api/speech_health.php` (Verbindungstest, `target=whisper\|qwen\|both`) |
+| Spracherkennung und Diktat | `api/speech_config.php` (Konfiguration und CSRF für die Oberfläche), `api/speech_transcribe.php` (Audiodatei → Rohtext), `api/speech_process.php` (Fragment → bereinigter Text), `api/speech_health.php` (Verbindungstest eines Endpunkts, optional `url`/`token`) |
 | Administration | `admin/load_stats.php`, `admin/refresh_sys_stats.php`, `admin/usage_stats.php` (Nutzungsstatistik, Parameter `days`) |
 
 ### Anfrageformat von `api/chat.php`
@@ -723,10 +733,10 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 | Hinter lanpa: falsche Client-IP, Links ohne `/ki/` oder kein SSO | `TRUSTED_PROXIES` muss die Adresse des `auth`-Containers abdecken, `PROXY_SSO_HEADER=X-Remote-User`, LDAP und Windows-SSO in den Einstellungen aktiv |
 | Keine SSH-Metriken | PHP-Erweiterung `ssh2`, Endpunktzugangsdaten und `lm-sensors` auf dem Zielhost |
 | Diktat-Button fehlt | `speech_dictation_enabled`, Adminbereich → **🎙️ Spracherkennung / Diktat**; der Button erscheint nur bei aktivierter Erkennung |
-| Diktat liefert Rohtext ohne Befehlsauswertung | Verbindungstest in der Admin-Karte: ist das Diktat-Modell nicht erreichbar, greift der Regel-Fallback (Antwort mit `fallback: true`); Modell-ID, URL und Timeout prüfen |
-| Diktat-Modell antwortet leer oder bricht mitten im Satz ab | Das Modell hat Thinking aktiviert und den Token-Puffer damit gefüllt; `lib/speech_dictation.php` sendet deshalb `reasoning_budget: 0` – bei eigenen Aufrufen ebenfalls setzen |
-| Whisper bricht mit `SIGILL` ab | arm64-Host mit emuliertem amd64-Image; `Dockerfile.whisper` und `docker-compose.test.yml` verwenden (siehe [Spracherkennung und Diktat](#spracherkennung-und-diktat)) |
-| Whisper- oder Qwen-Container bleibt unhealthy | Erster Start lädt die Modelle (300 s bzw. 600 s `start_period`); Fortschritt mit `docker compose logs -f whisper` bzw. `-f qwen` prüfen |
+| Diktat liefert Rohtext ohne Befehlsauswertung | Verbindungstest in der Admin-Karte: ist das Diktat-Modell im SpeechInt-Dienst nicht erreichbar, greift der Regel-Fallback (Antwort mit `fallback: true`); Endpunkt, Token und Timeout prüfen |
+| Diktat meldet dauerhaft „Modelle werden noch geladen" | Der SpeechInt-Dienst lädt beim ersten Start die Modelle; Fortschritt mit `docker compose logs -f whisper` bzw. `-f llm` auf dem SpeechInt-Host prüfen |
+| SpeechInt-Endpunkt meldet `whisper_unreachable` oder `model_unreachable` | Im SpeechInt-Container läuft der jeweilige Modellprozess nicht; Logs des Dienstes prüfen |
+| SpeechInt-Host wird als zu klein gemeldet | `host.warnings` im Verbindungstest beachten – Mindestanforderung sind 6 CPU-Kerne mit AVX2 und 16 GB RAM |
 | Erkennung schneidet mitten im Satz ab | `speech_dictation_buffer_words` und `speech_dictation_stop_timeout_seconds` erhöhen; `max_segment_seconds` prüfen |
 
 ## Lizenz

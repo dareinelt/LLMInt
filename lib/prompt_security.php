@@ -262,7 +262,6 @@ SYS;
         $body    = curl_exec($ch);
         $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlErr = curl_error($ch);
-        curl_close($ch);
 
         if ($curlErr !== '' || $code !== 200) {
             return null;

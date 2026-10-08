@@ -3,21 +3,30 @@
 /**
  * api/speech_process.php
  *
- * Runs one dictated fragment through the dictation model (Qwen3.5-2B Q4) and
- * returns the cleaned, command-processed text that belongs into the input
- * field. The endpoint is called once per recognised fragment – the browser
- * keeps the accumulated text, the server stays stateless.
+ * Runs one dictated fragment through the dictation model of the SpeechInt
+ * service (POST /v1/dictate/process) and returns the cleaned,
+ * command-processed text that belongs into the input field. The endpoint is
+ * called once per recognised fragment – the browser keeps the accumulated text,
+ * the server stays stateless. Prompt and command table travel with the request,
+ * so everything stays configurable in this installation's admin area.
  *
  * The recognised text is never persisted here; it is only forwarded to the
- * model and logged as a length summary (see speechDictationLogText()).
+ * service and logged as a length summary (see speechDictationLogText()).
+ *
+ * While SpeechInt still loads its models it answers 503 `service_loading`. That
+ * is not a failure: the answer carries `loading: true`, the German message and
+ * `retry_after`; the browser keeps the fragment and asks again. Only when the
+ * service is unreachable, erroring or unconfigured does the deterministic
+ * rule fallback take over – recognised text is never lost (§19).
  *
  * POST (JSON or form-encoded):
- *   fragment   – the newly dictated text from the Whisper step
+ *   fragment   – the newly dictated text from the transcription step
  *   context    – the text already in the input field (read-only reference for
  *                the model, so it can avoid repeating or duplicating it)
  *   csrf_token – CSRF token from the session
  *
- * Returns JSON { ok, text, fallback, model, warning }.
+ * Returns JSON { ok, text, fallback, model, warning, loading, retry_after,
+ *                message }.
  */
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -71,14 +80,28 @@ $context  = (string) ($input['context'] ?? '');
 // already in the field.
 $result = speechDictationProcessFragment($fragment, $context);
 
+if (!empty($result['loading'])) {
+    // Models are still loading: no error, the browser keeps the fragment and
+    // retries after `retry_after` seconds.
+    writeLog('info', 'Spracherkennung: SpeechInt lädt noch – Fragment wird erneut versucht.');
+    echo json_encode([
+        'ok'          => false,
+        'loading'     => true,
+        'retry_after' => (int) $result['retry_after'],
+        'message'     => (string) $result['message'],
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 if ($result['fallback']) {
     writeLog('warning', 'Spracherkennung: Diktat-Modell nicht verfügbar, Regel-Fallback verwendet – ' . $result['warning']);
 }
 
 echo json_encode([
-    'ok'       => true,
-    'text'     => $result['text'],
-    'fallback' => $result['fallback'],
-    'model'    => $result['model'],
-    'warning'  => $result['warning'],
+    'ok'          => true,
+    'loading'     => false,
+    'text'        => $result['text'],
+    'fallback'    => $result['fallback'],
+    'model'       => $result['model'],
+    'warning'     => $result['warning'],
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

@@ -27,24 +27,29 @@ $pdfVisionDpi      = max(72, min(300, (int) getSetting('pdf_vision_dpi', '150'))
 $pdfVisionMaxPages = max(1, min(200, (int) getSetting('pdf_vision_max_pages', '30')));
 
 // ── Speech recognition / dictation ───────────────────────────────────────────
-// The URLs are read through the library so the admin card always shows the
-// value that is actually in effect (environment variables win over settings).
+// The effective URL is read through the library so the admin card always shows
+// the value that is really in effect (environment variables win over the
+// `speech_endpoints` table).
 $speechEnabled        = getSetting('speech_dictation_enabled', '1') === '1';
-$speechWhisperUrl     = speechDictationWhisperUrl();
-$speechWhisperUrlSrc  = speechDictationWhisperUrlSource();
-$speechWhisperModel   = speechDictationWhisperModel();
-$speechWhisperTimeout = speechDictationWhisperTimeout();
+$speechEndpointId     = speechDictationEndpointId();
+$speechUrl            = speechDictationUrl();
+$speechUrlSrc         = speechDictationUrlSource();
+$speechTimeout        = speechDictationTimeout();
 $speechLanguage       = speechDictationLanguage();
-$speechQwenUrl        = speechDictationQwenUrl();
-$speechQwenUrlSrc     = speechDictationQwenUrlSource();
-$speechQwenModel      = speechDictationQwenModel();
-$speechQwenTimeout    = speechDictationQwenTimeout();
 $speechBufferWords    = speechDictationBufferWords();
 $speechStopTimeout    = speechDictationStopTimeoutSeconds();
 $speechMaxSegment     = speechDictationMaxSegmentSeconds();
 $speechMaxAudioMb     = (int) round(speechDictationMaxAudioBytes() / 1048576);
 $speechPillCount      = count(speechDictationPills());
 $speechCommandCount   = count(speechDictationCommands());
+$speechEndpoints      = speechDictationEndpoints();
+$speechStatus         = speechDictationDashboardStatus(false);
+$editSpeechEp         = null;
+
+// Populate $editSpeechEp if the URL requests editing a specific Speech endpoint.
+if (isset($_GET['edit_speech']) && (int) $_GET['edit_speech'] > 0) {
+    $editSpeechEp = speechDictationEndpoint((int) $_GET['edit_speech']);
+}
 
 $routingDecisionModel = trim(getSetting('routing_decision_model', ''));
 $intelligenceUpgradeMessage = getSetting('intelligence_upgrade_message', '');
@@ -508,32 +513,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // ── Save speech recognition / dictation settings ──────────────────────
         } elseif ($action === 'save_speech_dictation_settings') {
             $newEnabled      = isset($_POST['speech_dictation_enabled']) ? '1' : '0';
-            $newWhisperUrl   = trim($_POST['speech_dictation_whisper_url'] ?? '');
-            $newWhisperModel = trim($_POST['speech_dictation_whisper_model'] ?? '');
+            $newEndpointId   = (int) ($_POST['speech_dictation_endpoint_id'] ?? 0);
             $newLanguage     = trim($_POST['speech_dictation_language'] ?? '');
-            $newQwenUrl      = trim($_POST['speech_dictation_qwen_url'] ?? '');
-            $newQwenModel    = trim($_POST['speech_dictation_qwen_model'] ?? '');
             $newBufferWords  = (int) ($_POST['speech_dictation_buffer_words'] ?? 4);
             $newStopTimeout  = (int) ($_POST['speech_dictation_stop_timeout_seconds'] ?? 3);
             $newMaxSegment   = (int) ($_POST['speech_dictation_max_segment_seconds'] ?? 15);
             $newMaxAudioMb   = (int) ($_POST['speech_dictation_max_audio_mb'] ?? 10);
-            $newWhisperTmo   = (int) ($_POST['speech_dictation_whisper_timeout'] ?? 120);
-            $newQwenTmo      = (int) ($_POST['speech_dictation_qwen_timeout'] ?? 60);
 
-            // URLs are stored without a trailing slash and only when they are
-            // syntactically valid; everything else would end up in curl_init().
-            $urlErrors = [];
-            foreach ([['Whisper-URL', $newWhisperUrl], ['Qwen-URL', $newQwenUrl]] as [$label, $candidate]) {
-                if ($candidate === '') {
-                    continue;
-                }
-                if (!preg_match('#^https?://[A-Za-z0-9._\-]+(:\d+)?(/[^\s]*)?$#', $candidate)) {
-                    $urlErrors[] = $label . ' ist keine gültige http(s)-URL.';
-                }
-            }
-
-            if ($urlErrors) {
-                $flashError = implode(' ', $urlErrors);
+            if ($newEndpointId < 0) {
+                $flashError = 'Ungültiger Speech-Endpunkt ausgewählt.';
+            } elseif ($newEndpointId > 0 && speechDictationEndpoint($newEndpointId) === null) {
+                $flashError = 'Der ausgewählte Speech-Endpunkt existiert nicht mehr.';
             } elseif ($newBufferWords < 1 || $newBufferWords > 50) {
                 $flashError = 'Die Anzahl gepufferter Wörter muss zwischen 1 und 50 liegen.';
             } elseif ($newStopTimeout < 1 || $newStopTimeout > 60) {
@@ -542,40 +532,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashError = 'Die maximale Segmentdauer muss zwischen 3 und 120 Sekunden liegen.';
             } elseif ($newMaxAudioMb < 1 || $newMaxAudioMb > 100) {
                 $flashError = 'Die maximale Audiodateigröße muss zwischen 1 und 100 MB liegen.';
-            } elseif ($newWhisperTmo < 10 || $newWhisperTmo > 600) {
-                $flashError = 'Der Whisper-Timeout muss zwischen 10 und 600 Sekunden liegen.';
-            } elseif ($newQwenTmo < 10 || $newQwenTmo > 300) {
-                $flashError = 'Der Qwen-Timeout muss zwischen 10 und 300 Sekunden liegen.';
             } else {
                 setSetting('speech_dictation_enabled', $newEnabled);
-                setSetting('speech_dictation_whisper_url', $newWhisperUrl === '' ? '' : rtrim($newWhisperUrl, '/'));
-                setSetting('speech_dictation_whisper_model', $newWhisperModel === '' ? 'small' : $newWhisperModel);
+                setSetting('speech_dictation_endpoint_id', (string) $newEndpointId);
                 setSetting('speech_dictation_language', $newLanguage === '' ? 'de' : $newLanguage);
-                setSetting('speech_dictation_qwen_url', $newQwenUrl === '' ? '' : rtrim($newQwenUrl, '/'));
-                setSetting('speech_dictation_qwen_model', $newQwenModel === '' ? 'Qwen3.5-2B Q4' : $newQwenModel);
                 setSetting('speech_dictation_buffer_words', (string) $newBufferWords);
                 setSetting('speech_dictation_stop_timeout_seconds', (string) $newStopTimeout);
                 setSetting('speech_dictation_max_segment_seconds', (string) $newMaxSegment);
                 setSetting('speech_dictation_max_audio_mb', (string) $newMaxAudioMb);
-                setSetting('speech_dictation_whisper_timeout', (string) $newWhisperTmo);
-                setSetting('speech_dictation_qwen_timeout', (string) $newQwenTmo);
 
                 // Re-read through the accessors so the form shows the effective
                 // values (an environment variable may still win).
-                $speechEnabled        = getSetting('speech_dictation_enabled', '1') === '1';
-                $speechWhisperUrl     = speechDictationWhisperUrl();
-                $speechWhisperUrlSrc  = speechDictationWhisperUrlSource();
-                $speechWhisperModel   = speechDictationWhisperModel();
-                $speechWhisperTimeout = speechDictationWhisperTimeout();
-                $speechLanguage       = speechDictationLanguage();
-                $speechQwenUrl        = speechDictationQwenUrl();
-                $speechQwenUrlSrc     = speechDictationQwenUrlSource();
-                $speechQwenModel      = speechDictationQwenModel();
-                $speechQwenTimeout    = speechDictationQwenTimeout();
-                $speechBufferWords    = speechDictationBufferWords();
-                $speechStopTimeout    = speechDictationStopTimeoutSeconds();
-                $speechMaxSegment     = speechDictationMaxSegmentSeconds();
-                $speechMaxAudioMb     = (int) round(speechDictationMaxAudioBytes() / 1048576);
+                $speechEnabled      = getSetting('speech_dictation_enabled', '1') === '1';
+                $speechEndpointId   = speechDictationEndpointId();
+                $speechUrl          = speechDictationUrl();
+                $speechUrlSrc       = speechDictationUrlSource();
+                $speechTimeout      = speechDictationTimeout();
+                $speechLanguage     = speechDictationLanguage();
+                $speechBufferWords  = speechDictationBufferWords();
+                $speechStopTimeout  = speechDictationStopTimeoutSeconds();
+                $speechMaxSegment   = speechDictationMaxSegmentSeconds();
+                $speechMaxAudioMb   = (int) round(speechDictationMaxAudioBytes() / 1048576);
 
                 $flashOk = 'Spracherkennungs-Einstellungen gespeichert.';
             }
@@ -724,6 +701,109 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($epId > 0) {
                 $db->prepare('DELETE FROM sd_endpoints WHERE id = ?')->execute([$epId]);
                 $flashOk = 'SD-Endpunkt gelöscht.';
+            }
+
+        // ── Add SpeechInt endpoint ────────────────────────────────────────────
+        } elseif ($action === 'add_speech_endpoint') {
+            $newAlias   = trim($_POST['speech_ep_alias'] ?? '');
+            $newUrl     = trim($_POST['speech_ep_base_url'] ?? '');
+            $newToken   = trim($_POST['speech_ep_token'] ?? '');
+            $newTimeout = (int) ($_POST['speech_ep_timeout'] ?? 120);
+            $isActive   = isset($_POST['speech_ep_is_active']) ? 1 : 0;
+
+            if ($newUrl === '') {
+                $flashError = 'URL darf nicht leer sein.';
+            } elseif (!preg_match('#^https?://[A-Za-z0-9._\-]+(:\d+)?(/[^\s]*)?$#', $newUrl)) {
+                $flashError = 'Bitte eine gültige http(s)-URL eingeben.';
+            } elseif ($newTimeout < 10 || $newTimeout > 600) {
+                $flashError = 'Timeout muss zwischen 10 und 600 Sekunden liegen.';
+            } else {
+                $maxOrder = (int) $db->query(
+                    'SELECT COALESCE(MAX(sort_order), -1) FROM speech_endpoints'
+                )->fetchColumn();
+                $db->prepare(
+                    'INSERT INTO speech_endpoints (alias, base_url, token, timeout, is_active, sort_order)
+                     VALUES (?, ?, ?, ?, ?, ?)'
+                )->execute([$newAlias, rtrim($newUrl, '/'), $newToken, $newTimeout, $isActive, $maxOrder + 1]);
+                $flashOk = 'Speech-Endpunkt hinzugefügt.';
+            }
+
+        // ── Update SpeechInt endpoint ─────────────────────────────────────────
+        } elseif ($action === 'update_speech_endpoint') {
+            $epId       = (int) ($_POST['speech_ep_id'] ?? 0);
+            $newAlias   = trim($_POST['speech_ep_alias'] ?? '');
+            $newUrl     = trim($_POST['speech_ep_base_url'] ?? '');
+            $newToken   = trim($_POST['speech_ep_token'] ?? '');
+            $clearToken = isset($_POST['speech_ep_clear_token']);
+            $newTimeout = (int) ($_POST['speech_ep_timeout'] ?? 120);
+            $isActive   = isset($_POST['speech_ep_is_active']) ? 1 : 0;
+
+            if ($epId <= 0 || speechDictationEndpoint($epId) === null) {
+                $flashError = 'Ungültiger Speech-Endpunkt.';
+            } elseif ($newUrl === '') {
+                $flashError = 'URL darf nicht leer sein.';
+            } elseif (!preg_match('#^https?://[A-Za-z0-9._\-]+(:\d+)?(/[^\s]*)?$#', $newUrl)) {
+                $flashError = 'Bitte eine gültige http(s)-URL eingeben.';
+            } elseif ($newTimeout < 10 || $newTimeout > 600) {
+                $flashError = 'Timeout muss zwischen 10 und 600 Sekunden liegen.';
+            } else {
+                $db->prepare(
+                    'UPDATE speech_endpoints
+                        SET alias = ?, base_url = ?, timeout = ?, is_active = ?
+                      WHERE id = ?'
+                )->execute([$newAlias, rtrim($newUrl, '/'), $newTimeout, $isActive, $epId]);
+
+                // The token is only ever displayed masked, so an empty field
+                // means "keep the stored secret" unless it is cleared explicitly.
+                if ($clearToken) {
+                    $db->prepare('UPDATE speech_endpoints SET token = NULL WHERE id = ?')->execute([$epId]);
+                } elseif ($newToken !== '') {
+                    $db->prepare('UPDATE speech_endpoints SET token = ? WHERE id = ?')
+                       ->execute([$newToken, $epId]);
+                }
+                $flashOk = 'Speech-Endpunkt gespeichert.';
+            }
+
+        // ── Delete SpeechInt endpoint ─────────────────────────────────────────
+        } elseif ($action === 'delete_speech_endpoint') {
+            $epId = (int) ($_POST['speech_ep_id'] ?? 0);
+            if ($epId > 0) {
+                $db->prepare('DELETE FROM speech_endpoints WHERE id = ?')->execute([$epId]);
+                if ((int) getSetting('speech_dictation_endpoint_id', '0') === $epId) {
+                    setSetting('speech_dictation_endpoint_id', '0');
+                }
+                $flashOk = 'Speech-Endpunkt gelöscht.';
+            }
+
+        // ── Move SpeechInt endpoint up / down ─────────────────────────────────
+        } elseif ($action === 'move_speech_endpoint') {
+            $epId      = (int) ($_POST['speech_ep_id'] ?? 0);
+            $direction = (string) ($_POST['speech_ep_direction'] ?? '');
+            $endpoints = speechDictationEndpoints();
+
+            $index = null;
+            foreach ($endpoints as $position => $endpoint) {
+                if ((int) $endpoint['id'] === $epId) {
+                    $index = $position;
+                    break;
+                }
+            }
+
+            $swapWith = $direction === 'up' ? ($index === null ? null : $index - 1)
+                                            : ($index === null ? null : $index + 1);
+
+            if ($index === null || $swapWith === null || !isset($endpoints[$swapWith])) {
+                $flashError = 'Der Endpunkt kann nicht weiter verschoben werden.';
+            } else {
+                // Rewrite the whole order so gaps or duplicate values in
+                // sort_order are cleaned up along the way.
+                $order = array_column($endpoints, 'id');
+                [$order[$index], $order[$swapWith]] = [$order[$swapWith], $order[$index]];
+                $stmt = $db->prepare('UPDATE speech_endpoints SET sort_order = ? WHERE id = ?');
+                foreach ($order as $position => $id) {
+                    $stmt->execute([$position, (int) $id]);
+                }
+                $flashOk = 'Reihenfolge der Speech-Endpunkte gespeichert.';
             }
 
         // ── Add ComfyUI endpoint ──────────────────────────────────────────────
@@ -3025,11 +3105,21 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-         Speech recognition / dictation
+         Speech recognition / dictation (SpeechInt)
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-speech-card">
         <details class="config-panel" id="config-speech" open>
             <summary>🎙️ Spracherkennung / Diktat</summary>
+
+            <p class="hint" style="margin-bottom:16px">
+                Transkription (whisper.cpp) und Diktat-Nachbearbeitung laufen in einem
+                separaten Dienst – dem <strong>SpeechInt</strong>-Server. LLMInt schickt die
+                Audioschnipsel und den erkannten Text per HTTP dorthin; das erkannte Diktat
+                verlässt dabei den Server nicht und wird nicht gespeichert.<br>
+                Mindestanforderung je Speech-Endpunkt: <strong>6 CPU-Kerne mit AVX2</strong>
+                und <strong>16 GB RAM</strong>.
+            </p>
+
             <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
             <input type="hidden" name="action" value="save_speech_dictation_settings">
@@ -3047,136 +3137,261 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             </div>
 
             <div class="form-group">
-                <label for="speech-whisper-url">Whisper-Server-URL (whisper.cpp)</label>
-                <input type="url" id="speech-whisper-url" name="speech_dictation_whisper_url"
-                       placeholder="http://whisper:8080"
-                       value="<?= htmlspecialchars($speechWhisperUrl) ?>">
+                <label for="speech-endpoint-select">Aktiver Speech-Endpunkt</label>
+                <select id="speech-endpoint-select" name="speech_dictation_endpoint_id">
+                    <option value="0" <?= $speechEndpointId === 0 ? 'selected' : '' ?>>
+                        – Automatisch (erster aktiver Endpunkt) –
+                    </option>
+                    <?php foreach ($speechEndpoints as $speechEp): ?>
+                    <option value="<?= (int) $speechEp['id'] ?>"
+                            <?= $speechEndpointId === (int) $speechEp['id'] ? 'selected' : '' ?>>
+                        <?= htmlspecialchars(speechDictationEndpointLabel($speechEp)) ?>
+                        <?= (int) $speechEp['is_active'] === 1 ? '' : ' (inaktiv)' ?>
+                    </option>
+                    <?php endforeach; ?>
+                </select>
                 <p class="hint">
-                    Basis-URL des whisper.cpp-HTTP-Servers, ohne Pfad – der Endpunkt
-                    <code>/inference</code> wird automatisch ergänzt.<br>
-                    Aktuell wirksam: <strong><?= htmlspecialchars(speechDictationSourceLabel($speechWhisperUrlSrc)) ?></strong><?php
-                    if ($speechWhisperUrlSrc === 'env'): ?> – die Umgebungsvariable
-                    <code>WHISPER_URL</code> hat Vorrang vor diesem Feld.<?php endif; ?><br>
-                    Leer lassen, um die Spracherkennung zu deaktivieren.
+                    Pro Diktat-Anfrage wird genau ein Endpunkt angesprochen – der hier
+                    ausgewählte. Ohne Auswahl wird der erste aktive Endpunkt der Liste genutzt.<br>
+                    Aktuell wirksam: <strong><?= htmlspecialchars(speechDictationSourceLabel($speechUrlSrc)) ?></strong><?php
+                    if ($speechUrlSrc === 'env'): ?> – die Umgebungsvariable
+                    <code>SPEECHINT_URL</code> hat Vorrang vor dieser Auswahl.<?php endif; ?>
+                    <?php if ($speechUrl !== ''): ?>
+                    <br>Effektive Basis-URL: <code><?= htmlspecialchars($speechUrl) ?></code>
+                    (Timeout <?= (int) $speechTimeout ?> s)
+                    <?php endif; ?>
                 </p>
             </div>
 
-            <div class="form-group">
-                <label for="speech-whisper-model">Whisper-Modell</label>
-                <input type="text" id="speech-whisper-model" name="speech_dictation_whisper_model"
-                       placeholder="small" value="<?= htmlspecialchars($speechWhisperModel) ?>">
-                <p class="hint">
-                    Bezeichnung des Modells, das der Whisper-Server geladen hat (z.&nbsp;B.
-                    <code>small</code>, <code>medium</code>, <code>large-v3</code>). Wird im
-                    Diktat-Container über <code>WHISPER_MODEL</code> gesetzt und hier nur dokumentiert.
-                </p>
+            <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label for="speech-language">Sprache</label>
+                    <input type="text" id="speech-language" name="speech_dictation_language"
+                           placeholder="de" value="<?= htmlspecialchars($speechLanguage) ?>">
+                    <p class="hint">
+                        Sprachcode für Whisper (z.&nbsp;B. <code>de</code>, <code>en</code>). Leer oder
+                        <code>auto</code> lässt die Sprache automatisch erkennen.
+                    </p>
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label for="speech-buffer-words">Anzahl gepufferter Wörter</label>
+                    <input type="number" id="speech-buffer-words" name="speech_dictation_buffer_words"
+                           min="1" max="50" value="<?= (int) $speechBufferWords ?>">
+                    <p class="hint">
+                        So viele Wörter werden zurückgehalten, bis der nachfolgende Kontext bekannt
+                        ist – erst dadurch sind Diktatbefehle wie <em>„neue Zeile"</em> zuverlässig
+                        erkennbar. Empfehlung: 3–4.
+                    </p>
+                </div>
             </div>
 
-            <div class="form-group">
-                <label for="speech-language">Sprache</label>
-                <input type="text" id="speech-language" name="speech_dictation_language"
-                       placeholder="de" value="<?= htmlspecialchars($speechLanguage) ?>">
-                <p class="hint">
-                    Sprachcode für Whisper (z.&nbsp;B. <code>de</code>, <code>en</code>). Leer oder
-                    <code>auto</code> lässt die Sprache automatisch erkennen.
-                </p>
-            </div>
-
-            <div class="form-group">
-                <label for="speech-whisper-timeout">Whisper-Timeout (Sekunden)</label>
-                <input type="number" id="speech-whisper-timeout" name="speech_dictation_whisper_timeout"
-                       min="10" max="600" value="<?= (int) $speechWhisperTimeout ?>">
-                <p class="hint">Maximale Wartezeit für die Transkription eines Segments (10–600).</p>
-            </div>
-
-            <div class="form-group">
-                <label for="speech-qwen-url">Diktat-Modell-URL (llama.cpp / Qwen3.5-2B)</label>
-                <input type="url" id="speech-qwen-url" name="speech_dictation_qwen_url"
-                       placeholder="http://qwen:8080"
-                       value="<?= htmlspecialchars($speechQwenUrl) ?>">
-                <p class="hint">
-                    Basis-URL des llama.cpp-Servers mit dem Diktat-Modell, ohne Pfad – der
-                    OpenAI-kompatible Endpunkt <code>/v1/chat/completions</code> wird automatisch
-                    ergänzt.<br>
-                    Aktuell wirksam: <strong><?= htmlspecialchars(speechDictationSourceLabel($speechQwenUrlSrc)) ?></strong><?php
-                    if ($speechQwenUrlSrc === 'env'): ?> – die Umgebungsvariable
-                    <code>QWEN_URL</code> hat Vorrang vor diesem Feld.<?php endif; ?><br>
-                    Bleibt das Feld leer, wird das Diktat-Modell über den normalen
-                    <a href="#config-endpoints-card">Endpunkt-Pool</a> aufgelöst.
-                </p>
-            </div>
-
-            <div class="form-group">
-                <label for="speech-qwen-model">Diktat-Modell (Modellname)</label>
-                <input type="text" id="speech-qwen-model" name="speech_dictation_qwen_model"
-                       placeholder="Qwen3.5-2B Q4" value="<?= htmlspecialchars($speechQwenModel) ?>">
-                <p class="hint">
-                    Modellname für die Diktat-Verarbeitung. Muss zum <code>--alias</code> des
-                    llama.cpp-Servers passen bzw. – ohne eigene Diktat-URL – einem Modell im
-                    Endpunkt-Pool entsprechen.
-                </p>
-            </div>
-
-            <div class="form-group">
-                <label for="speech-qwen-timeout">Diktat-Modell-Timeout (Sekunden)</label>
-                <input type="number" id="speech-qwen-timeout" name="speech_dictation_qwen_timeout"
-                       min="10" max="300" value="<?= (int) $speechQwenTimeout ?>">
-                <p class="hint">Maximale Wartezeit für die Verarbeitung eines Textabschnitts (10–300).</p>
-            </div>
-
-            <div class="form-group">
-                <label for="speech-buffer-words">Anzahl gepufferter Wörter</label>
-                <input type="number" id="speech-buffer-words" name="speech_dictation_buffer_words"
-                       min="1" max="50" value="<?= (int) $speechBufferWords ?>">
-                <p class="hint">
-                    So viele Wörter werden zurückgehalten, bis der nachfolgende Kontext bekannt ist –
-                    erst dadurch sind Diktatbefehle wie <em>„neue Zeile"</em> zuverlässig erkennbar.
-                    Empfehlung: 3–4.
-                </p>
-            </div>
-
-            <div class="form-group">
-                <label for="speech-stop-timeout">Wartezeit bis „Erkennung beenden" (Sekunden)</label>
-                <input type="number" id="speech-stop-timeout" name="speech_dictation_stop_timeout_seconds"
-                       min="1" max="60" value="<?= (int) $speechStopTimeout ?>">
-                <p class="hint">
-                    Nach dieser Zeit ohne neu verarbeiteten Text erscheint die Schaltfläche
-                    „Erkennung beenden". Das Diktat läuft dabei weiter und kann fortgesetzt werden.
-                </p>
-            </div>
-
-            <div class="form-group">
-                <label for="speech-max-segment">Maximale Segmentdauer (Sekunden)</label>
-                <input type="number" id="speech-max-segment" name="speech_dictation_max_segment_seconds"
-                       min="3" max="120" value="<?= (int) $speechMaxSegment ?>">
-                <p class="hint">
-                    Die Mikrofonaufnahme wird in Segmente dieser Länge zerlegt und einzeln an
-                    Whisper gesendet. Kürzere Segmente liefern schnelleres Feedback, längere
-                    sind effizienter. Empfehlung: 10–20.
-                </p>
+            <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label for="speech-stop-timeout">Wartezeit bis „Erkennung beenden" (Sekunden)</label>
+                    <input type="number" id="speech-stop-timeout" name="speech_dictation_stop_timeout_seconds"
+                           min="1" max="60" value="<?= (int) $speechStopTimeout ?>">
+                    <p class="hint">
+                        Nach dieser Zeit ohne neu verarbeiteten Text erscheint die Schaltfläche
+                        „Erkennung beenden". Das Diktat läuft dabei weiter und kann fortgesetzt werden.
+                    </p>
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label for="speech-max-segment">Maximale Segmentdauer (Sekunden)</label>
+                    <input type="number" id="speech-max-segment" name="speech_dictation_max_segment_seconds"
+                           min="3" max="120" value="<?= (int) $speechMaxSegment ?>">
+                    <p class="hint">
+                        Die Mikrofonaufnahme wird in Segmente dieser Länge zerlegt und einzeln an
+                        SpeechInt gesendet. Kürzere Segmente liefern schnelleres Feedback, längere
+                        sind effizienter. Empfehlung: 10–20.
+                    </p>
+                </div>
             </div>
 
             <div class="form-group">
                 <label for="speech-max-audio">Maximale Audiodateigröße (MB)</label>
                 <input type="number" id="speech-max-audio" name="speech_dictation_max_audio_mb"
                        min="1" max="100" value="<?= (int) $speechMaxAudioMb ?>">
-                <p class="hint">Größere Segmente werden verworfen und protokolliert (1–100 MB).</p>
+                <p class="hint">
+                    Größere Segmente werden verworfen und protokolliert (1–100 MB). Der
+                    SpeechInt-Server weist Aufnahmen über 25 MB zusätzlich selbst zurück.
+                </p>
             </div>
 
             <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
                 <button type="submit" class="btn btn-primary">💾 Speichern</button>
-                <button type="button" id="speech-whisper-test-btn" class="btn">🔌 Whisper testen</button>
-                <button type="button" id="speech-qwen-test-btn" class="btn">🧠 Diktat-Modell testen</button>
+                <button type="button" id="speech-test-btn" class="btn">🔌 Verbindung testen</button>
                 <span id="speech-test-result" style="font-size:.85rem"></span>
             </div>
+
+            <div id="speech-test-detail" class="hint" hidden
+                 style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);
+                        border-radius:8px;background:var(--surface-alt)"></div>
 
             <p class="hint" style="margin-top:12px">
                 Diktatbefehle: <strong><?= (int) $speechCommandCount ?></strong> Phrasen aktiv
                 (z.&nbsp;B. „Punkt", „Neue Zeile", „Lösche letztes Wort").
                 Kurzbefehle nach dem Diktat: <strong><?= (int) $speechPillCount ?></strong> Pills.
-                Die Kurzbefehle werden vom Standardmodell ausgeführt, nicht vom Diktat-Modell.
+                Prompt und Befehlstabelle bleiben in LLMInt konfiguriert und werden bei jeder
+                Anfrage an SpeechInt mitgeschickt – der Speech-Endpunkt ist zustandslos.
             </p>
             </form>
+
+            <!-- ── Speech endpoint management ──────────────────────────────── -->
+            <div class="ep-form-section" style="margin-top:18px">
+                <h3>🌐 Speech-Endpunkte</h3>
+
+                <?php if (empty($speechEndpoints)): ?>
+                    <p style="color:var(--text-muted);margin-bottom:16px;">
+                        Noch keine Speech-Endpunkte konfiguriert. Füge unten einen hinzu.
+                    </p>
+                <?php else: ?>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Name</th>
+                            <th>Basis-URL</th>
+                            <th>Token</th>
+                            <th>Timeout</th>
+                            <th>Status</th>
+                            <th>Aktionen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($speechEndpoints as $speechEp): ?>
+                        <tr>
+                            <td style="color:var(--text-muted)"><?= (int) $speechEp['id'] ?></td>
+                            <td>
+                                <?= htmlspecialchars($speechEp['alias'] !== '' ? $speechEp['alias'] : '–') ?>
+                                <?php if ($speechEndpointId === (int) $speechEp['id']): ?>
+                                    <br><span style="color:var(--accent);font-size:.75rem">aktiv gewählt</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="font-family:monospace;font-size:.8rem;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                                title="<?= htmlspecialchars($speechEp['base_url']) ?>">
+                                <?= htmlspecialchars($speechEp['base_url']) ?>
+                            </td>
+                            <td style="font-family:monospace;font-size:.8rem">
+                                <?= htmlspecialchars(speechDictationMaskToken((string) ($speechEp['token'] ?? ''))) ?>
+                            </td>
+                            <td><?= (int) $speechEp['timeout'] ?>s</td>
+                            <td>
+                                <span class="dot <?= $speechEp['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                                <?= $speechEp['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
+                            </td>
+                            <td style="white-space:nowrap">
+                                <button type="button" class="btn btn-sm"
+                                        onclick="startSpeechEdit(<?= htmlspecialchars(json_encode($speechEp), ENT_QUOTES) ?>)">
+                                    ✏ Bearbeiten
+                                </button>
+                                <span class="sep"> </span>
+                                <form method="POST" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                                    <input type="hidden" name="action" value="move_speech_endpoint">
+                                    <input type="hidden" name="speech_ep_id" value="<?= (int) $speechEp['id'] ?>">
+                                    <input type="hidden" name="speech_ep_direction" value="up">
+                                    <button type="submit" class="btn btn-sm" title="nach oben">▲</button>
+                                </form>
+                                <form method="POST" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                                    <input type="hidden" name="action" value="move_speech_endpoint">
+                                    <input type="hidden" name="speech_ep_id" value="<?= (int) $speechEp['id'] ?>">
+                                    <input type="hidden" name="speech_ep_direction" value="down">
+                                    <button type="submit" class="btn btn-sm" title="nach unten">▼</button>
+                                </form>
+                                <span class="sep"> </span>
+                                <form method="POST" style="display:inline"
+                                      onsubmit="return confirm('Speech-Endpunkt #<?= (int) $speechEp['id'] ?> wirklich löschen?')">
+                                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                                    <input type="hidden" name="action"     value="delete_speech_endpoint">
+                                    <input type="hidden" name="speech_ep_id" value="<?= (int) $speechEp['id'] ?>">
+                                    <button type="submit" class="btn btn-sm btn-danger">🗑 Löschen</button>
+                                </form>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php endif; ?>
+
+                <!-- ── Add / Edit form ─────────────────────────────────────── -->
+                <h3 id="speech-ep-form-title" style="margin-top:20px">➕ Speech-Endpunkt hinzufügen</h3>
+
+                <form method="POST" id="speech-ep-form">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                    <input type="hidden" name="action"    id="speech-ep-action" value="add_speech_endpoint">
+                    <input type="hidden" name="speech_ep_id" id="speech-ep-id" value="">
+
+                    <div class="form-row">
+                        <div class="form-group" style="flex:1">
+                            <label for="speech-ep-alias">Name</label>
+                            <input type="text" id="speech-ep-alias" name="speech_ep_alias"
+                                   placeholder="Speech-Host 1" maxlength="120"
+                                   value="<?= $editSpeechEp ? htmlspecialchars($editSpeechEp['alias']) : '' ?>">
+                            <p class="hint">Nur zur Anzeige – hilft bei mehreren Speech-Endpunkten.</p>
+                        </div>
+                        <div class="form-group" style="flex:1;min-width:140px">
+                            <label for="speech-ep-timeout">Timeout (Sekunden) *</label>
+                            <input type="number" id="speech-ep-timeout" name="speech_ep_timeout"
+                                   min="10" max="600" required
+                                   value="<?= $editSpeechEp ? (int) $editSpeechEp['timeout'] : 120 ?>">
+                            <p class="hint">10 – 600 s</p>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="speech-ep-url">Basis-URL des SpeechInt-Servers *</label>
+                        <input type="url" id="speech-ep-url" name="speech_ep_base_url"
+                               placeholder="http://192.168.1.20:8099" required
+                               value="<?= $editSpeechEp ? htmlspecialchars($editSpeechEp['base_url']) : '' ?>">
+                        <p class="hint">
+                            Ohne Pfad – die API-Pfade (<code>/v1/ready</code>,
+                            <code>/v1/audio/transcriptions</code>, <code>/v1/dictate/process</code>)
+                            werden automatisch ergänzt. Der Server muss über mindestens
+                            <strong>6 CPU-Kerne mit AVX2</strong> und <strong>16 GB RAM</strong> verfügen.
+                        </p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="speech-ep-token">Auth-Token (<code>X-Auth-Token</code>)</label>
+                        <input type="text" id="speech-ep-token" name="speech_ep_token"
+                               autocomplete="off" spellcheck="false"
+                               placeholder="<?= $editSpeechEp && (string) ($editSpeechEp['token'] ?? '') !== ''
+                                                  ? htmlspecialchars(speechDictationMaskToken((string) $editSpeechEp['token']))
+                                                  : 'ohne Token bleibt der Endpunkt offen' ?>">
+                        <p class="hint">
+                            Gemeinsames Geheimnis des SpeechInt-Servers (<code>SPEECHINT_TOKEN</code>
+                            bzw. <code>AUTH_TOKEN</code>). Das gespeicherte Token wird nur maskiert
+                            angezeigt – leer lassen behält es bei.
+                        </p>
+                        <?php if ($editSpeechEp && (string) ($editSpeechEp['token'] ?? '') !== ''): ?>
+                        <label class="inline" style="margin-top:6px">
+                            <input type="checkbox" id="speech-ep-clear-token" name="speech_ep_clear_token">
+                            Gespeichertes Token entfernen
+                        </label>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="inline">
+                            <input type="checkbox" id="speech-ep-active" name="speech_ep_is_active"
+                                   <?= (!$editSpeechEp || $editSpeechEp['is_active']) ? 'checked' : '' ?>>
+                            Endpunkt aktiv (nimmt Diktat-Anfragen entgegen)
+                        </label>
+                    </div>
+
+                    <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
+                        <button type="submit" class="btn btn-primary">💾 Speichern</button>
+                        <button type="button" class="btn" onclick="resetSpeechForm()">✕ Abbrechen</button>
+                        <button type="button" id="speech-ep-test-btn" class="btn">🔌 Verbindung testen</button>
+                        <span id="speech-ep-test-result" style="font-size:.85rem"></span>
+                    </div>
+                </form>
+
+                <div id="speech-ep-test-detail" class="hint" hidden
+                     style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);
+                            border-radius:8px;background:var(--surface-alt)"></div>
+            </div>
         </details>
     </div>
 
@@ -5927,45 +6142,214 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     });
 })();
 
-// ── Speech recognition connection tests ──────────────────────────────────────
+// ── SpeechInt endpoint form ───────────────────────────────────────────────────
 (function () {
     'use strict';
 
-    const whisperBtn = document.getElementById('speech-whisper-test-btn');
-    const qwenBtn    = document.getElementById('speech-qwen-test-btn');
-    const result     = document.getElementById('speech-test-result');
+    const formTitle   = document.getElementById('speech-ep-form-title');
+    const actionInput = document.getElementById('speech-ep-action');
+    const idInput     = document.getElementById('speech-ep-id');
+    const aliasInput  = document.getElementById('speech-ep-alias');
+    const urlInput    = document.getElementById('speech-ep-url');
+    const tokenInput  = document.getElementById('speech-ep-token');
+    const timeoutInput = document.getElementById('speech-ep-timeout');
+    const activeCheck = document.getElementById('speech-ep-active');
+    const clearCheck  = document.getElementById('speech-ep-clear-token');
+    const configPanel = document.getElementById('config-speech');
 
-    if (!whisperBtn || !qwenBtn || !result) { return; }
+    if (!formTitle) { return; }
 
-    /** Probe one target through api/speech_health.php and report the result. */
-    async function probe(button, label, target) {
+    // Pre-fill the form when the page loaded with ?edit_speech=<id>
+    <?php if ($editSpeechEp): ?>
+    formTitle.textContent = '✏ Speech-Endpunkt bearbeiten';
+    actionInput.value = 'update_speech_endpoint';
+    idInput.value     = <?= (int) $editSpeechEp['id'] ?>;
+    if (configPanel) { configPanel.open = true; }
+    document.getElementById('speech-ep-form').closest('.ep-form-section')
+        .scrollIntoView({ behavior: 'smooth' });
+    <?php endif; ?>
+
+    window.startSpeechEdit = function (ep) {
+        formTitle.textContent = '✏ Speech-Endpunkt bearbeiten';
+        actionInput.value     = 'update_speech_endpoint';
+        idInput.value         = ep.id;
+        aliasInput.value      = ep.alias || '';
+        urlInput.value        = ep.base_url;
+        // The stored secret is never sent to the browser – an empty field
+        // therefore keeps whatever is stored on the server.
+        tokenInput.value      = '';
+        timeoutInput.value    = ep.timeout;
+        activeCheck.checked   = ep.is_active == 1;
+        if (clearCheck) { clearCheck.checked = false; }
+        if (configPanel) { configPanel.open = true; }
+        document.getElementById('speech-ep-form').closest('.ep-form-section')
+            .scrollIntoView({ behavior: 'smooth' });
+    };
+
+    window.resetSpeechForm = function () {
+        formTitle.textContent = '➕ Speech-Endpunkt hinzufügen';
+        actionInput.value     = 'add_speech_endpoint';
+        idInput.value         = '';
+        aliasInput.value      = '';
+        urlInput.value        = '';
+        tokenInput.value      = '';
+        timeoutInput.value    = '120';
+        activeCheck.checked   = true;
+        if (clearCheck) { clearCheck.checked = false; }
+        document.getElementById('speech-ep-test-result').textContent = '';
+        document.getElementById('speech-ep-test-detail').hidden = true;
+    };
+})();
+
+// ── SpeechInt connection test ─────────────────────────────────────────────────
+//
+// While the service still loads its models it answers 503 `service_loading`.
+// That is *not* an error: the German message is shown and the probe is repeated
+// automatically after `Retry-After` seconds. Only `unreachable`, `error` or
+// `unconfigured` are reported as a failure.
+(function () {
+    'use strict';
+
+    const cardBtn     = document.getElementById('speech-test-btn');
+    const cardResult  = document.getElementById('speech-test-result');
+    const cardDetail  = document.getElementById('speech-test-detail');
+    const formBtn     = document.getElementById('speech-ep-test-btn');
+    const formResult  = document.getElementById('speech-ep-test-result');
+    const formDetail  = document.getElementById('speech-ep-test-detail');
+    const formUrl     = document.getElementById('speech-ep-url');
+    const formToken   = document.getElementById('speech-ep-token');
+
+    if (!cardBtn && !formBtn) { return; }
+
+    const MAX_ATTEMPTS = 12;
+
+    function esc(text) {
+        const div = document.createElement('div');
+        div.textContent = text === null || text === undefined ? '' : String(text);
+        return div.innerHTML;
+    }
+
+    function componentRows(components) {
+        const names = { whisper: 'Whisper (Transkription)', llm: 'Diktat-Modell' };
+        let html = '';
+        Object.keys(components || {}).forEach(function (key) {
+            const c = components[key] || {};
+            const label = names[key] || key;
+            const ok = c.ok ? '✓' : '✗';
+            html += '<div>' + ok + ' <strong>' + esc(label) + '</strong>'
+                 + ' – ' + esc(c.state_label || c.state || 'unbekannt')
+                 + (c.model ? ' (Modell: ' + esc(c.model) + ')' : '')
+                 + (c.message ? ': ' + esc(c.message) : '')
+                 + '</div>';
+        });
+        return html;
+    }
+
+    function hostRows(host) {
+        if (!host) { return ''; }
+        const cores  = host.cores === null || host.cores === undefined ? '?' : host.cores;
+        const memory = host.memory_gb === null || host.memory_gb === undefined ? '?' : host.memory_gb;
+        const avx2   = host.avx2 === true ? 'ja' : (host.avx2 === false ? 'nein' : 'unbekannt');
+        /* /v1/config reports the minimum as { cores, memory_gb, avx2 }. */
+        const min    = host.minimum;
+        let minText  = '';
+        if (min && typeof min === 'object') {
+            const parts = [];
+            if (min.cores)     { parts.push(min.cores + ' Kerne'); }
+            if (min.memory_gb) { parts.push(min.memory_gb + ' GB RAM'); }
+            if (min.avx2)      { parts.push('AVX2'); }
+            minText = parts.join(', ');
+        } else if (min) {
+            minText = String(min);
+        }
+        let html = '<div><strong>Dimensionierung:</strong> '
+                 + cores + ' Kerne, ' + memory + ' GB RAM, AVX2: ' + avx2
+                 + ' – Mindestanforderung '
+                 + (host.meets_minimum ? 'erfüllt ✓' : 'nicht erfüllt ✗')
+                 + (minText ? ' (' + esc(minText) + ')' : '')
+                 + '</div>';
+        (host.warnings || []).forEach(function (warning) {
+            html += '<div style="color:var(--warning)">⚠ ' + esc(warning) + '</div>';
+        });
+        return html;
+    }
+
+    async function probe(button, resultEl, detailEl, url, token, attempt) {
         button.disabled    = true;
-        const original     = button.textContent;
         button.textContent = '⟳ Teste …';
-        result.textContent = '';
+        resultEl.textContent = '';
+        if (detailEl) { detailEl.hidden = true; }
+
+        let query = '../api/speech_health.php';
+        const params = [];
+        if (url)   { params.push('url='   + encodeURIComponent(url)); }
+        if (token) { params.push('token=' + encodeURIComponent(token)); }
+        if (params.length) { query += '?' + params.join('&'); }
+
         try {
-            const res  = await fetch('../api/speech_health.php?target=' + encodeURIComponent(target));
+            const res  = await fetch(query, { cache: 'no-store' });
             const data = await res.json();
-            const part = data && data[target];
-            if (data && data.ok && part && part.ok) {
-                result.style.color = 'var(--success)';
-                result.textContent = '✓ ' + label + ': ' + part.message;
+
+            if (data && data.loading) {
+                // Still starting up: no error, keep waiting and try again.
+                resultEl.style.color = 'var(--warning)';
+                resultEl.textContent = '⏳ ' + (data.message || 'Die SpeechInt-Modelle werden noch geladen …')
+                    + ' (Versuch ' + attempt + '/' + MAX_ATTEMPTS + ')';
+                if (detailEl) {
+                    detailEl.innerHTML = componentRows(data.components);
+                    detailEl.hidden = false;
+                }
+                if (attempt < MAX_ATTEMPTS) {
+                    const wait = Math.max(1, Math.min(60, parseInt(data.retry_after, 10) || 15));
+                    setTimeout(function () { probe(button, resultEl, detailEl, url, token, attempt + 1); },
+                               wait * 1000);
+                    return;
+                }
+                resultEl.textContent += ' – weiterhin nicht bereit.';
+                return;
+            }
+
+            if (data && data.ok) {
+                resultEl.style.color = 'var(--success)';
+                resultEl.textContent = '✓ ' + (data.message || 'SpeechInt ist bereit.')
+                    + ' (' + (data.latency_ms || 0) + ' ms)';
+                if (detailEl) {
+                    detailEl.innerHTML = componentRows(data.components) + hostRows(data.host);
+                    detailEl.hidden = false;
+                }
             } else {
-                result.style.color = 'var(--error)';
-                result.textContent = '✗ ' + label + ': '
-                    + ((part && part.message) || (data && data.message) || 'Unbekannter Fehler');
+                resultEl.style.color = 'var(--error)';
+                resultEl.textContent = '✗ ' + ((data && data.message) || 'Unbekannter Fehler');
+                if (detailEl) {
+                    detailEl.innerHTML = componentRows(data && data.components) + hostRows(data && data.host);
+                    detailEl.hidden = detailEl.innerHTML === '';
+                }
             }
         } catch (e) {
-            result.style.color = 'var(--error)';
-            result.textContent = '✗ Netzwerkfehler: ' + e.message;
+            resultEl.style.color = 'var(--error)';
+            resultEl.textContent = '✗ Netzwerkfehler: ' + e.message;
         } finally {
             button.disabled    = false;
-            button.textContent = original;
+            button.textContent = '🔌 Verbindung testen';
         }
     }
 
-    whisperBtn.addEventListener('click', () => probe(whisperBtn, 'Whisper', 'whisper'));
-    qwenBtn.addEventListener('click',    () => probe(qwenBtn, 'Diktat-Modell', 'qwen'));
+    if (cardBtn) {
+        cardBtn.addEventListener('click', function () {
+            probe(cardBtn, cardResult, cardDetail, '', '', 1);
+        });
+    }
+
+    if (formBtn) {
+        formBtn.addEventListener('click', function () {
+            // The form's token field is empty while editing (the secret stays on
+            // the server), so the stored token of the active endpoint is used.
+            probe(formBtn, formResult, formDetail,
+                  formUrl ? formUrl.value.trim() : '',
+                  formToken ? formToken.value.trim() : '',
+                  1);
+        });
+    }
 })();
 
 // ── Vector store (docvecwizard / Milvus) card ────────────────────────────────
@@ -6343,6 +6727,31 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         'list'      => $clientStats['list'],
     ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
+    // SpeechInt endpoints (dictation service) plus the readiness of the endpoint
+    // that is actually in effect. The token is never part of this payload.
+    const INITIAL_SPEECH = <?= json_encode(array_map(function ($s) {
+        return [
+            'id'        => (int) $s['id'],
+            'alias'     => (string) ($s['alias'] ?? ''),
+            'base_url'  => (string) $s['base_url'],
+            'timeout'   => (int) $s['timeout'],
+            'is_active' => (int) $s['is_active'],
+        ];
+    }, $speechEndpoints), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
+    const INITIAL_SPEECH_STATUS = <?= json_encode([
+        'configured'  => (bool) $speechStatus['configured'],
+        'url'         => (string) $speechStatus['url'],
+        'source'      => (string) $speechStatus['source'],
+        'ready'       => (bool) $speechStatus['ready'],
+        'loading'     => (bool) $speechStatus['loading'],
+        'reachable'   => (bool) $speechStatus['reachable'],
+        'status'      => (string) $speechStatus['status'],
+        'message'     => (string) $speechStatus['message'],
+        'retry_after' => (int) $speechStatus['retry_after'],
+        'probed'      => (bool) ($speechStatus['probed'] ?? true),
+    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
     const MODEL_COLORS = <?= json_encode($modelColorMap,
         JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
@@ -6640,15 +7049,51 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
     // ── Tree renderer ─────────────────────────────────────────────────────────
 
-    function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints, clients, vectorStore) {
+    // ── SpeechInt (dictation service) helpers ─────────────────────────────────
+
+    /**
+     * True when the dashboard's readiness probe was made against this tile.
+     *
+     * Only one SpeechInt endpoint is probed per dashboard refresh – the one that
+     * is actually in effect (environment variable or the selected row).
+     */
+    function isEffectiveSpeechEndpoint(ep, status) {
+        if (!ep || !status || !status.configured || !status.url) { return false; }
+        const a = String(ep.base_url || '').replace(/\/+$/, '');
+        const b = String(status.url || '').replace(/\/+$/, '');
+        return a !== '' && a === b;
+    }
+
+    /** Colour and label of one SpeechInt tile. */
+    function speechTileState(status) {
+        if (!status || !status.configured) {
+            return { label: 'kein Endpunkt aktiv', color: '#8e8ea0', loading: false };
+        }
+        if (status.probed === false) {
+            return { label: 'wird geprüft …', color: '#8e8ea0', loading: false };
+        }
+        if (status.loading) {
+            return { label: 'Modelle werden geladen …', color: '#f59e0b', loading: true };
+        }
+        if (status.ready) {
+            return { label: 'bereit', color: '#22c55e', loading: false };
+        }
+        if (!status.reachable) {
+            return { label: 'nicht erreichbar', color: '#ef4444', loading: false };
+        }
+        return { label: 'nicht bereit', color: '#ef4444', loading: false };
+    }
+
+    function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints, clients, vectorStore, speechEndpoints, speechStatus) {
         svg.innerHTML = '';
 
         const hasSearxng  = searxng && searxng.enabled;
         const hasVector   = vectorStore && vectorStore.enabled;
         const hasSd       = Array.isArray(sdEndpoints) && sdEndpoints.length > 0;
         const hasComfy    = Array.isArray(comfyEndpoints) && comfyEndpoints.length > 0;
+        const hasSpeech   = Array.isArray(speechEndpoints) && speechEndpoints.length > 0;
 
-        if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasVector && !hasSd && !hasComfy) {
+        if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasVector && !hasSd && !hasComfy && !hasSpeech) {
             treeW = 400; treeH = 60; treeX = 0; treeY = 0;
             svg.setAttribute('viewBox', `0 0 ${treeW} ${treeH}`);
             txt(svg, 'Keine Endpunkte konfiguriert.', {
@@ -6680,6 +7125,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         addLinearGradient('grad-vec',   0, 1, '#14312a', '#0f221d');
         addLinearGradient('grad-sd',    0, 1, '#2b200f', '#201808');
         addLinearGradient('grad-comfy', 0, 1, '#221430', '#180e22');
+        addLinearGradient('grad-speech', 0, 1, '#10283a', '#0b1a26');
         svg.appendChild(defs);
 
         // Group LLM endpoints by model (identical models sharing a canonical
@@ -6711,6 +7157,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         const VEC_W   = EP_W, VEC_H   = 130;
         const SD_W    = EP_W, SD_H    = 90;
         const COMFY_W = EP_W, COMFY_H = 90;
+        const SPCH_W  = EP_W, SPCH_H  = 90;
 
         // Per-endpoint height: extended when sys_stats are available
         function epHeight(ep) {
@@ -6734,6 +7181,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         if (hasVector)  { TOTAL_H += SRXNG_V_GAP + VEC_H; }
         if (hasSd)      { TOTAL_H += SRXNG_V_GAP + sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP; }
         if (hasComfy)   { TOTAL_H += SRXNG_V_GAP + comfyEndpoints.length * COMFY_H + (comfyEndpoints.length - 1) * V_GAP; }
+        if (hasSpeech)  { TOTAL_H += SRXNG_V_GAP + speechEndpoints.length * SPCH_H + (speechEndpoints.length - 1) * V_GAP; }
         TOTAL_H += PAD;
 
         let curY = PAD;
@@ -6779,6 +7227,17 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         for (const comfyEp of (comfyEndpoints || [])) {
             comfyCY[comfyEp.id] = comfyCurY + COMFY_H / 2;
             comfyCurY += COMFY_H + V_GAP;
+        }
+        let afterComfyY = afterSdY;
+        if (hasComfy) { afterComfyY += SRXNG_V_GAP + comfyEndpoints.length * COMFY_H + (comfyEndpoints.length - 1) * V_GAP; }
+
+        // SpeechInt endpoints (dictation service) – placed below the ComfyUI tiles.
+        const speechStartY = afterComfyY + SRXNG_V_GAP;
+        const speechCY = {};
+        let speechCurY = speechStartY;
+        for (const speechEp of (speechEndpoints || [])) {
+            speechCY[speechEp.id] = speechCurY + SPCH_H / 2;
+            speechCurY += SPCH_H + V_GAP;
         }
 
         // ── Client cloud layout ───────────────────────────────────────────────
@@ -6941,6 +7400,20 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                     `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
                     'rgba(168,85,247,0.35)',
                     comfyEp.running > 0
+                ));
+            }
+        }
+
+        // Root → SpeechInt endpoints
+        if (hasSpeech) {
+            for (const speechEp of speechEndpoints) {
+                const rX   = COL1_X + ROOT_W;
+                const eY   = speechCY[speechEp.id];
+                const ctrl = (COL3_X - rX) * 0.55;
+                svg.appendChild(connPath(
+                    `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
+                    'rgba(56,189,248,0.35)',
+                    (speechStatus && speechStatus.ready && isEffectiveSpeechEndpoint(speechEp, speechStatus)) === true
                 ));
             }
         }
@@ -7378,6 +7851,53 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 svg.appendChild(g);
             }
         }
+
+        // ── SpeechInt endpoint tiles ───────────────────────────────────────────
+        if (hasSpeech) {
+            const SPCH_COLOR = '#38bdf8';
+            for (const speechEp of speechEndpoints) {
+                const eY       = speechCY[speechEp.id];
+                const isActive = speechEp.is_active === 1;
+                const effective = isEffectiveSpeechEndpoint(speechEp, speechStatus);
+                const state    = effective ? speechTileState(speechStatus) : null;
+                const g        = mk('g', { transform: `translate(${COL3_X},${eY - SPCH_H / 2})` });
+
+                g.appendChild(mk('rect', {
+                    x: 0, y: 0, width: SPCH_W, height: SPCH_H,
+                    rx: 10, fill: 'url(#grad-speech)',
+                    stroke: isActive ? SPCH_COLOR + '66' : 'rgba(239,68,68,0.4)', 'stroke-width': 1.5,
+                }));
+
+                const title = mk('title', null);
+                title.textContent = 'SpeechInt'
+                    + (speechEp.alias ? ' · ' + speechEp.alias : '')
+                    + ' · ' + speechEp.base_url
+                    + (effective && speechStatus && speechStatus.message ? ' · ' + speechStatus.message : '');
+                g.appendChild(title);
+
+                if (state && state.loading) {
+                    g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: '#f59e0b' }));
+                }
+                g.appendChild(mk('circle', {
+                    cx: 14, cy: 18, r: 4,
+                    fill: state ? state.color : (isActive ? SPCH_COLOR : '#8e8ea0'),
+                }));
+
+                txt(g, truncate(speechEp.alias || shortUrl(speechEp.base_url), 26), {
+                    x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
+                });
+                g.appendChild(mk('line', { x1: 10, y1: 32, x2: SPCH_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
+
+                txt(g, `🎙  ${truncate(shortUrl(speechEp.base_url), 24)}`, {
+                    x: 12, y: 52, fill: '#8e8ea0', 'font-size': 10, 'font-family': 'monospace, sans-serif',
+                });
+                txt(g, state ? state.label : 'Zustand: nicht geprüft', {
+                    x: 12, y: 72, fill: state ? state.color : '#6b7280', 'font-size': 11, 'font-family': 'sans-serif',
+                });
+
+                svg.appendChild(g);
+            }
+        }
     }
 
     // ── Live stat-box updates ─────────────────────────────────────────────────
@@ -7467,7 +7987,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             clearTimeout(timer);
             const data = await res.json();
             if (data.ok && Array.isArray(data.endpoints)) {
-                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || [], data.clients || null, data.vector_store || null);
+                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || [], data.clients || null, data.vector_store || null, data.speech_endpoints || [], data.speech_status || null);
                 updateStatBoxes(data);
                 setStatus(tsLabel(data.ts), false);
             } else {
@@ -7480,7 +8000,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     }
 
     // Initial render using PHP-injected data
-    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD, INITIAL_COMFY, INITIAL_CLIENTS, INITIAL_VECTOR);
+    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD, INITIAL_COMFY, INITIAL_CLIENTS, INITIAL_VECTOR, INITIAL_SPEECH, INITIAL_SPEECH_STATUS);
     setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
 
     // Refresh every 15 seconds
