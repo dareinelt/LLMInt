@@ -34,10 +34,6 @@ services:
         condition: service_started
       milvus:
         condition: service_started
-      whisper:
-        condition: service_started
-      qwen:
-        condition: service_started
     environment:
       # Database connection (must match the db service above)
       DB_HOST: db
@@ -55,16 +51,13 @@ services:
       MILVUS_URL: ${MILVUS_URL:-http://milvus:19530}
       MILVUS_METRICS_URL: ${MILVUS_METRICS_URL:-http://milvus:9091}
       # Speech recognition / dictation (see lib/speech_dictation.php).
-      # WHISPER_URL points at the whisper.cpp container below, QWEN_URL at the
-      # dedicated llama.cpp container serving Qwen3.5-2B Q4. Both can be
-      # overridden in the admin UI; leaving QWEN_URL empty makes the dictation
-      # step use the regular endpoint pool instead.
-      WHISPER_URL: ${WHISPER_URL:-http://whisper:8080}
-      WHISPER_TOKEN: ${WHISPER_TOKEN:-}
-      WHISPER_TIMEOUT: ${WHISPER_TIMEOUT:-120}
-      QWEN_URL: ${QWEN_URL:-http://qwen:8080}
-      QWEN_TOKEN: ${QWEN_TOKEN:-}
-      QWEN_TIMEOUT: ${QWEN_TIMEOUT:-60}
+      # The compute-heavy parts – whisper.cpp and the Qwen dictation model – run
+      # in the separate SpeechInt project, usually on another Docker host. Set
+      # SPEECHINT_URL to that service; additional endpoints can be managed in
+      # the admin UI. Leaving SPEECHINT_URL empty keeps dictation disabled.
+      SPEECHINT_URL: ${SPEECHINT_URL:-}
+      SPEECHINT_TOKEN: ${SPEECHINT_TOKEN:-}
+      SPEECHINT_TIMEOUT: ${SPEECHINT_TIMEOUT:-120}
       # PHP timezone (overrides docker/php.ini if set)
       TZ: ${TZ:-Europe/Berlin}
       # Reverse proxy (e.g. lanpa auth container, see docker-compose.lanpa.yml):
@@ -137,105 +130,6 @@ services:
       start_period: 90s
     mem_limit: ${MILVUS_MEM_LIMIT:-2g}
 
-  # ── Speech recognition (whisper.cpp HTTP server) ──────────────────────────────
-  # Used by the dictation feature in index.php through lib/speech_dictation.php.
-  # Serves the OpenAI-independent whisper.cpp REST API (/inference, /health) on
-  # port 8080. The GGML model is downloaded once into a named volume, so
-  # restarts do not re-download it. Internal only: no host port is published.
-  whisper:
-    image: ghcr.io/ggml-org/whisper.cpp:${WHISPER_IMAGE_TAG:-main}
-    # whisper.cpp only publishes a linux/amd64 image (the `main` tag is the
-    # only moving tag). Declaring the platform keeps the service startable on
-    # arm64 hosts such as Apple Silicon, where Docker emulates amd64 – slower
-    # than native, but far better than the hard "no matching manifest" failure.
-    platform: ${WHISPER_PLATFORM:-linux/amd64}
-    restart: unless-stopped
-    entrypoint: ["/bin/bash", "-c"]
-    command:
-      - |
-        set -e
-        # NOTE: variables are written as $${VAR} so the container shell resolves
-        # them at runtime. With a single dollar Compose would interpolate them
-        # from the host environment instead, silently ignoring WHISPER_MODEL.
-        MODEL="$${WHISPER_MODEL:-small}"
-        FILE="/models/ggml-$${MODEL}.bin"
-        if [ ! -s "$${FILE}" ]; then
-          echo "[whisper] downloading model '$${MODEL}' ..."
-          bash /app/models/download-ggml-model.sh "$${MODEL}" /models
-        fi
-        echo "[whisper] starting whisper-server with '$${FILE}'"
-        exec whisper-server \
-          --host 0.0.0.0 \
-          --port 8080 \
-          --model "$${FILE}" \
-          --language "$${WHISPER_LANGUAGE:-de}" \
-          --threads "$${WHISPER_THREADS:-4}" \
-          --convert
-    environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-small}
-      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-de}
-      WHISPER_THREADS: ${WHISPER_THREADS:-4}
-      TZ: ${TZ:-Europe/Berlin}
-    volumes:
-      # Persists ggml-*.bin so the model is fetched only on the first start.
-      - whisper_models:/models
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      # Downloading the "small" model takes a while on first boot.
-      start_period: 300s
-
-  # ── Dictation model (Qwen3.5-2B Q4 via llama.cpp) ─────────────────────────────
-  # Dedicated llama.cpp server that turns the raw Whisper transcript into clean,
-  # command-processed text. Exposes the OpenAI-compatible API
-  # (/v1/chat/completions, /health) on port 8080 and is reached by the web
-  # container via QWEN_URL. Internal only: no host port is published.
-  #
-  # The GGUF is pulled from Hugging Face on first start and cached in the
-  # qwen_cache volume (LLAMA_CACHE). Swap QWEN_IMAGE_TAG to `server-cuda`,
-  # `server-vulkan` or `server-rocm` for GPU acceleration.
-  qwen:
-    image: ghcr.io/ggml-org/llama.cpp:${QWEN_IMAGE_TAG:-server}
-    restart: unless-stopped
-    command:
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8080"
-      # --hf-repo downloads (and caches) the quantised model from Hugging Face.
-      - --hf-repo
-      - ${QWEN_GGUF_REPO:-unsloth/Qwen3.5-2B-GGUF}
-      - --hf-file
-      - ${QWEN_GGUF_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
-      # The alias is the model id the dictation pipeline sends, so it must match
-      # the "Qwen3.5-2B Q4" default in lib/speech_dictation.php.
-      - --alias
-      - ${QWEN_MODEL_ALIAS:-Qwen3.5-2B Q4}
-      - --ctx-size
-      - ${QWEN_CTX_SIZE:-4096}
-      - --threads
-      - ${QWEN_THREADS:-4}
-      # Jinja templates are required for chat_template_kwargs.enable_thinking,
-      # which the dictation client uses to keep the thinking block off.
-      - --jinja
-      - --no-webui
-    environment:
-      LLAMA_ARG_HOST: "0.0.0.0"
-      # Keeps the downloaded GGUF inside the mounted volume.
-      LLAMA_CACHE: /models
-      TZ: ${TZ:-Europe/Berlin}
-    volumes:
-      - qwen_cache:/models
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      # The first start downloads ~1.1 GB of model weights.
-      start_period: 600s
-
   # ── phpMyAdmin ────────────────────────────────────────────────────────────────
   # Protected by HTTP Basic Auth (credentials from PMA_BASIC_AUTH_USER /
   # PMA_BASIC_AUTH_PASSWORD) in addition to the phpMyAdmin login form, so it
@@ -269,5 +163,3 @@ volumes:
   docconvert_cache:
   milvus_data:
   vector_imports:
-  whisper_models:
-  qwen_cache:

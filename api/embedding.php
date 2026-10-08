@@ -107,7 +107,6 @@ function generateEmbedding(string $text, array $endpoint): ?array
     $body    = curl_exec($ch);
     $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr = curl_error($ch);
-    curl_close($ch);
 
     $durationMs = (int) round(microtime(true) * 1000) - $startMs;
 
@@ -177,7 +176,6 @@ function generateEmbeddingAuto(string $text, string $type = 'query'): ?array
     $body    = curl_exec($ch);
     $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr = curl_error($ch);
-    curl_close($ch);
 
     $durationMs = (int) round(microtime(true) * 1000) - $startMs;
 
@@ -406,7 +404,6 @@ function rerankDocuments(string $query, array $candidates, int $topK = 5): array
     $body    = curl_exec($ch);
     $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr = curl_error($ch);
-    curl_close($ch);
 
     $durationMs = (int) round(microtime(true) * 1000) - $startMs;
 

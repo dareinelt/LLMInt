@@ -84,7 +84,8 @@ function probeLlmEndpoints(int $timeoutSeconds = LLM_HEALTHCHECK_PROBE_TIMEOUT_S
             'ok'    => $httpCode >= 200 && $httpCode < 300,
         ];
         curl_multi_remove_handle($multi, $h['handle']);
-        curl_close($h['handle']);
+        // curl_close() is a no-op since PHP 8.0 and deprecated in 8.5; the
+        // handle is released together with the scope.
     }
     curl_multi_close($multi);
 

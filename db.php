@@ -336,6 +336,42 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    // SpeechInt endpoints: the speech-recognition / dictation service
+    // (https://github.com/dareinelt/SpeechInt) that provides whisper.cpp
+    // transcription and the dictation model behind one HTTP API. LLMInt keeps
+    // one row per reachable service and picks the active one per request.
+    // The `token` is the shared secret of that service (X-Auth-Token) and is
+    // only ever displayed masked in the admin area.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS speech_endpoints (
+            id          INT          NOT NULL AUTO_INCREMENT,
+            alias       VARCHAR(120) NOT NULL DEFAULT '',
+            base_url    VARCHAR(500) NOT NULL,
+            token       TEXT         NULL,
+            timeout     INT          NOT NULL DEFAULT 120,
+            is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+            sort_order  INT          NOT NULL DEFAULT 0,
+            created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                     ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // Idempotent column upgrades for installations whose speech_endpoints table
+    // was created by an earlier version.
+    foreach ([
+        "ALTER TABLE speech_endpoints ADD COLUMN alias      VARCHAR(120) NOT NULL DEFAULT '' AFTER id",
+        "ALTER TABLE speech_endpoints ADD COLUMN token      TEXT NULL AFTER base_url",
+        "ALTER TABLE speech_endpoints ADD COLUMN timeout    INT NOT NULL DEFAULT 120 AFTER token",
+        "ALTER TABLE speech_endpoints ADD COLUMN is_active  TINYINT(1) NOT NULL DEFAULT 1 AFTER timeout",
+        "ALTER TABLE speech_endpoints ADD COLUMN sort_order INT NOT NULL DEFAULT 0 AFTER is_active",
+        "ALTER TABLE speech_endpoints ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER sort_order",
+        "ALTER TABLE speech_endpoints ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at",
+    ] as $speechAlter) {
+        try { $pdo->exec($speechAlter); } catch (Throwable $_e) { /* column already exists */ }
+    }
+
     // Balancer health / circuit-breaker / latency columns.
     // Shared shape across endpoints, sd_endpoints and comfy_endpoints so the
     // routing engine (lib/balancer_engine.php) can treat all three uniformly.
@@ -835,19 +871,17 @@ function ensureRuntimeSchema(PDO $pdo): void
 
     // ── Speech recognition / dictation defaults ──────────────────────────────
     // Insert-only seeding: an existing value (set by an administrator) is never
-    // overwritten. Service URLs and tokens are deliberately not seeded – they
-    // are read from the environment first and only fall back to the settings
-    // table, exactly like the docconvert URL.
+    // overwritten. The service URL, the token and the timeout belong to the
+    // `speech_endpoints` rows (or to the SPEECHINT_* environment variables) and
+    // are deliberately not seeded here – exactly like the docconvert URL.
     $speechDefaults = [
         'speech_dictation_enabled'               => '1',
-        'speech_dictation_whisper_model'         => 'small',
+        'speech_dictation_endpoint_id'           => '0',
         'speech_dictation_language'              => 'de',
         'speech_dictation_buffer_words'          => '4',
         'speech_dictation_stop_timeout_seconds'  => '3',
         'speech_dictation_max_segment_seconds'   => '15',
         'speech_dictation_max_audio_mb'          => '10',
-        'speech_dictation_qwen_model'            => 'Qwen3.5-2B Q4',
-        'speech_dictation_qwen_timeout'          => '60',
     ];
     $speechPlaceholders = implode(', ', array_fill(0, count($speechDefaults), '(?, ?)'));
     $speechParams = [];

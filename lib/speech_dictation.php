@@ -5,26 +5,35 @@
  *
  * Shared helpers for the speech-recognition / dictation feature.
  *
- * Pipeline: browser microphone → 16 kHz mono WAV → whisper.cpp server →
- * recognised text → word buffer → dictation model (Qwen3.5-2B Q4) →
- * formatted text → LLMInt input field.
+ * Pipeline: browser microphone → audio segment → SpeechInt
+ * (POST /v1/audio/transcriptions) → recognised text → word buffer → SpeechInt
+ * (POST /v1/dictate/process) → formatted text → LLMInt input field.
  *
- * Whisper is reached over HTTP exactly like the document converter
- * (api/doc_convert.php): the base URL comes from the WHISPER_URL environment
- * variable (docker-compose) and falls back to the `speech_dictation_whisper_url`
- * setting so an administrator can override it at runtime. PHP never shells out
- * to whisper.cpp – no browser-supplied value can reach a shell.
+ * The compute-heavy parts – whisper.cpp with the "small" model and the dictation
+ * model served by llama.cpp – live in the separate project SpeechInt
+ * (https://github.com/dareinelt/SpeechInt) and are reached over HTTP exactly
+ * like the document converter (api/doc_convert.php): the base URL comes from the
+ * SPEECHINT_URL environment variable (docker-compose) and falls back to the
+ * active row of the `speech_endpoints` table, so an administrator can point
+ * LLMInt at one or several SpeechInt instances at runtime. PHP never shells out –
+ * no browser-supplied value can reach a shell.
  *
- * The dictation model (Qwen3.5-2B Q4) is served by a dedicated llama.cpp
- * container (`qwen` service in docker-compose.yml) reached through QWEN_URL.
- * When no dedicated server is configured, the model is resolved through the
- * existing endpoint pool / balancer (pickEndpointForModel / completeTask) so
- * endpoint selection, concurrency limits, circuit breaking and task accounting
- * stay in one place.
+ * SpeechInt is stateless: prompt, command table and context travel with every
+ * request, so everything stays configurable in LLMInt's admin area.
+ *
+ * Loading contract: while SpeechInt is still downloading or loading its models
+ * it answers 503 with the error code `service_loading` (plus a Retry-After
+ * header). That is not a failure – the caller keeps the recognised fragment and
+ * retries (see the `loading`/`retry_after` keys of the return values). Only an
+ * unreachable, erroring or unconfigured service (or a 502/504) hands over to the
+ * deterministic rule fallback speechDictationApplyCommands(), so no recognised
+ * text is ever lost.
+ *
+ * The recognised text never leaves the server: it is forwarded to SpeechInt and
+ * logged as a length summary only (speechDictationLogText()).
  */
 
 require_once __DIR__ . '/../db.php';
-require_once __DIR__ . '/../api/balancer.php';
 
 /** Maximum length of the context tail handed to the dictation model. */
 const SPEECH_DICTATION_CONTEXT_CHARS = 400;
@@ -173,7 +182,7 @@ function speechDictationDefaultPrompt(): string
  *
  * @param bool $includeBreaks Whether to list the line-break commands. The
  *        default prompt passes false because those commands never reach the
- *        model – see speechDictationSplitAtBreaks().
+ *        model – SpeechInt cuts them out of the fragment before the model sees it.
  */
 function speechDictationPromptCommandList(bool $includeBreaks = true): string
 {
@@ -362,125 +371,135 @@ function speechDictationEnabled(): bool
     return getSetting('speech_dictation_enabled', '1') === '1';
 }
 
+// ── SpeechInt endpoints ───────────────────────────────────────────────────────
+
 /**
- * Base URL of the whisper.cpp server.
+ * All configured SpeechInt endpoints, ordered like the admin card shows them.
  *
- * Environment first (docker-compose), then the settings table – identical to
- * docConvertBaseUrl(). An empty value means "not deployed".
+ * @return array<int,array<string,mixed>>
  */
-function speechDictationWhisperUrl(): string
+function speechDictationEndpoints(): array
 {
-    $url = trim((string) (getenv('WHISPER_URL') ?: ''));
+    try {
+        $rows = getDb()->query(
+            'SELECT * FROM speech_endpoints ORDER BY sort_order ASC, id ASC'
+        )->fetchAll();
+    } catch (Throwable $_e) {
+        return [];
+    }
+    return is_array($rows) ? $rows : [];
+}
+
+/** One SpeechInt endpoint by id; null when it does not exist. */
+function speechDictationEndpoint(int $id): ?array
+{
+    if ($id <= 0) {
+        return null;
+    }
+    try {
+        $stmt = getDb()->prepare('SELECT * FROM speech_endpoints WHERE id = ? LIMIT 1');
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+    } catch (Throwable $_e) {
+        return null;
+    }
+    return is_array($row) ? $row : null;
+}
+
+/** Endpoint explicitly selected in the admin area (0 = "first active one"). */
+function speechDictationEndpointId(): int
+{
+    $id = (int) getSetting('speech_dictation_endpoint_id', '0');
+    return $id > 0 ? $id : 0;
+}
+
+/**
+ * The endpoint used for the next request.
+ *
+ * The endpoint selected in the admin area wins; without a selection the first
+ * active endpoint in sort order is used, so a fresh installation works as soon
+ * as a single endpoint has been added.
+ */
+function speechDictationActiveEndpoint(): ?array
+{
+    $endpoints = speechDictationEndpoints();
+    if ($endpoints === []) {
+        return null;
+    }
+
+    $wanted = speechDictationEndpointId();
+    if ($wanted > 0) {
+        foreach ($endpoints as $endpoint) {
+            if ((int) $endpoint['id'] === $wanted && (int) $endpoint['is_active'] === 1) {
+                return $endpoint;
+            }
+        }
+    }
+
+    foreach ($endpoints as $endpoint) {
+        if ((int) $endpoint['is_active'] === 1) {
+            return $endpoint;
+        }
+    }
+    return null;
+}
+
+/**
+ * Base URL of the SpeechInt service that serves the dictation.
+ *
+ * Environment first (docker-compose), then the active `speech_endpoints` row –
+ * identical to docConvertBaseUrl(). An empty value means "not deployed".
+ */
+function speechDictationUrl(): string
+{
+    $url = trim((string) (getenv('SPEECHINT_URL') ?: ''));
     if ($url === '') {
-        $url = trim(getSetting('speech_dictation_whisper_url', ''));
+        $endpoint = speechDictationActiveEndpoint();
+        $url = $endpoint === null ? '' : trim((string) $endpoint['base_url']);
     }
     return rtrim($url, '/');
 }
 
-/** Whisper model label the deployment is expected to serve (e.g. "small"). */
-function speechDictationWhisperModel(): string
+/** Optional shared secret of the SpeechInt service (X-Auth-Token header). */
+function speechDictationToken(): string
 {
-    $model = trim(getSetting('speech_dictation_whisper_model', 'small'));
-    return $model === '' ? 'small' : $model;
+    $token = trim((string) (getenv('SPEECHINT_TOKEN') ?: ''));
+    if ($token === '') {
+        $endpoint = speechDictationActiveEndpoint();
+        $token = $endpoint === null ? '' : trim((string) ($endpoint['token'] ?? ''));
+    }
+    return $token;
 }
 
-/** Request timeout for a single transcription, in seconds. */
-function speechDictationWhisperTimeout(): int
+/** Request timeout for one SpeechInt call, in seconds. */
+function speechDictationTimeout(): int
 {
-    $timeout = (int) (getenv('WHISPER_TIMEOUT') ?: 0);
+    $timeout = (int) (getenv('SPEECHINT_TIMEOUT') ?: 0);
     if ($timeout <= 0) {
-        $timeout = speechDictationIntSetting('speech_dictation_whisper_timeout', '120', 10, 600);
+        $endpoint = speechDictationActiveEndpoint();
+        $timeout = $endpoint === null ? 0 : (int) $endpoint['timeout'];
+    }
+    if ($timeout <= 0) {
+        $timeout = 120;
     }
     return max(10, min(600, $timeout));
 }
 
-/** Optional shared secret for the whisper server (X-Auth-Token header). */
-function speechDictationWhisperToken(): string
-{
-    $token = trim((string) (getenv('WHISPER_TOKEN') ?: ''));
-    if ($token === '') {
-        $token = trim(getSetting('speech_dictation_whisper_token', ''));
-    }
-    return $token;
-}
-
-/** Spoken language handed to whisper ('auto' lets the model detect it). */
-function speechDictationLanguage(): string
-{
-    $language = trim(getSetting('speech_dictation_language', 'de'));
-    return $language === '' ? 'de' : $language;
-}
-
-/** Model label used for the dictation-command processing step. */
-function speechDictationQwenModel(): string
-{
-    $model = trim(getSetting('speech_dictation_qwen_model', 'Qwen3.5-2B Q4'));
-    return $model === '' ? 'Qwen3.5-2B Q4' : $model;
-}
-
 /**
- * Base URL of the dedicated Qwen3.5-2B llama.cpp server.
+ * Where the effective SpeechInt URL comes from.
  *
- * Environment first (docker-compose), then the settings table – identical to
- * speechDictationWhisperUrl(). When empty, the dictation model is resolved
- * through the regular endpoint pool / balancer instead.
+ * The admin card needs this because environment variables (docker-compose) take
+ * precedence over the endpoint table – without showing the origin an
+ * administrator would edit a row that has no effect.
+ *
+ * @return string 'env', 'endpoint' or 'none'.
  */
-function speechDictationQwenUrl(): string
+function speechDictationUrlSource(): string
 {
-    $url = trim((string) (getenv('QWEN_URL') ?: ''));
-    if ($url === '') {
-        $url = trim(getSetting('speech_dictation_qwen_url', ''));
-    }
-    return rtrim($url, '/');
-}
-
-/** Request timeout for one dictation-processing call, in seconds. */
-function speechDictationQwenTimeout(): int
-{
-    $timeout = (int) (getenv('QWEN_TIMEOUT') ?: 0);
-    if ($timeout <= 0) {
-        $timeout = speechDictationIntSetting('speech_dictation_qwen_timeout', '60', 10, 300);
-    }
-    return max(10, min(300, $timeout));
-}
-
-/** Optional shared secret for the dedicated Qwen server (X-Auth-Token). */
-function speechDictationQwenToken(): string
-{
-    $token = trim((string) (getenv('QWEN_TOKEN') ?: ''));
-    if ($token === '') {
-        $token = trim(getSetting('speech_dictation_qwen_token', ''));
-    }
-    return $token;
-}
-
-/**
- * Where the effective value of a speech setting comes from.
- *
- * The admin card needs this because environment variables (docker-compose)
- * take precedence over the settings table – without showing the origin, an
- * administrator would edit a field that has no effect.
- *
- * @return string 'env', 'setting' or 'none'.
- */
-function speechDictationSettingSource(string $envName, string $settingKey): string
-{
-    if (trim((string) (getenv($envName) ?: '')) !== '') {
+    if (trim((string) (getenv('SPEECHINT_URL') ?: '')) !== '') {
         return 'env';
     }
-    return trim(getSetting($settingKey, '')) !== '' ? 'setting' : 'none';
-}
-
-/** Origin of the effective whisper server URL (see speechDictationSettingSource). */
-function speechDictationWhisperUrlSource(): string
-{
-    return speechDictationSettingSource('WHISPER_URL', 'speech_dictation_whisper_url');
-}
-
-/** Origin of the effective dictation model URL (see speechDictationSettingSource). */
-function speechDictationQwenUrlSource(): string
-{
-    return speechDictationSettingSource('QWEN_URL', 'speech_dictation_qwen_url');
+    return speechDictationActiveEndpoint() === null ? 'none' : 'endpoint';
 }
 
 /** Human-readable origin label for the admin card. */
@@ -489,11 +508,56 @@ function speechDictationSourceLabel(string $source): string
     switch ($source) {
         case 'env':
             return 'Umgebungsvariable (docker-compose)';
-        case 'setting':
-            return 'Einstellung in der Datenbank';
+        case 'endpoint':
+            return 'Speech-Endpunkt in der Datenbank';
         default:
             return 'nicht konfiguriert';
     }
+}
+
+/** Display name of one `speech_endpoints` row (alias, else host and port). */
+function speechDictationEndpointLabel(array $endpoint): string
+{
+    $alias = trim((string) ($endpoint['alias'] ?? ''));
+    if ($alias !== '') {
+        return $alias;
+    }
+
+    $url  = trim((string) ($endpoint['base_url'] ?? ''));
+    $host = parse_url($url, PHP_URL_HOST);
+    if (!is_string($host) || $host === '') {
+        return $url === '' ? 'Endpunkt #' . (int) ($endpoint['id'] ?? 0) : $url;
+    }
+
+    $port = parse_url($url, PHP_URL_PORT);
+    return $host . (is_int($port) ? ':' . $port : '');
+}
+
+/**
+ * Mask a stored SpeechInt token for display.
+ *
+ * The secret itself never reaches the browser; only its length and the last
+ * four characters are shown so an administrator can recognise the right token.
+ */
+function speechDictationMaskToken(string $token): string
+{
+    $token = trim($token);
+    if ($token === '') {
+        return '– kein Token –';
+    }
+
+    $length = strlen($token);
+    if ($length <= 4) {
+        return str_repeat('•', $length);
+    }
+    return '••••••••' . substr($token, -4);
+}
+
+/** Spoken language handed to SpeechInt ('auto' lets the model detect it). */
+function speechDictationLanguage(): string
+{
+    $language = trim(getSetting('speech_dictation_language', 'de'));
+    return $language === '' ? 'de' : $language;
 }
 
 /** Number of trailing words held back until more context is available. */
@@ -532,218 +596,550 @@ function speechDictationPrompt(): string
  * Whether the microphone UI should be offered at all.
  *
  * Deliberately configuration-only (no network call) so the chat page can render
- * without waiting for the whisper container.
+ * without waiting for the speech service.
  */
 function speechDictationConfigured(): bool
 {
-    return speechDictationEnabled() && speechDictationWhisperUrl() !== '';
+    return speechDictationEnabled() && speechDictationUrl() !== '';
 }
 
-// ── whisper.cpp server client ─────────────────────────────────────────────────
+// ── SpeechInt HTTP client ─────────────────────────────────────────────────────
 
 /**
- * Live health check of the whisper server (GET /health).
+ * Run one HTTP request against a SpeechInt endpoint.
  *
- * @return array{ok:bool,message:string,http:int}
+ * Every SpeechInt call goes through here so transport details – auth header,
+ * timeout, Retry-After parsing and the loading contract – exist exactly once.
+ *
+ * @param array{method?:string,json?:array<string,mixed>,multipart?:array<string,mixed>,
+ *              timeout?:int,connect_timeout?:int,token?:string} $options
+ *
+ * @return array{ok:bool,http:int,error:string,message:string,loading:bool,
+ *               retry_after:int,latency_ms:int,data:?array<string,mixed>}
  */
-function speechDictationWhisperHealth(): array
+function speechDictationHttpCall(string $url, array $options = []): array
 {
-    $url = speechDictationWhisperUrl();
-    if ($url === '') {
-        return ['ok' => false, 'message' => 'Keine Whisper-URL konfiguriert.', 'http' => 0];
-    }
+    $method  = strtoupper((string) ($options['method'] ?? 'GET'));
+    $timeout = max(5, min(600, (int) ($options['timeout'] ?? 120)));
+    $connect = max(1, min(60, (int) ($options['connect_timeout'] ?? 10)));
+    $token   = (string) ($options['token'] ?? '');
 
-    $ch = curl_init($url . '/health');
+    $result = [
+        'ok'          => false,
+        'http'        => 0,
+        'error'       => '',
+        'message'     => '',
+        'loading'     => false,
+        'retry_after' => 0,
+        'latency_ms'  => 0,
+        'data'        => null,
+    ];
+
     $headers = ['Accept: application/json'];
-    $token = speechDictationWhisperToken();
     if ($token !== '') {
         $headers[] = 'X-Auth-Token: ' . $token;
     }
+
+    $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 10,
-        CURLOPT_CONNECTTIMEOUT => 5,
-        CURLOPT_HTTPHEADER     => $headers,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => $connect,
+        // The Retry-After header of a `service_loading` answer drives the retry
+        // loop, so response headers are needed as well.
+        CURLOPT_HEADER         => true,
     ]);
-    $body     = curl_exec($ch);
-    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlErr  = curl_error($ch);
-    curl_close($ch);
+
+    if ($method === 'POST') {
+        curl_setopt($ch, CURLOPT_POST, true);
+        if (isset($options['multipart'])) {
+            // A Content-Type header must not be set by hand here: curl adds the
+            // multipart boundary itself when POSTFIELDS is an array.
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $options['multipart']);
+        } else {
+            $headers[] = 'Content-Type: application/json';
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(
+                $options['json'] ?? [],
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            ));
+        }
+    }
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+
+    $startedAt = microtime(true);
+    $raw       = curl_exec($ch);
+    $httpCode  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $headerLen = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    $curlErr   = curl_error($ch);
+    // curl_close() is a no-op since PHP 8.0 and deprecated in 8.5; the handle is
+    // released together with the scope.
+
+    $result['http']       = $httpCode;
+    $result['latency_ms'] = (int) round((microtime(true) - $startedAt) * 1000);
 
     if ($curlErr !== '') {
-        return ['ok' => false, 'message' => 'Whisper nicht erreichbar: ' . $curlErr, 'http' => 0];
-    }
-    if ($httpCode === 200) {
-        return ['ok' => true, 'message' => 'Whisper erreichbar (HTTP 200).', 'http' => 200];
-    }
-    // Older builds do not expose /health; a 404 still proves the server is up.
-    if ($httpCode === 404) {
-        return [
-            'ok'      => true,
-            'message' => 'Whisper erreichbar, aber ohne /health-Endpunkt (ältere Version).',
-            'http'    => 404,
-        ];
+        $result['error'] = 'SpeechInt nicht erreichbar: ' . $curlErr;
+        return $result;
     }
 
-    return [
-        'ok'      => false,
-        'message' => 'Whisper meldet HTTP ' . $httpCode . '.',
-        'http'    => $httpCode,
-    ];
+    $headerText = is_string($raw) ? substr($raw, 0, $headerLen) : '';
+    $bodyText   = is_string($raw) ? substr($raw, $headerLen) : '';
+
+    $data = json_decode($bodyText, true);
+    if (is_array($data)) {
+        $result['data'] = $data;
+    }
+
+    $retryAfter = 0;
+    if (preg_match('/^Retry-After:\s*(\d+)/mi', $headerText, $match) === 1) {
+        $retryAfter = (int) $match[1];
+    } elseif (is_array($data) && isset($data['retry_after'])) {
+        $retryAfter = (int) $data['retry_after'];
+    }
+    $result['retry_after'] = max(0, min(300, $retryAfter));
+
+    $code    = is_array($data) ? (string) ($data['error'] ?? '') : '';
+    $message = is_array($data) ? trim((string) ($data['message'] ?? '')) : '';
+    $status  = is_array($data) ? (string) ($data['status'] ?? '') : '';
+
+    if ($httpCode >= 200 && $httpCode < 300) {
+        $result['ok']      = true;
+        $result['message'] = $message;
+        return $result;
+    }
+
+    // Still downloading or loading its models: not an error but a "try again in
+    // a moment" signal, so the caller keeps the fragment instead of falling back.
+    if ($code === 'service_loading' || $status === 'loading' || $status === 'starting') {
+        $result['loading']     = true;
+        $result['message']     = $message !== '' ? $message : 'Die SpeechInt-Modelle werden noch geladen.';
+        $result['retry_after'] = $result['retry_after'] > 0 ? $result['retry_after'] : 15;
+        return $result;
+    }
+
+    $result['error']   = $code !== '' ? $code : 'http_' . $httpCode;
+    $result['message'] = $message !== '' ? $message : ('SpeechInt meldet HTTP ' . $httpCode . '.');
+    return $result;
 }
 
 /**
- * Send one audio segment to the whisper server and return the transcript.
+ * Reachability and readiness of a SpeechInt service.
+ *
+ * `GET /v1/ready` needs no token, `GET /v1/health` does; both answer with the
+ * same body (docs/api.md of the SpeechInt project), so the unauthenticated
+ * variant is used whenever no shared secret is configured.
+ *
+ * @return array{ok:bool,reachable:bool,loading:bool,ready:bool,status:string,
+ *               message:string,retry_after:int,http:int,latency_ms:int,
+ *               components:array<string,array<string,mixed>>,error:string,url:string}
+ * @param array{timeout?:int,connect_timeout?:int} $options
+ */
+function speechDictationHealth(?string $url = null, ?string $token = null, array $options = []): array
+{
+    $base   = $url === null ? speechDictationUrl() : rtrim(trim($url), '/');
+    $secret = $token === null ? speechDictationToken() : trim($token);
+
+    $health = [
+        'ok'          => false,
+        'reachable'   => false,
+        'loading'     => false,
+        'ready'       => false,
+        'status'      => '',
+        'message'     => '',
+        'retry_after' => 0,
+        'http'        => 0,
+        'latency_ms'  => 0,
+        'components'  => [],
+        'error'       => '',
+        'url'         => $base,
+    ];
+
+    if ($base === '') {
+        $health['error']   = 'not_configured';
+        $health['message'] = 'Es ist kein Speech-Endpunkt konfiguriert.';
+        return $health;
+    }
+
+    $response = speechDictationHttpCall(
+        $base . ($secret !== '' ? '/v1/health' : '/v1/ready'),
+        [
+            'timeout'         => max(5, min(600, (int) ($options['timeout'] ?? 15))),
+            'connect_timeout' => max(1, min(60, (int) ($options['connect_timeout'] ?? 10))),
+            'token'           => $secret,
+        ]
+    );
+
+    $data = is_array($response['data']) ? $response['data'] : [];
+
+    // An empty `error` means the service answered with a health body; anything
+    // else (curl failure or the error envelope) is a real problem.
+    $reachable = $response['http'] > 0 && $response['error'] === '';
+    $status    = (string) ($data['status'] ?? '');
+
+    $health['reachable']   = $reachable;
+    $health['loading']     = $response['loading'] || $status === 'loading' || $status === 'starting';
+    $health['status']      = $status;
+    $health['http']        = $response['http'];
+    $health['latency_ms']  = $response['latency_ms'];
+    $health['retry_after'] = $response['retry_after'];
+    $health['error']       = $response['error'];
+
+    foreach ((array) ($data['components'] ?? []) as $name => $component) {
+        if (!is_array($component)) {
+            continue;
+        }
+        $health['components'][(string) $name] = [
+            'state'       => (string) ($component['state'] ?? ''),
+            'state_label' => (string) ($component['state_label'] ?? ''),
+            'ok'          => (bool) ($component['ok'] ?? false),
+            'http'        => (int) ($component['http'] ?? 0),
+            'message'     => (string) ($component['message'] ?? ''),
+            'url'         => (string) ($component['url'] ?? ''),
+            'model'       => (string) ($component['model'] ?? ''),
+        ];
+    }
+
+    $health['ready'] = $reachable
+        && !$health['loading']
+        && $response['http'] === 200
+        && (bool) ($data['ready'] ?? true);
+    $health['ok'] = $health['ready'];
+
+    $message = trim((string) ($data['message'] ?? ''));
+    if ($message === '') {
+        $message = $response['message'];
+    }
+    if ($message === '') {
+        $message = $health['ready']
+            ? 'SpeechInt ist bereit.'
+            : ($reachable ? 'SpeechInt ist noch nicht bereit.' : 'SpeechInt nicht erreichbar.');
+    }
+    $health['message'] = $message;
+
+    return $health;
+}
+
+/**
+ * Readiness of the active SpeechInt endpoint for the admin dashboard graphic.
+ *
+ * The dashboard polls every 15 s, so the live probe is cached for 20 s in the
+ * settings table – the same pattern vectorStoreStatus() uses. The probe itself
+ * is deliberately cheap (short connect timeout) so a stopped speech host never
+ * stalls the dashboard poll.
+ *
+ * @return array{configured:bool,url:string,source:string,ready:bool,loading:bool,
+ *               reachable:bool,status:string,message:string,retry_after:int,
+ *               checked_at:int,components:array<string,array<string,mixed>>}
+ */
+function speechDictationDashboardStatus(bool $allowProbe = true): array
+{
+    $url = speechDictationUrl();
+
+    $status = [
+        'configured'  => $url !== '',
+        'url'         => $url,
+        'source'      => speechDictationUrlSource(),
+        'ready'       => false,
+        'loading'     => false,
+        'reachable'   => false,
+        'status'      => '',
+        'message'     => '',
+        'retry_after' => 0,
+        'checked_at'  => time(),
+        'probed'      => false,
+        'components'  => [],
+    ];
+
+    if ($url === '') {
+        $status['message'] = 'Kein Speech-Endpunkt konfiguriert.';
+        return $status;
+    }
+
+    $cacheKey = 'speech_dictation_status_cache';
+    $cached   = json_decode((string) getSetting($cacheKey, ''), true);
+    if (is_array($cached) && ($cached['url'] ?? '') === $url
+        && (time() - (int) ($cached['checked_at'] ?? 0)) < 20) {
+        return $cached + $status;
+    }
+
+    // A page that must not wait for a remote host (the admin area) asks for the
+    // cached value only and lets the dashboard poll fill it in a moment later.
+    if (!$allowProbe) {
+        $status['message']   = 'Noch nicht geprüft.';
+        $status['reachable'] = is_array($cached) && ($cached['url'] ?? '') === $url
+            ? (bool) ($cached['reachable'] ?? false)
+            : false;
+        return $status;
+    }
+
+    $health = speechDictationHealth($url, null, ['timeout' => 4, 'connect_timeout' => 2]);
+    $status = [
+        'configured'  => true,
+        'url'         => $url,
+        'source'      => speechDictationUrlSource(),
+        'ready'       => $health['ready'],
+        'loading'     => $health['loading'],
+        'reachable'   => $health['reachable'],
+        'status'      => $health['status'],
+        'message'     => $health['message'],
+        'retry_after' => $health['retry_after'],
+        'checked_at'  => time(),
+        'probed'      => true,
+        'components'  => $health['components'],
+    ];
+
+    try {
+        setSetting($cacheKey, json_encode($status, JSON_UNESCAPED_UNICODE));
+    } catch (Throwable $_e) {
+        // A missing cache is harmless – the next poll simply probes again.
+    }
+
+    return $status;
+}
+
+/**
+ * Capabilities, defaults and limits of a SpeechInt service (GET /v1/config).
+ *
+ * @return array{ok:bool,http:int,error:string,message:string,loading:bool,
+ *               latency_ms:int,config:array<string,mixed>}
+ */
+function speechDictationRemoteConfig(?string $url = null, ?string $token = null): array
+{
+    $base   = $url === null ? speechDictationUrl() : rtrim(trim($url), '/');
+    $secret = $token === null ? speechDictationToken() : trim($token);
+
+    $result = [
+        'ok'         => false,
+        'http'       => 0,
+        'error'      => '',
+        'message'    => '',
+        'loading'    => false,
+        'latency_ms' => 0,
+        'config'     => [],
+    ];
+
+    if ($base === '') {
+        $result['error']   = 'not_configured';
+        $result['message'] = 'Es ist kein Speech-Endpunkt konfiguriert.';
+        return $result;
+    }
+
+    $response = speechDictationHttpCall($base . '/v1/config', [
+        'timeout' => 15,
+        'token'   => $secret,
+    ]);
+
+    $result['http']       = $response['http'];
+    $result['error']      = $response['error'];
+    $result['message']    = $response['message'];
+    $result['loading']    = $response['loading'];
+    $result['latency_ms'] = $response['latency_ms'];
+    $result['ok']         = $response['ok'];
+    $result['config']     = is_array($response['data']) ? $response['data'] : [];
+
+    if (!$response['ok'] && $result['message'] === '') {
+        $result['message'] = 'Die SpeechInt-Konfiguration konnte nicht gelesen werden.';
+    }
+
+    return $result;
+}
+
+/**
+ * Send one audio segment to SpeechInt and return the transcript.
  *
  * @param string $path     Absolute path of the uploaded audio file.
  * @param string $filename Original file name (determines the format hint).
  * @param string $mime     MIME type of the file.
  *
- * @return array{ok:bool,text:string,error:string,http:int,duration_ms:int}
+ * @return array{ok:bool,text:string,error:string,http:int,duration_ms:int,
+ *               loading:bool,retry_after:int,message:string}
  */
 function speechDictationTranscribeFile(string $path, string $filename, string $mime): array
 {
-    $url = speechDictationWhisperUrl();
+    $url = speechDictationUrl();
     if ($url === '') {
-        return [
-            'ok'          => false,
-            'text'        => '',
-            'error'       => 'Whisper ist nicht konfiguriert.',
-            'http'        => 0,
-            'duration_ms' => 0,
-        ];
+        return speechDictationTranscribeFailure('SpeechInt ist nicht konfiguriert.');
     }
     if (!is_file($path)) {
-        return [
-            'ok'          => false,
-            'text'        => '',
-            'error'       => 'Audiodatei nicht gefunden.',
-            'http'        => 0,
-            'duration_ms' => 0,
-        ];
+        return speechDictationTranscribeFailure('Audiodatei nicht gefunden.');
     }
 
-    $post = [
+    $multipart = [
         'file'            => new CURLFile($path, $mime !== '' ? $mime : 'audio/wav', $filename),
         'response_format' => 'json',
-        'temperature'     => '0.0',
     ];
     $language = speechDictationLanguage();
-    if ($language !== '') {
-        $post['language'] = $language;
+    if ($language !== '' && strtolower($language) !== 'auto') {
+        $multipart['language'] = $language;
     }
 
-    $headers = ['Accept: application/json'];
-    $token = speechDictationWhisperToken();
-    if ($token !== '') {
-        $headers[] = 'X-Auth-Token: ' . $token;
-    }
-
-    $startedAt = microtime(true);
-    $ch = curl_init($url . '/inference');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $post,
-        CURLOPT_HTTPHEADER     => $headers,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => speechDictationWhisperTimeout(),
-        CURLOPT_CONNECTTIMEOUT => 10,
+    $response = speechDictationHttpCall($url . '/v1/audio/transcriptions', [
+        'method'    => 'POST',
+        'multipart' => $multipart,
+        'timeout'   => speechDictationTimeout(),
+        'token'     => speechDictationToken(),
     ]);
-    $body     = curl_exec($ch);
-    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlErr  = curl_error($ch);
-    curl_close($ch);
-    $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
 
-    if ($curlErr !== '') {
+    if ($response['loading']) {
         return [
             'ok'          => false,
             'text'        => '',
-            'error'       => 'Whisper nicht erreichbar: ' . $curlErr,
-            'http'        => 0,
-            'duration_ms' => $durationMs,
+            'error'       => '',
+            'http'        => $response['http'],
+            'duration_ms' => $response['latency_ms'],
+            'loading'     => true,
+            'retry_after' => $response['retry_after'],
+            'message'     => $response['message'],
         ];
     }
 
-    $bodyText = (string) $body;
-    if ($httpCode !== 200) {
-        $decoded = json_decode($bodyText, true);
-        $message = is_array($decoded)
-            ? (string) ($decoded['error'] ?? $decoded['message'] ?? '')
-            : '';
-        if ($message === '') {
-            $message = 'Whisper-Fehler (HTTP ' . $httpCode . ')';
-        }
+    if (!$response['ok']) {
+        return speechDictationTranscribeFailure($response['message'], $response['http']);
+    }
+
+    $data = is_array($response['data']) ? $response['data'] : [];
+
+    return [
+        'ok'          => true,
+        'text'        => trim((string) ($data['text'] ?? '')),
+        'error'       => '',
+        'http'        => $response['http'],
+        'duration_ms' => (int) ($data['duration_ms'] ?? $response['latency_ms']),
+        'loading'     => false,
+        'retry_after' => 0,
+        'message'     => '',
+    ];
+}
+
+/** Failure shape of speechDictationTranscribeFile(). */
+function speechDictationTranscribeFailure(string $error, int $http = 0): array
+{
+    return [
+        'ok'          => false,
+        'text'        => '',
+        'error'       => $error,
+        'http'        => $http,
+        'duration_ms' => 0,
+        'loading'     => false,
+        'retry_after' => 0,
+        'message'     => $error,
+    ];
+}
+
+// ── Dictation post-processing via SpeechInt ───────────────────────────────────
+
+/**
+ * Process one dictated fragment through SpeechInt's dictation model.
+ *
+ * Prompt, command table and context travel with the request, so SpeechInt stays
+ * stateless and everything remains configurable in LLMInt's admin area.
+ *
+ * Never loses recognised text: while SpeechInt is still loading its models the
+ * caller retries (`loading` = true, `retry_after` = seconds), and when the
+ * service is unreachable, erroring or unconfigured the deterministic command
+ * processor takes over (`fallback` = true).
+ *
+ * @return array{ok:bool,text:string,fallback:bool,model:string,warning:string,
+ *               loading:bool,retry_after:int,message:string}
+ */
+function speechDictationProcessFragment(string $fragment, string $context = ''): array
+{
+    $fragment = trim($fragment);
+    if ($fragment === '') {
+        return speechDictationProcessResult('');
+    }
+
+    $url = speechDictationUrl();
+    if ($url === '') {
+        return speechDictationProcessFallback($fragment, 'Es ist kein Speech-Endpunkt konfiguriert.');
+    }
+
+    $response = speechDictationHttpCall($url . '/v1/dictate/process', [
+        'method'  => 'POST',
+        'json'    => [
+            'fragment'    => $fragment,
+            'context'     => speechDictationLimitContext($context),
+            'prompt'      => speechDictationPrompt(),
+            'commands'    => speechDictationCommands(),
+            'temperature' => 0.1,
+            'max_tokens'  => max(128, (int) (mb_strlen($fragment, 'UTF-8') * 2) + 128),
+        ],
+        'timeout' => speechDictationTimeout(),
+        'token'   => speechDictationToken(),
+    ]);
+
+    if ($response['loading']) {
+        // Models are still being loaded: keep the fragment and try again later.
         return [
             'ok'          => false,
             'text'        => '',
-            'error'       => $message,
-            'http'        => $httpCode,
-            'duration_ms' => $durationMs,
+            'fallback'    => false,
+            'model'       => '',
+            'warning'     => '',
+            'loading'     => true,
+            'retry_after' => $response['retry_after'],
+            'message'     => $response['message'],
         ];
     }
 
-    $decoded = json_decode($bodyText, true);
-    if (is_array($decoded) && isset($decoded['text'])) {
-        $text = (string) $decoded['text'];
-    } elseif (is_string($decoded)) {
-        $text = $decoded;
-    } else {
-        // Plain-text responses of older builds.
-        $text = $bodyText;
+    if (!$response['ok']) {
+        return speechDictationProcessFallback($fragment, $response['message']);
+    }
+
+    $data    = is_array($response['data']) ? $response['data'] : [];
+    $text    = speechDictationCleanModelOutput((string) ($data['text'] ?? ''));
+    $warning = trim((string) ($data['warning'] ?? ''));
+
+    if ($text === '') {
+        return speechDictationProcessFallback(
+            $fragment,
+            $warning !== '' ? $warning : 'Das Diktat-Modell hat keinen Text geliefert.'
+        );
     }
 
     return [
         'ok'          => true,
-        'text'        => trim($text),
-        'error'       => '',
-        'http'        => $httpCode,
-        'duration_ms' => $durationMs,
+        'text'        => $text,
+        'fallback'    => (bool) ($data['fallback'] ?? false),
+        'model'       => (string) ($data['model'] ?? ''),
+        'warning'     => $warning,
+        'loading'     => false,
+        'retry_after' => 0,
+        'message'     => '',
     ];
 }
 
-// ── Dedicated Qwen3.5-2B (llama.cpp) server ───────────────────────────────────
-
 /**
- * Live health check of the dedicated llama.cpp server (GET /health).
- *
- * @return array{ok:bool,message:string,http:int}
+ * Deterministic rule fallback: the recognised text is applied command by
+ * command so a missing speech service never swallows a dictation.
  */
-function speechDictationQwenHealth(): array
+function speechDictationProcessFallback(string $fragment, string $reason): array
 {
-    $url = speechDictationQwenUrl();
-    if ($url === '') {
-        return ['ok' => true, 'message' => 'Kein eigener Qwen-Server konfiguriert – es wird der Endpunkt-Pool verwendet.', 'http' => 0];
-    }
+    return [
+        'ok'          => true,
+        'text'        => speechDictationApplyCommands($fragment),
+        'fallback'    => true,
+        'model'       => '',
+        'warning'     => 'SpeechInt nicht verfügbar – Rohtext übernommen (' . $reason . ')',
+        'loading'     => false,
+        'retry_after' => 0,
+        'message'     => '',
+    ];
+}
 
-    $headers = ['Accept: application/json'];
-    $token = speechDictationQwenToken();
-    if ($token !== '') {
-        $headers[] = 'X-Auth-Token: ' . $token;
-    }
-
-    $ch = curl_init($url . '/health');
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 10,
-        CURLOPT_CONNECTTIMEOUT => 5,
-        CURLOPT_HTTPHEADER     => $headers,
-    ]);
-    $body     = curl_exec($ch);
-    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlErr  = curl_error($ch);
-    curl_close($ch);
-
-    if ($curlErr !== '') {
-        return ['ok' => false, 'message' => 'Qwen-Server nicht erreichbar: ' . $curlErr, 'http' => 0];
-    }
-    if ($httpCode === 200) {
-        $decoded = json_decode((string) $body, true);
-        $status  = is_array($decoded) ? (string) ($decoded['status'] ?? 'ok') : 'ok';
-        return ['ok' => true, 'message' => 'Qwen-Server erreichbar (' . $status . ').', 'http' => 200];
-    }
-
-    return ['ok' => false, 'message' => 'Qwen-Server meldet HTTP ' . $httpCode . '.', 'http' => $httpCode];
+/** Successful result for an empty fragment (nothing to process). */
+function speechDictationProcessResult(string $text): array
+{
+    return [
+        'ok'          => true,
+        'text'        => $text,
+        'fallback'    => false,
+        'model'       => '',
+        'warning'     => '',
+        'loading'     => false,
+        'retry_after' => 0,
+        'message'     => '',
+    ];
 }
 
 // ── Dictation-command post-processing ─────────────────────────────────────────
@@ -898,260 +1294,6 @@ function speechDictationAppendWord(string $out, string $word): string
     return $out . ' ' . $word;
 }
 
-// ── Dictation model client ────────────────────────────────────────────────────
-
-/**
- * Build the system message for one dictation fragment.
- *
- * The already written text belongs in the system message, not the user turn:
- * in the user turn the model treats it as something to answer and echoes it
- * back into the result, which is exactly what must not happen. Inside the
- * system message it is read as background information and stays out of the
- * output.
- */
-function speechDictationBuildSystemMessage(string $context): string
-{
-    $prompt = speechDictationPrompt();
-    if ($context === '') {
-        return $prompt;
-    }
-
-    return $prompt
-        . "\n\nBereits geschriebener Text (nur Kontext – nicht wiederholen, nicht verändern):\n"
-        . "<<<\n" . $context . "\n>>>";
-}
-
-/**
- * Build the user message for one dictation fragment.
- *
- * Only the new fragment goes in here; the already written text travels in the
- * system message – see speechDictationBuildSystemMessage().
- */
-function speechDictationBuildUserMessage(string $fragment): string
-{
-    return "Neues Fragment aus der Spracherkennung:\n<<<\n" . $fragment . "\n>>>\n\n"
-        . "Gib nur die überarbeitete Fassung dieses neuen Fragments aus.";
-}
-
-/**
- * Resolve the backend for one dictation completion.
- *
- * A dedicated llama.cpp server (QWEN_URL / speech_dictation_qwen_url, see the
- * `qwen` service in docker-compose.yml) is preferred because it is reserved for
- * the dictation pipeline and always serves exactly the Qwen3.5-2B Q4 model.
- * Without one, the request goes through the regular endpoint pool / balancer,
- * so an administrator who already hosts the model on an endpoint needs no extra
- * container.
- *
- * @return array{ok:bool,url?:string,model?:string,timeout?:int,task_id?:int|null,token?:string,error?:string}
- */
-function speechDictationResolveCompletionTarget(string $model): array
-{
-    if ($model === '') {
-        return ['ok' => false, 'error' => 'Kein Modell angegeben.'];
-    }
-
-    $directUrl = speechDictationQwenUrl();
-    if ($directUrl !== '') {
-        return [
-            'ok'      => true,
-            'url'     => $directUrl . '/v1/chat/completions',
-            'model'   => $model,
-            'timeout' => speechDictationQwenTimeout(),
-            'task_id' => null,
-            'token'   => speechDictationQwenToken(),
-        ];
-    }
-
-    try {
-        $slot = pickEndpointForModel($model);
-    } catch (Throwable $e) {
-        return ['ok' => false, 'error' => 'Endpunkt-Auswahl fehlgeschlagen: ' . $e->getMessage()];
-    }
-
-    if ($slot === null) {
-        return ['ok' => false, 'error' => 'Kein aktiver Endpunkt für das Modell "' . $model . '" verfügbar.'];
-    }
-
-    $endpoint = $slot['endpoint'];
-
-    return [
-        'ok'      => true,
-        'url'     => rtrim((string) $endpoint['base_url'], '/') . '/chat/completions',
-        'model'   => $endpoint['default_model'] !== '' ? (string) $endpoint['default_model'] : $model,
-        'timeout' => max(20, min(120, (int) $endpoint['timeout'])),
-        'task_id' => (int) $slot['task_id'],
-        'token'   => '',
-    ];
-}
-
-/**
- * Run one non-streaming chat completion for the dictation pipeline.
- *
- * Thinking is switched off (`chat_template_kwargs.enable_thinking = false` plus
- * `reasoning_budget = 0`), mirroring the convention in api/chat.php for requests
- * without reasoning.
- * Balancer-picked endpoints additionally get their task finished through
- * completeTask() so counters and latency statistics stay correct.
- *
- * @param array<int,array{role:string,content:string}> $messages
- * @param array{temperature?:float,max_tokens?:int}    $options
- *
- * @return array{ok:bool,text?:string,error?:string,model?:string,latency_ms?:int}
- */
-function speechDictationRunChatCompletion(string $model, array $messages, array $options = []): array
-{
-    $target = speechDictationResolveCompletionTarget($model);
-    if (!$target['ok']) {
-        return ['ok' => false, 'error' => (string) $target['error'], 'model' => $model];
-    }
-
-    $taskId = $target['task_id'];
-
-    $payload = [
-        'model'    => $target['model'],
-        'stream'   => false,
-        'messages' => $messages,
-        'temperature' => (float) ($options['temperature'] ?? 0.1),
-        // Dictation must never think: hybrid-reasoning chat templates are told
-        // to skip the thinking block, exactly like api/chat.php does.
-        'chat_template_kwargs' => ['enable_thinking' => false],
-        // The template switch alone is not enough on every llama.cpp build: the
-        // model still emits a thinking block that eats the whole token budget,
-        // so the completion comes back empty and the raw transcript is used.
-        // A reasoning budget of 0 pins the answer to the token limit.
-        'reasoning_budget' => 0,
-    ];
-    if (isset($options['max_tokens'])) {
-        $payload['max_tokens'] = max(32, min(4096, (int) $options['max_tokens']));
-    }
-
-    $headers = ['Content-Type: application/json', 'Accept: application/json'];
-    if ($target['token'] !== '') {
-        $headers[] = 'X-Auth-Token: ' . $target['token'];
-    }
-
-    $startedAt = microtime(true);
-    $ch = curl_init($target['url']);
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-        CURLOPT_HTTPHEADER     => $headers,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => $target['timeout'],
-        CURLOPT_CONNECTTIMEOUT => 10,
-    ]);
-    $body     = curl_exec($ch);
-    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlErr  = curl_error($ch);
-    curl_close($ch);
-    $latencyMs = (float) round((microtime(true) - $startedAt) * 1000, 1);
-
-    if ($curlErr !== '') {
-        if ($taskId !== null) {
-            try { completeTask($taskId, 'error', null, null, null, $latencyMs); } catch (Throwable $_e) {}
-        }
-        return ['ok' => false, 'error' => 'Modell nicht erreichbar: ' . $curlErr, 'model' => $model];
-    }
-
-    $data = json_decode((string) $body, true);
-    if ($httpCode !== 200 || !is_array($data)) {
-        $errMsg = isset($data['error']['message'])
-            ? (string) $data['error']['message']
-            : 'Modell-Fehler (HTTP ' . $httpCode . ')';
-        if ($taskId !== null) {
-            try { completeTask($taskId, 'error', null, null, null, $latencyMs); } catch (Throwable $_e) {}
-        }
-        return ['ok' => false, 'error' => $errMsg, 'model' => $model];
-    }
-
-    // The content may be a plain string or an array of typed parts.
-    $content = '';
-    $msgContent = $data['choices'][0]['message']['content'] ?? '';
-    if (is_string($msgContent)) {
-        $content = $msgContent;
-    } elseif (is_array($msgContent)) {
-        foreach ($msgContent as $part) {
-            if (is_array($part) && ($part['type'] ?? '') === 'text' && isset($part['text'])) {
-                $content .= (string) $part['text'];
-            }
-        }
-    }
-
-    $usage = [
-        'prompt'     => (int) ($data['usage']['prompt_tokens']     ?? 0),
-        'completion' => (int) ($data['usage']['completion_tokens'] ?? 0),
-        'total'      => (int) ($data['usage']['total_tokens']      ?? 0),
-    ];
-
-    if ($taskId !== null) {
-        try {
-            completeTask($taskId, 'done', $usage['prompt'], $usage['completion'], $usage['total'], $latencyMs);
-        } catch (Throwable $_e) {}
-    }
-
-    return [
-        'ok'         => true,
-        'text'       => speechDictationCleanModelOutput($content),
-        'model'      => (string) $payload['model'],
-        'latency_ms' => (int) round($latencyMs),
-    ];
-}
-
-/**
- * Cut a fragment at the line-break commands and mark where the breaks go.
- *
- * Qwen3.5-2B reliably *consumes* "neue zeile"/"neuer absatz" but then writes a
- * space where the break belongs, so asking it for whitespace is not dependable.
- * The break commands are therefore taken out of the fragment before the model
- * sees it and re-inserted afterwards: the model stays responsible for language
- * (filler removal, punctuation, capitalisation) and the caller guarantees the
- * structure. The configured phrases are used, so admin-edited break commands
- * work too.
- *
- * @return array<int,array{text:string,break:?string}> Parts in reading order;
- *         `break` is "\n" or "\n\n" for a break command, null for text. The
- *         first part is always a text part and text parts are never adjacent.
- */
-function speechDictationSplitAtBreaks(string $fragment): array
-{
-    $breaks = [];
-    foreach (speechDictationCommands() as $command) {
-        $type   = (string) ($command['type'] ?? '');
-        $phrase = trim((string) ($command['phrase'] ?? ''));
-        if ($phrase === '' || ($type !== 'newline' && $type !== 'paragraph')) {
-            continue;
-        }
-        $breaks[mb_strtolower($phrase, 'UTF-8')] = $type === 'paragraph' ? "\n\n" : "\n";
-    }
-
-    if ($breaks === []) {
-        return [['text' => $fragment, 'break' => null]];
-    }
-
-    // Longest phrase first, so "neuer absatz" cannot be clipped by a shorter one.
-    $phrases = array_keys($breaks);
-    usort($phrases, static fn(string $a, string $b): int => mb_strlen($b, 'UTF-8') <=> mb_strlen($a, 'UTF-8'));
-    $pattern = '/\b(?:' . implode('|', array_map(
-        static fn(string $p): string => preg_quote($p, '/'),
-        $phrases
-    )) . ')\b/iu';
-
-    $matches = [];
-    preg_match_all($pattern, $fragment, $matches, PREG_OFFSET_CAPTURE);
-
-    $parts  = [];
-    $cursor = 0;
-    foreach ($matches[0] as [$match, $offset]) {
-        $parts[]  = ['text' => substr($fragment, $cursor, $offset - $cursor), 'break' => null];
-        $parts[]  = ['text' => '', 'break' => $breaks[mb_strtolower($match, 'UTF-8')] ?? "\n"];
-        $cursor   = $offset + strlen($match);
-    }
-    $parts[] = ['text' => substr($fragment, $cursor), 'break' => null];
-
-    return $parts;
-}
-
 /**
  * Keep a context string within the size the dictation model is given.
  */
@@ -1162,159 +1304,6 @@ function speechDictationLimitContext(string $context): string
         $context = mb_substr($context, -SPEECH_DICTATION_CONTEXT_CHARS, null, 'UTF-8');
     }
     return $context;
-}
-
-/**
- * Keep the capitalisation the speaker used at the start of a segment.
- *
- * Every segment after a line break is its own completion, so the model tends to
- * capitalise it as if it opened a new sentence. The dictation spec keeps the
- * spoken casing ("Hallo Peter Punkt Neue Zeile ich wollte dich etwas fragen"
- * stays lowercase after the break), so a segment that was dictated in lower
- * case is put back into lower case. A segment the speaker capitalised is left
- * alone.
- */
-function speechDictationMatchLeadingCase(string $source, string $produced): string
-{
-    $produced = ltrim($produced);
-    if ($produced === '') {
-        return $produced;
-    }
-
-    if (preg_match('/^\p{Ll}/u', ltrim($source)) === 1
-        && preg_match('/^\p{Lu}/u', $produced) === 1) {
-        return mb_strtolower(mb_substr($produced, 0, 1, 'UTF-8'), 'UTF-8')
-            . mb_substr($produced, 1, null, 'UTF-8');
-    }
-
-    return $produced;
-}
-
-/**
- * Drop a closing sentence mark the model added on its own.
- *
- * A dictation fragment is often only part of a sentence – the user pauses and
- * keeps speaking. When no sentence mark was dictated, adding one would end the
- * sentence early and the next fragment would start a new one, so a mark the
- * model invented at the very end is removed again. §18 of the spec shows the
- * same behaviour ("… ich wollte dich etwas fragen" keeps no closing period).
- */
-function speechDictationDropInventedSentenceEnd(string $fragment, string $text): string
-{
-    $tail = trim($fragment);
-    if ($tail === '' || $text === '') {
-        return $text;
-    }
-
-    if (preg_match('/[.!?…]$/u', $text) !== 1 || preg_match('/[.!?…]$/u', $tail) === 1) {
-        return $text;
-    }
-
-    // A mark the speaker dictated is legitimate, so look for the command.
-    $phrases = [];
-    foreach (speechDictationCommands() as $command) {
-        $phrase = trim((string) ($command['phrase'] ?? ''));
-        $value  = (string) ($command['value'] ?? '');
-        if ($phrase !== '' && preg_match('/^[.!?…]+$/u', trim($value)) === 1) {
-            $phrases[] = preg_quote(mb_strtolower($phrase, 'UTF-8'), '/');
-        }
-    }
-
-    if ($phrases !== []
-        && preg_match('/\b(?:' . implode('|', $phrases) . ')$/u', mb_strtolower($tail, 'UTF-8')) === 1) {
-        return $text;
-    }
-
-    return rtrim(mb_substr($text, 0, -1, 'UTF-8'));
-}
-
-/**
- * Process one dictated fragment with the dictation model.
- *
- * Never fails hard for non-empty input: when the model is unavailable the
- * deterministic command processor takes over, so no recognised text is lost.
- *
- * @return array{ok:bool,text:string,fallback:bool,model:string,warning:string}
- */
-function speechDictationProcessFragment(string $fragment, string $context = ''): array
-{
-    $fragment = trim($fragment);
-    if ($fragment === '') {
-        return ['ok' => true, 'text' => '', 'fallback' => false, 'model' => '', 'warning' => ''];
-    }
-
-    $context = speechDictationLimitContext($context);
-
-    $model = speechDictationQwenModel();
-    $pieces = [];
-    $afterBreak = false;
-
-    foreach (speechDictationSplitAtBreaks($fragment) as $part) {
-        if ($part['break'] !== null) {
-            $pieces[]   = $part['break'];
-            $afterBreak = true;
-            continue;
-        }
-
-        $text = trim($part['text']);
-        if ($text === '') {
-            continue;
-        }
-
-        $result = speechDictationRunChatCompletion($model, [
-            ['role' => 'system', 'content' => speechDictationBuildSystemMessage($context)],
-            ['role' => 'user',   'content' => speechDictationBuildUserMessage($text)],
-        ], [
-            'temperature' => 0.1,
-            'max_tokens'  => max(128, (int) (mb_strlen($text, 'UTF-8') * 2) + 128),
-        ]);
-
-        if (!$result['ok'] || trim((string) $result['text']) === '') {
-            // Model unavailable or returned nothing usable → keep the raw text alive.
-            $reason = $result['ok']
-                ? 'Das Diktat-Modell hat keinen Text geliefert.'
-                : (string) ($result['error'] ?? 'Unbekannter Fehler.');
-
-            return [
-                'ok'       => true,
-                'text'     => speechDictationApplyCommands($fragment),
-                'fallback' => true,
-                'model'    => $model,
-                'warning'  => 'Diktat-Modell nicht verfügbar – Rohtext übernommen (' . $reason . ')',
-            ];
-        }
-
-        $segment = (string) $result['text'];
-        if ($afterBreak) {
-            $segment = speechDictationMatchLeadingCase($text, $segment);
-        }
-        $pieces[] = $segment;
-
-        // Each following segment continues the same dictation, so it sees what
-        // has been produced so far – that keeps mid-sentence breaks lowercase.
-        $context = speechDictationLimitContext($context . ' ' . $segment);
-    }
-
-    $text = speechDictationCleanModelOutput(implode('', $pieces));
-    $text = speechDictationDropInventedSentenceEnd($fragment, $text);
-    if ($text === '') {
-        return [
-            'ok'       => true,
-            'text'     => speechDictationApplyCommands($fragment),
-            'fallback' => true,
-            'model'    => $model,
-            'warning'  => 'Diktat-Modell nicht verfügbar – Rohtext übernommen '
-                . '(Das Diktat-Modell hat keinen Text geliefert.)',
-        ];
-    }
-
-    return [
-        'ok'       => true,
-        'text'     => $text,
-        'fallback' => false,
-        'model'    => $model,
-        'warning'  => '',
-    ];
 }
 
 /**

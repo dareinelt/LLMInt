@@ -119,7 +119,6 @@ function analyzeImageWithVision(string $imagePath, string $mimeType, string $pro
     $body     = curl_exec($ch);
     $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr  = curl_error($ch);
-    curl_close($ch);
 
     if ($curlErr !== '') {
         try { completeTask($taskId, 'error'); } catch (Throwable $_e) {}

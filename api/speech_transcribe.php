@@ -3,20 +3,26 @@
 /**
  * api/speech_transcribe.php
  *
- * Transcribes one recorded audio segment through the whisper.cpp service and
- * returns the raw text. Called by the dictation recorder in index.php after
- * every segment, so the recogniser runs on short slices instead of one long
- * recording (whisper.cpp is not a streaming recogniser).
+ * Transcribes one recorded audio segment through the SpeechInt service
+ * (POST /v1/audio/transcriptions) and returns the raw text. Called by the
+ * dictation recorder in index.php after every segment, so the recogniser runs
+ * on short slices instead of one long recording (whisper.cpp is not a streaming
+ * recogniser).
  *
  * The recognised text is returned unchanged and is *not* stored: it only lives
  * in the browser until the dictation-command step (api/speech_process.php) has
  * turned it into final text for the input field. See §21 Datenschutz.
  *
+ * While SpeechInt still loads its models it answers 503 `service_loading`. That
+ * is not a failure: the answer carries `loading: true`, the German message and
+ * `retry_after`, and the recorder keeps the segment and asks again.
+ *
  * POST multipart/form-data:
  *   audio      – recorded segment (WAV/WebM/OGG, see speechDictationMaxAudioBytes)
  *   csrf_token – CSRF token from the session
  *
- * Returns JSON { ok, text, empty, duration_ms, bytes }.
+ * Returns JSON { ok, loading, retry_after, message, text, empty, duration_ms,
+ *                bytes }.
  */
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -54,10 +60,10 @@ if (!speechDictationEnabled()) {
     exit;
 }
 
-$whisperUrl = speechDictationWhisperUrl();
-if ($whisperUrl === '') {
+$speechUrl = speechDictationUrl();
+if ($speechUrl === '') {
     http_response_code(503);
-    echo json_encode(['ok' => false, 'message' => 'Es ist keine Spracherkennung (Whisper) konfiguriert.']);
+    echo json_encode(['ok' => false, 'message' => 'Es ist kein Speech-Endpunkt konfiguriert.']);
     exit;
 }
 
@@ -85,7 +91,7 @@ if ($uploadErr !== UPLOAD_ERR_OK) {
 
 if ($size <= 0) {
     // An empty segment is not an error: it simply carries no speech.
-    echo json_encode(['ok' => true, 'text' => '', 'empty' => true, 'duration_ms' => 0, 'bytes' => 0]);
+    echo json_encode(['ok' => true, 'loading' => false, 'text' => '', 'empty' => true, 'duration_ms' => 0, 'bytes' => 0]);
     exit;
 }
 
@@ -114,9 +120,22 @@ if ($mime === '' && function_exists('mime_content_type')) {
 
 $result = speechDictationTranscribeFile($tmpPath, $safeName, $mime);
 
+if (!empty($result['loading'])) {
+    // The service is still downloading or loading its models. No error: the
+    // recorder keeps the segment and asks again after `retry_after` seconds.
+    writeLog('info', 'Spracherkennung: SpeechInt lädt noch – Segment wird erneut versucht.');
+    echo json_encode([
+        'ok'          => false,
+        'loading'     => true,
+        'retry_after' => (int) $result['retry_after'],
+        'message'     => (string) $result['message'],
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 if (!$result['ok']) {
     http_response_code(502);
-    writeLog('error', 'Spracherkennung: Whisper-Transkription fehlgeschlagen – ' . $result['error']);
+    writeLog('error', 'Spracherkennung: Transkription fehlgeschlagen – ' . $result['error']);
     echo json_encode([
         'ok'      => false,
         'message' => 'Die Spracherkennung ist fehlgeschlagen: ' . $result['error'],
@@ -130,6 +149,7 @@ writeLog('info', 'Spracherkennung: Segment transkribiert (' . speechDictationLog
 
 echo json_encode([
     'ok'          => true,
+    'loading'     => false,
     'text'        => $text,
     'empty'       => $text === '',
     'duration_ms' => (int) $result['duration_ms'],

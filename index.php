@@ -139,8 +139,9 @@ $docConvertAvailable = docConvertEnabled();
 $documentUploadEnabled = $loggedIn && $canUploadDocuments && ($visionModelConfigured || $docConvertAvailable);
 
 // Speech recognition / dictation: the microphone button is only offered when
-// an administrator enabled the feature and whisper is configured. The dictation
-// model itself is probed lazily so a slow container never delays the page.
+// an administrator enabled the feature and a SpeechInt endpoint is configured.
+// The remote service is probed lazily so a slow or stopped speech host never
+// delays the page.
 require_once __DIR__ . '/lib/speech_dictation.php';
 $speechDictationEnabled = speechDictationEnabled();
 // The dictation endpoints require an authenticated session (like the other
@@ -1473,9 +1474,10 @@ $csrfToken = $_SESSION['csrf_token'];
         #system-toggle:hover { color: var(--text); }
 
         #status-bar { font-size: .75rem; }
-        #status-bar.ok    { color: var(--success); }
-        #status-bar.error { color: var(--error); }
-        #status-bar.info  { color: var(--text-muted); }
+        #status-bar.ok      { color: var(--success); }
+        #status-bar.error   { color: var(--error); }
+        #status-bar.warning { color: var(--warning); }
+        #status-bar.info    { color: var(--text-muted); }
 
         /* ── Footer info (below input) ─────────────────────────────── */
         #footer-info {
@@ -5520,9 +5522,10 @@ $csrfToken = $_SESSION['csrf_token'];
 <?php if ($speechDictationReady): ?>
 <script>
 /* ── Speech recognition / dictation ────────────────────────────────────────
-   Pipeline: microphone → MediaRecorder → whisper.cpp
-   (api/speech_transcribe.php) → word buffer → dictation model
-   (api/speech_process.php) → input field.
+   Pipeline: microphone → MediaRecorder → SpeechInt transcription
+   (api/speech_transcribe.php → POST /v1/audio/transcriptions) → word buffer →
+   SpeechInt dictation model (api/speech_process.php → POST /v1/dictate/process)
+   → input field.
 
    The microphone is recorded in fixed segments
    (speech_dictation_max_segment_seconds). Every segment is a self-contained,
@@ -5534,7 +5537,13 @@ $csrfToken = $_SESSION['csrf_token'];
    The last speech_dictation_buffer_words words are deliberately held back:
    dictation commands ("neue zeile", "lösche letztes wort", …) are only
    unambiguous once the following words are known. Held-back words are flushed
-   when more speech arrives or when dictation ends – never dropped. */
+   when more speech arrives or when dictation ends – never dropped.
+
+   While SpeechInt is not ready yet it answers with `loading: true` plus a
+   German message and `Retry-After`. That is not an error: the status line
+   reports that the speech input is being processed, the fragment is kept and
+   the request is repeated (retryWhileLoading()). Only an unreachable, erroring
+   or unconfigured service leads to the rule fallback (§19). */
 (function () {
     'use strict';
 
@@ -5563,7 +5572,7 @@ $csrfToken = $_SESSION['csrf_token'];
        state change. */
     const STATUS_TEXT = {
         [STATE.RECORDING]:  'Aufnahme aktiv – bitte sprechen.',
-        [STATE.PROCESSING]: 'Text wird verarbeitet …',
+        [STATE.PROCESSING]: 'Spracheingabe wird verarbeitet …',
         [STATE.WAITING]:    'Aufnahme aktiv – keine neuen Daten.',
         [STATE.STOPPING]:   'Diktat wird abgeschlossen …'
     };
@@ -5574,6 +5583,10 @@ $csrfToken = $_SESSION['csrf_token'];
     /* Extra slack on top of the server-side timeouts before the browser aborts
        a request, so the server always reports the error first (§19). */
     const REQUEST_SLACK_MS = 15000;
+    /* Upper bound for the "SpeechInt is not ready yet" retry loop.
+       Reached only after many minutes; the recognised text is never dropped on
+       the way there (see retryWhileLoading()). */
+    const MAX_LOADING_ATTEMPTS = 60;
 
     let cfg          = null;             /* config from api/speech_config.php */
     let cfgPromise   = null;
@@ -5639,6 +5652,58 @@ $csrfToken = $_SESSION['csrf_token'];
 
     function log(message) {
         if (window.console && console.warn) console.warn('[Diktat] ' + message);
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /* ── SpeechInt loading feedback ──────────────────────────────────── */
+
+    /** Show that the recorded speech is still on its way.
+
+        SpeechInt answers with `loading: true` while it is not ready to
+        transcribe or post-process yet (e.g. it still downloads or loads its
+        models). From the user's point of view nothing has failed: the utterance
+        is being processed, so that is what the status line says. Naming the
+        model state here would describe the service, not what the user is
+        doing – the technical detail stays in the console (§19). */
+    function showLoadingNotice(message, attempt) {
+        const text = 'Spracheingabe wird verarbeitet …';
+        setDictationStatus(text, false);
+        if (window.setChatStatus) window.setChatStatus(text, 'info');
+        log('SpeechInt noch nicht bereit (' + (message || 'Ladezustand')
+            + ', Versuch ' + attempt + ') – Fragment bleibt erhalten.');
+    }
+
+    /** Wait for SpeechInt while it is not ready yet.
+
+        `send` performs one request and resolves with its JSON answer. As long
+        as that answer carries `loading: true` the notice is shown, the
+        fragment is kept and the request is repeated after `Retry-After`
+        seconds. Returns the first non-loading answer, or null when the user
+        ended the dictation in the meantime. */
+    async function retryWhileLoading(send) {
+        let noticed = false;
+        for (let attempt = 1; ; attempt++) {
+            const res = await send();
+            if (!res || !res.loading) {
+                /* The service answers again: drop the transient notice so the
+                   regular state text (recording, processing, …) shows through. */
+                if (noticed) setDictationStatus('', false);
+                return res;
+            }
+            if (stopping) return null;
+            if (attempt >= MAX_LOADING_ATTEMPTS) {
+                log('SpeechInt war nach ' + attempt + ' Versuchen noch nicht bereit.');
+                return res;
+            }
+            showLoadingNotice(res.message, attempt);
+            noticed = true;
+            const wait = Math.max(1, Math.min(60, parseInt(res.retry_after, 10) || 15));
+            await sleep(wait * 1000);
+            if (stopping) return null;
+        }
     }
 
     function loadConfig() {
@@ -5871,7 +5936,7 @@ $csrfToken = $_SESSION['csrf_token'];
         }, Math.max(1, seconds) * 1000);
     }
 
-    /* ── whisper → buffer ────────────────────────────────────────────── */
+    /* ── SpeechInt → buffer ──────────────────────────────────────────── */
 
     async function transcribeSegment(blob) {
         if (blob.size > cfg.max_audio_bytes) {
@@ -5880,15 +5945,23 @@ $csrfToken = $_SESSION['csrf_token'];
         }
         let res;
         try {
-            res = await postForm('api/speech_transcribe.php',
+            res = await retryWhileLoading(() => postForm('api/speech_transcribe.php',
                 { audio: blob, csrf_token: CSRF },
-                (cfg.whisper_timeout_seconds || 120) * 1000 + REQUEST_SLACK_MS);
+                (cfg.timeout_seconds || 120) * 1000 + REQUEST_SLACK_MS));
         } catch (err) {
             onWhisperFailure(err);
             return;
         }
-        if (!res || !res.ok) {
-            onWhisperFailure(new Error((res && (res.error || res.message)) || 'Unbekannter Fehler'));
+        /* The user ended the dictation while SpeechInt was still loading. */
+        if (!res) return;
+        if (res.loading) {
+            /* Still loading after many attempts: end the dictation cleanly
+               instead of pretending the segment was recognised. */
+            endSession('SpeechInt ist noch nicht bereit – bitte das Diktat später erneut starten.');
+            return;
+        }
+        if (!res.ok) {
+            onWhisperFailure(new Error(res.error || res.message || 'Unbekannter Fehler'));
             return;
         }
         whisperFailures = 0;
@@ -5914,16 +5987,16 @@ $csrfToken = $_SESSION['csrf_token'];
         }
     }
 
-    /* ── buffer → dictation model → input field ──────────────────────── */
+    /* ── buffer → SpeechInt → input field ────────────────────────────── */
 
     async function processFragment(fragment) {
         const raw = fragment.join(' ');
         if (!raw) return;
         let res = null;
         try {
-            res = await postJson('api/speech_process.php',
+            res = await retryWhileLoading(() => postJson('api/speech_process.php',
                 { fragment: raw, context: dictationContext(), csrf_token: CSRF },
-                (cfg.qwen_timeout_seconds || 60) * 1000 + REQUEST_SLACK_MS);
+                (cfg.timeout_seconds || 120) * 1000 + REQUEST_SLACK_MS));
         } catch (err) {
             res = null;
             log('Diktatmodell nicht erreichbar: ' + ((err && err.message) || err));
@@ -5931,12 +6004,17 @@ $csrfToken = $_SESSION['csrf_token'];
 
         if (!res || !res.ok) {
             /* The server falls back to deterministic command processing on its
-               own. Reaching this branch means the request never arrived, so the
-               raw words are inserted instead – recognised text is never lost
-               (§19). */
+               own. Reaching this branch means the request never arrived or the
+               service was still loading for too long, so the raw words are
+               inserted instead – recognised text is never lost (§19). */
             insertText(raw);
+            const note = (res && res.loading)
+                ? (res.message || 'SpeechInt ist noch nicht bereit.')
+                    + ' Rohtext wurde übernommen.'
+                : 'Diktatmodell nicht erreichbar – Rohtext wurde übernommen.';
             if (window.setChatStatus) {
-                window.setChatStatus('Diktatmodell nicht erreichbar – Rohtext wurde übernommen.', 'error');
+                /* A service that is still loading is a warning, not an error. */
+                window.setChatStatus(note, (res && res.loading) ? 'warning' : 'error');
             }
             armStopTimer();
             return;
@@ -5980,9 +6058,9 @@ $csrfToken = $_SESSION['csrf_token'];
             if (window.setChatStatus) window.setChatStatus('Spracherkennung ist deaktiviert.', 'error');
             return;
         }
-        if (!cfg.whisper_ready) {
+        if (!cfg.configured) {
             if (window.setChatStatus) {
-                window.setChatStatus('Spracherkennung nicht verfügbar: kein Whisper-Server konfiguriert.', 'error');
+                window.setChatStatus('Spracherkennung nicht verfügbar: kein Speech-Endpunkt konfiguriert.', 'error');
             }
             return;
         }

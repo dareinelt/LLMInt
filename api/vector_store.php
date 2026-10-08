@@ -154,7 +154,6 @@ function vectorHttpRequest(string $method, string $url, ?array $payload, array $
     $body  = curl_exec($ch);
     $code  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $error = curl_error($ch);
-    curl_close($ch);
 
     if ($body === false) {
         return ['status' => 0, 'body' => '', 'json' => null, 'error' => $error !== '' ? $error : 'Keine Antwort'];
@@ -417,7 +416,6 @@ function milvusPost(string $path, array|object $payload, ?int $timeout = null): 
     $raw  = curl_exec($ch);
     $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $err  = curl_error($ch);
-    curl_close($ch);
 
     if ($raw === false) {
         return ['ok' => false, 'data' => null, 'message' => 'Milvus nicht erreichbar: ' . $err, 'code' => -1];

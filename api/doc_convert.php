@@ -146,7 +146,6 @@ function docConvertHealth(): array
     $body    = curl_exec($ch);
     $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr = curl_error($ch);
-    curl_close($ch);
 
     if ($curlErr !== '' || $code !== 200) {
         return [
@@ -210,7 +209,6 @@ function convertDocumentViaService(string $path, string $filename, string $mimeT
     $body    = curl_exec($ch);
     $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr = curl_error($ch);
-    curl_close($ch);
 
     $durationMs = (int) round(microtime(true) * 1000) - $startMs;
 

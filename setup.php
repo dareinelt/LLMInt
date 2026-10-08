@@ -384,16 +384,16 @@ $defaults = [
     'searxng_base_url'  => '',
     'vector_store_mode' => 'off',
     'vector_top_k'      => '5',
-    // Speech recognition / dictation (see lib/speech_dictation.php).
+    // Speech recognition / dictation (see lib/speech_dictation.php). The
+    // service URL, the token and the timeout live in the `speech_endpoints`
+    // table (or in the SPEECHINT_* environment variables).
     'speech_dictation_enabled'              => '1',
-    'speech_dictation_whisper_model'        => 'small',
+    'speech_dictation_endpoint_id'          => '0',
     'speech_dictation_language'             => 'de',
     'speech_dictation_buffer_words'         => '4',
     'speech_dictation_stop_timeout_seconds' => '3',
     'speech_dictation_max_segment_seconds'  => '15',
     'speech_dictation_max_audio_mb'         => '10',
-    'speech_dictation_qwen_model'           => 'Qwen3.5-2B Q4',
-    'speech_dictation_qwen_timeout'         => '60',
 ];
 
 $insert = $db->prepare(

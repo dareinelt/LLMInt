@@ -89,7 +89,6 @@ curl_setopt_array($ch, [
 $body     = curl_exec($ch);
 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $curlErr  = curl_error($ch);
-curl_close($ch);
 
 if ($curlErr !== '') {
     echo json_encode(['ok' => false, 'message' => 'SearXNG nicht erreichbar: ' . $curlErr]);

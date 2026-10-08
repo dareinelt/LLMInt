@@ -10,12 +10,15 @@
  *   { ok: true, ts: <unix seconds>, endpoints: [ { id, alias, base_url,
  *     default_model, is_active, running, today_jobs, today_tokens }, … ],
  *     searxng: { enabled, running, today_jobs, avg_duration_seconds },
- *     vector_store: { enabled, mode, label, base_url, online, documents, vectors, today_queries, … } }
+ *     vector_store: { enabled, mode, label, base_url, online, documents, vectors, today_queries, … },
+ *     speech_endpoints: [ { id, alias, base_url, timeout, is_active }, … ],
+ *     speech_status: { configured, url, ready, loading, status, message, retry_after, probed } }
  */
 
 session_start();
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../lib/speech_dictation.php';
 require_once __DIR__ . '/../api/vector_store.php';
 requireAdminOrJson403();
 
@@ -317,11 +320,42 @@ try {
         $vectorStore['detail'] = $e->getMessage();
     }
 
+    // ── SpeechInt endpoints (dictation service) ───────────────────────────────
+
+    $speechRows = [];
+    try {
+        $speechRows = getDb()->query("
+            SELECT id, alias, base_url, timeout, is_active
+            FROM speech_endpoints
+            ORDER BY sort_order ASC, id ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($speechRows as &$sr) {
+            $sr['id']        = (int) $sr['id'];
+            $sr['timeout']   = (int) $sr['timeout'];
+            $sr['is_active'] = (int) $sr['is_active'];
+        }
+        unset($sr);
+    } catch (PDOException $e) {
+        // speech_endpoints table may not exist yet
+    }
+
+    // Readiness of the endpoint that is actually in effect. Cached for 20 s in
+    // speechDictationDashboardStatus(), so the 15 s dashboard poll does not
+    // hammer the remote service. Tokens are never part of this payload.
+    $speechStatus = [];
+    try {
+        $speechStatus = speechDictationDashboardStatus();
+    } catch (Throwable $e) {
+        $speechStatus = [];
+    }
+
     echo json_encode(
         ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng,
          'sd_endpoints' => $sdRows, 'comfy_endpoints' => $comfyRows, 'clients' => $clientStats,
          'totals' => $totals, 'sd_totals' => $sdTotals, 'comfy_totals' => $comfyTotals,
-         'vector_store' => $vectorStore],
+         'vector_store' => $vectorStore,
+         'speech_endpoints' => $speechRows, 'speech_status' => $speechStatus],
         JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     );
 
