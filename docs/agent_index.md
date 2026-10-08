@@ -18,7 +18,8 @@ operator-facing manual.
 
 **LLMInt** (internally also "KHWF KI") – A self-hosted PHP/MySQL chat front end for local
 LLMs (LM Studio, vLLM, llama.cpp, Ollama) with multi-endpoint load balancing, hybrid RAG,
-a central Milvus knowledge base, image generation (AUTOMATIC1111 / ComfyUI),
+a central Milvus knowledge base, image generation via the separate
+[ImageInt](https://github.com/dareinelt/ImageInt) service,
 prompt-injection protection, LDAP/Windows-SSO login, speech dictation via the separate
 [SpeechInt](https://github.com/dareinelt/SpeechInt) service (whisper.cpp + Qwen3), and an
 OpenAI-compatible API.
@@ -55,7 +56,7 @@ OpenAI-compatible API.
 | `config.php` | Derives `LMSTUDIO_BASE_URL` / `LMSTUDIO_TIMEOUT` from the first active endpoint (legacy settings fallback) |
 | `setup.php` | One-time installer: tables, seed settings, default admin; re-runs migrations |
 | `index.php` | Chat UI: streaming, session list, upload/library overlay, image attachments, prefixes (`@@`, `!!`, `/cmd`), welcome screen |
-| `lib/balancer_engine.php` | Shared balancer logic (LLM, SD, ComfyUI): circuit breaker, fallback chains, fairness, health columns, orphan cleanup |
+| `lib/balancer_engine.php` | Shared balancer logic (LLM): circuit breaker, fallback chains, fairness, health columns, orphan cleanup (knows the legacy `sd_*`/`comfy_*` tables read-only) |
 | `lib/healthcheck.php` | Active `/models` probing of LLM endpoints; drives `index.php` maintenance-mode fallback |
 | `lib/prompt_security.php` | Prompt-injection detection: rules, normalization, scoring, optional AI classifier, logging, retention |
 | `lib/openai_api.php` | OpenAI API key handling, payload/message normalization, error formatting, anonymous API request setup |
@@ -80,8 +81,10 @@ OpenAI-compatible API.
 | `api/heartbeat.php` | Presence heartbeat → `active_clients`, `client_count_log`, `client_count_daily` |
 | `api/models.php` | Query the models of an endpoint |
 | `api/healthcheck.php` | Aggregated health status of all LLM endpoints |
-| `api/sd_balancer.php` / `api/sd_generate.php` / `api/sd_checkpoints.php` | AUTOMATIC1111 image generation |
-| `api/comfy_balancer.php` / `api/comfy_generate.php` / `api/comfy_checkpoints.php` | ComfyUI image generation |
+| `api/image_status.php` | Job status of a running image render; also adopts the finished PNG into the stored session |
+| `api/image_notify.php` | Records the user's consent to the completion e-mail in `image_notifications` |
+| `api/image_health.php` | Admin connection test against ImageInt (`/v1/ready`, `/v1/health`) |
+| `api/image_notify_worker.php` | Cron/CLI worker: drains `image_notifications` and sends the completion mails |
 | `api/openai/v1/**` | OpenAI-compatible endpoints **without** tools |
 | `api/openai-tools/v1/**` | OpenAI-compatible endpoints **with** tools |
 | `api/openai_common/*.php` | Shared request handling for both OpenAI endpoint families |
@@ -141,8 +144,7 @@ Order of operations for a normal chat request:
 | `search_web` | `createSearchToolDefinition()` | SearXNG web search (`runSearxngSearch()`, logged in `search_logs`) |
 | `web_fetch` | `createWebFetchToolDefinition()` | Fetch and extract readable text from a URL (`fetchWebPage()`) |
 | `query_documents` | `createDocumentQueryToolDefinition()` | RAG over private uploads **and** the central vector store |
-| `generate_image` | `createImageGenerationToolDefinition()` | AUTOMATIC1111 (`callSdGenerate()`) |
-| `generate_image_comfy` | `createComfyToolDefinition()` | ComfyUI (`callComfyGenerate()`) |
+| `generate_image` | `createImageGenerationToolDefinition()` | ImageInt render (`imageIntGenerate()` in `lib/image_generation.php`) |
 
 Tools are only offered when the selected endpoint reports `supports_tool_calling` and the
 caller allows tools (the `api/openai/v1/**` family always disables them).
@@ -348,6 +350,73 @@ tile in the admin dashboard graphic (`renderLoadTree()` in `admin/index.php`, fe
 
 ---
 
+## Image generation (ImageInt)
+
+`lib/image_generation.php` + the [ImageInt](https://github.com/dareinelt/ImageInt)
+service (Qwen-Image-2.1 prompt enhancer + renderer behind one HTTP API on a separate
+Docker host, CPU-only). ImageInt replaced the former AUTOMATIC1111/ComfyUI integration;
+the tool name stays `generate_image` (`generate_image_comfy` is gone). Entered from
+`api/chat.php` (tool loop) and `index.php` (job block, polling, consent, deep link).
+
+```
+Text model ── tool call generate_image ─► api/chat.php ─► imageIntGenerate()
+   ├─ POST /v1/images/generations { prompt, negative_prompt?, size?, wait:false } ─► 202
+   ├─ GET  /v1/jobs/{job_id}   (poll while status queued|running, read `stage`)
+   └─ GET  /v1/jobs/{job_id}/image ─► PNG cached in image_output/
+```
+
+Endpoints live in the `image_endpoints` table (`alias`, `base_url`, `token`, `timeout`,
+`is_active`, `sort_order`); `IMAGEINT_URL`/`IMAGEINT_TOKEN`/`IMAGEINT_TIMEOUT` take
+precedence over the active row (`imageIntUrl()`/`imageIntUrlSource()`). Tokens are shown
+masked (`imageIntMaskToken()`) and never logged.
+
+**Three timeouts, do not confuse them:** `IMAGEINT_TIMEOUT` (default 1800 s) is the
+ceiling of the whole render including polling; `IMAGEINT_SYNC_TIMEOUT` (default 120 s) is
+how long one PHP request waits before handing the job back to the browser; the per-call
+HTTP timeouts inside `imageIntHttpCall()` are clamped well below both.
+
+**Loading phase:** while ImageInt loads its two model servers it answers `503` with
+`transient: true` and `Retry-After`. LLMInt must treat this as "please wait" (show the
+German message, retry after `retry_after`), never as an error. `503` with
+`error: "host_unsupported"` is the opposite — a permanent misconfiguration (missing AVX2)
+that must be reported as a hard failure.
+
+Non-obvious constraints — change only with the surrounding comment:
+
+- The generation call **must** send `wait: false`. With the default `wait: true` the
+  service holds the HTTP response open for minutes, which trips every reverse-proxy and
+  PHP timeout in front of it.
+- The chat shows `timings` only when the job document was actually read. Because
+  `imageIntResolveJob()` short-circuits on an already cached PNG, whichever of worker and
+  browser caches first must persist the result (`imageIntPersistJobResult()`), otherwise
+  the chat keeps showing "Abmessungen unbekannt" while the mail already has the numbers.
+- `{duration}` in the mail comes from `imageIntJobDurationMs()` (`timings.total_ms`,
+  including the enhancer), the chat meta from the persisted `duration_ms`. They may
+  differ slightly; both are correct for their source.
+- ImageInt's `image_url` is not browser-reachable, so LLMInt caches the PNG locally and
+  uses the `image_output/` path for the chat image and `{image_url}`.
+- Jobs expire after `IMAGEINT_JOB_RETENTION_SECONDS` (24 h) and then return `404`. The
+  worker must deliver inside that window and turn a `404` into a clear message
+  (`status = 'expired'`), never into a dead link.
+- The deep link (`index.php?session=…&job=…`) restores the session **only** if it belongs
+  to the logged-in `user_id`; a foreign link must not open a foreign session.
+
+Trigger and anti-trigger formulations live in the settings (`image_prompt_trigger_text`,
+`image_prompt_anti_trigger_text`, defaults in `db.php`) and are assembled into the system
+prompt by `buildImageToolSystemPrompt()` — an administrator can extend them without a
+deployment. The consent question (`image_notify_consent_text`) and the mail
+(`image_notify_email_subject`, `image_notify_email_body`) are `{placeholder}` templates
+resolved by `imageIntTemplateVars()` + `str_replace()`; the available names come from
+`imageNotifyPlaceholderHelp()` → `imageGenerationPlaceholderHelp()`. Everything is configured in the `#config-image-card` card
+(`save_image_generation_settings`, `add_image_endpoint`/`update_image_endpoint`/
+`delete_image_endpoint`/`move_image_endpoint`).
+
+The notification needs a **server-side** trigger: `api/image_notify_worker.php` (cron or
+CLI, file-locked) drains `image_notifications` via `imageIntProcessNotifications()`. A
+client-side trigger alone would only send the mail while the browser tab is open.
+
+---
+
 ## Auth, Sessions & Reverse Proxy
 
 - **Session keys**: `$_SESSION['admin_id']` (user id) and `$_SESSION['admin_user']`
@@ -402,8 +471,7 @@ domain:
   `isCurrentUserAdmin()`, `requireAdminOrRedirect()`, `requireAdminOrJson403()`.
 - **Chat pipeline** (`api/chat.php`): `streamChatCompletionRequest()` (main entry),
   `create*ToolDefinition()`, `runSearxngSearch()`, `fetchWebPage()`, `queryDocuments()`,
-  `queryUploadedDocuments()`, `callSdGenerate()`, `callComfyGenerate()`,
-  `ensureSseHeaders()`, `emitSseData()`, `emitSyntheticStream()`, `emitResponseDetailsSse()`,
+  `queryUploadedDocuments()`, `imageIntGenerate()`, `ensureSseHeaders()`, `emitSseData()`, `emitSyntheticStream()`, `emitResponseDetailsSse()`,
   `emitIntelligenceUpgradeSse()`, `estimateTokenCount()`, `resolveContextLimits()`,
   `mergeSystemMessages()`, `stripImageContentParts()`, `buildResponseDetails()`,
   `logToolInvoked()`/`logToolResult()`/`logResponseFinished()`, `computeTokensPerSecond()`.
@@ -440,8 +508,11 @@ domain:
 - **OpenAI API** (`lib/openai_api.php`): `openaiAuthenticateApiRequest()`,
   `openaiNormalizeChatPayload()`, `openaiNormalizeMessages()`, `openaiSendError()`,
   `openaiResolveApiKeyModel()`, `openaiAvailableModels()`.
-- **Image generation**: `pickSdEndpoint()`/`completeSdTask()` (`api/sd_balancer.php`),
-  `pickComfyEndpoint()`/`completeComfyTask()` (`api/comfy_balancer.php`).
+- **Image generation** (`lib/image_generation.php`): `imageIntGenerate()`,
+  `imageIntResolveJob()`, `imageIntStoreImage()`, `imageIntProcessNotifications()`;
+  the former `pickSdEndpoint()`/`completeSdTask()` and
+  `pickComfyEndpoint()`/`completeComfyTask()` went away with
+  `api/sd_balancer.php`/`api/comfy_balancer.php`.
 - **Vision** (`api/vision.php`): `analyzeImageWithVision()`, `visionModelName()`,
   `visionModelConfigured()`.
 - **Metrics** (`lib/quickinfo.php`): `quickinfoTestPairing()`, `quickinfoCollectMetrics()`,
@@ -472,8 +543,10 @@ domain:
 | `api/rebuild_embeddings.php` | POST | admin + CSRF | Recompute embeddings |
 | `api/vector_import.php` | GET/POST | admin + CSRF | List/import docvecwizard export archives |
 | `api/test_vector_store.php` | POST | admin | Connection test (`mode=remote\|local`) |
-| `api/sd_generate.php`, `api/comfy_generate.php` | POST | session | Image generation |
-| `api/sd_checkpoints.php`, `api/comfy_checkpoints.php` | GET | – | Available checkpoints |
+| `api/image_status.php` | GET/POST | session | Job status of a running render / adopt the finished image |
+| `api/image_notify.php` | POST | session + CSRF | Record consent to the completion e-mail |
+| `api/image_health.php` | GET | admin | ImageInt connection test (`/v1/ready`, `/v1/health`) |
+| `api/image_notify_worker.php` | CLI/cron | – | Send the completion mails for finished jobs |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | admin | Connection tests |
 | `api/speech_config.php` | GET | session | Dictation config + CSRF token for the chat UI |
 | `api/speech_transcribe.php` | POST | session + CSRF field | Audio segment → text (`/v1/audio/transcriptions`) |
@@ -484,7 +557,7 @@ domain:
 | `api/openai*/v1/models`, `api/openai*/v1/chat/completions` | GET/POST | anonymous (API key optional) | OpenAI-compatible API |
 | `admin/load_stats.php`, `admin/usage_stats.php`, `admin/quickinfo_stats.php` | GET | admin session | Dashboard JSON |
 
-`api/balancer.php`, `api/sd_balancer.php`, `api/comfy_balancer.php`, `api/embedding.php`
+`api/balancer.php`, `api/embedding.php`
 and `api/vector_store.php` are pure libraries — they are `require`d, never called directly.
 
 ---
@@ -515,8 +588,10 @@ Tables are created in `setup.php` (first install) and kept current by
 **Image generation**
 | Table | Purpose |
 |---|---|
-| `sd_endpoints`, `sd_tasks` | AUTOMATIC1111 endpoints & jobs |
-| `comfy_endpoints`, `comfy_tasks` | ComfyUI endpoints & jobs |
+| `image_endpoints` | ImageInt endpoints (`base_url`, `token`, `timeout`, `is_active`, `sort_order`) |
+| `image_notifications` | Consents to completion mails (`job_id`, `user_id`, `session_id`, `status`, `sent_at`; `UNIQUE KEY uniq_job_user`) |
+| `sd_endpoints`, `sd_tasks` | Legacy AUTOMATIC1111 tables — kept, no longer addressed |
+| `comfy_endpoints`, `comfy_tasks` | Legacy ComfyUI tables — kept, no longer addressed |
 
 **Private RAG (uploads)**
 | Table | Purpose |
@@ -630,7 +705,7 @@ Legacy keys (still read as fallback): `lmstudio_base_url`, `lmstudio_timeout`,
 | Auth changes | `login.php`, `register.php`, `admin/login.php`, `lib/ldap_auth.php`, `sso.php` |
 | Reverse proxy / SSO changes | `lib/reverse_proxy.php`, `sso.php`, `sso_fallback.php`, `docker-compose.lanpa.yml` |
 | OpenAI API changes | `lib/openai_api.php`, `api/openai_common/**`, `api/openai*/**` |
-| Image generation | `api/sd_*.php`, `api/comfy_*.php`, `lib/balancer_engine.php` |
+| Image generation | `lib/image_generation.php`, `api/image_*.php`, `admin/index.php` (`config-image-card`) |
 | Frontend chat behaviour | `index.php` (SSE handling, prefixes, sessions, uploads) |
 | Dictation / speech-to-text | `lib/speech_dictation.php` (SpeechInt client), `api/speech_*.php`, `index.php` (dictation IIFE + `#dictate-btn`), `admin/index.php` (`config-speech-card`, `speech_endpoints` CRUD, dashboard tile) |
 
@@ -640,9 +715,12 @@ Legacy keys (still read as fallback): `lmstudio_base_url`, `lmstudio_timeout`,
 `toggle_endpoint_pause`, `save_search_settings`, `save_request_handling`,
 `save_new_user_model`, `save_balancer_settings`, `save_streaming_settings`,
 `save_intelligence_group_settings`, `save_global_system_prompt`, `save_system_messages`,
-`save_vision_settings`, `save_smtp_settings`, `save_ldap_settings`, `add_sd_endpoint`,
-`update_sd_endpoint`, `delete_sd_endpoint`, `add_comfy_endpoint`, `update_comfy_endpoint`,
-`delete_comfy_endpoint`, `save_routing_settings`, `add_routing_category`,
+`save_vision_settings`, `save_smtp_settings`, `save_ldap_settings`,
+`save_image_generation_settings`, `add_image_endpoint`, `update_image_endpoint`,
+`delete_image_endpoint`, `move_image_endpoint`,
+`add_sd_endpoint`, `update_sd_endpoint`, `delete_sd_endpoint`, `add_comfy_endpoint`,
+`update_comfy_endpoint`, `delete_comfy_endpoint` (legacy, cards hidden),
+`save_routing_settings`, `add_routing_category`,
 `update_routing_category`, `delete_routing_category`, `import_prompt_txt`,
 `save_log_config`, `add_embedding_endpoint`, `update_embedding_endpoint`,
 `delete_embedding_endpoint`, `save_hybrid_search_settings`, `save_reranker_settings`,
@@ -653,8 +731,9 @@ Legacy keys (still read as fallback): `lmstudio_base_url`, `lmstudio_timeout`,
 
 Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card`,
 `config-routing-card`, `config-decision-card`, `config-request-handling-card`,
-`config-system-messages-card`, `config-searxng-card`, `config-sd-card`,
-`config-comfy-card`, `config-vector-store-card`, `config-embedding-card`,
+`config-system-messages-card`, `config-searxng-card`, `config-image-card`
+(`config-sd-card`, `config-comfy-card` are legacy and `hidden`),
+`config-vector-store-card`, `config-embedding-card`,
 `config-hybrid-search-card`, `config-reranker-card`, `config-global-system-prompt-card`,
 `config-smtp-card`, `config-ldap-card`, `config-speech-card`, `log-config-card`,
 `log-viewer-card`,
@@ -678,8 +757,10 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
   Speech-to-text and dictation post-processing are **not** part of this stack any more;
   they run in [SpeechInt](https://github.com/dareinelt/SpeechInt) on a separate Docker
   host (minimum 6 CPU cores with AVX2, 16 GB RAM) and are reached through
-  `SPEECHINT_URL` / `SPEECHINT_TOKEN`. Volumes: `db_data`, `doc_uploads`, `sd_output`,
-  `docconvert_cache`, `milvus_data`, `vector_imports`.
+  `SPEECHINT_URL` / `SPEECHINT_TOKEN`. Image generation likewise runs in
+  [ImageInt](https://github.com/dareinelt/ImageInt) on a separate host, reached through
+  `IMAGEINT_URL` / `IMAGEINT_TOKEN`. Volumes: `db_data`, `doc_uploads`, `image_output`,
+  `sd_output` (legacy), `docconvert_cache`, `milvus_data`, `vector_imports`.
 - `docker-compose.test.yml` – optional override for a fast local stack: keeps only
   `db` / `web` (`depends_on` reduced to `db`) and expects an external SpeechInt host via
   `SPEECHINT_URL`.
@@ -751,8 +832,7 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 │   ├── rebuild_embeddings.php
 │   ├── test_ldap.php / test_smtp.php / test_searxng.php / test_vector_store.php
 │   ├── speech_config.php / speech_transcribe.php / speech_process.php / speech_health.php
-│   ├── sd_balancer.php / sd_generate.php / sd_checkpoints.php
-│   ├── comfy_balancer.php / comfy_generate.php / comfy_checkpoints.php
+│   ├── image_status.php / image_notify.php / image_health.php / image_notify_worker.php
 │   └── openai/v1/**, openai-tools/v1/**, openai_common/**
 ├── lib/
 │   ├── balancer_engine.php
@@ -764,10 +844,12 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 │   ├── reverse_proxy.php
 │   ├── quickinfo.php
 │   ├── speech_dictation.php   # SpeechInt client, commands, fallback
+│   ├── image_generation.php   # ImageInt client, job polling, notification mails
 │   └── prompt.txt         # Fallback/seed routing categories
 ├── docconvert/            # Python/FastAPI converter (app/, tests/)
 ├── doc_uploads/           # Runtime uploads (protected)
-├── sd_output/             # Generated images (protected)
+├── image_output/          # Generated images (protected)
+├── sd_output/             # Legacy AUTOMATIC1111 images (protected)
 ├── vector_imports/        # Staging for docvecwizard export archives (protected)
 ├── docker/                # Docker configs (apache, php.ini, entrypoint, milvus etcd)
 ├── ressources/            # Example system prompt

@@ -27,8 +27,7 @@ if (empty($GLOBALS['LLMINT_OPENAI_STRICT_MODE']) && session_status() === PHP_SES
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../lib/prompt_security.php';
 require_once __DIR__ . '/balancer.php';
-require_once __DIR__ . '/sd_balancer.php';
-require_once __DIR__ . '/comfy_balancer.php';
+require_once __DIR__ . '/../lib/image_generation.php';
 require_once __DIR__ . '/embedding.php';
 require_once __DIR__ . '/vector_store.php';
 
@@ -402,25 +401,28 @@ function createImageGenerationToolDefinition(): array
         'type' => 'function',
         'function' => [
             'name' => 'generate_image',
-            'description' => 'Generiert ein Bild mit Stable Diffusion (AUTOMATIC1111) anhand eines Text-Prompts.',
+            'description' => 'Erzeugt ein Bild mit Qwen-Image-2.1 aus einer deutschen '
+                . 'oder englischen Beschreibung. Die Beschreibung darf ausführlich '
+                . 'sein: ein Prompt-Enhancer schreibt sie in den Prompt um, auf den '
+                . 'das Modell trainiert wurde, und wählt dabei auch das '
+                . 'Seitenverhältnis. Die Generierung dauert auf einer CPU mehrere '
+                . 'Minuten.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
                     'prompt' => [
                         'type' => 'string',
-                        'description' => 'Englischer Text-Prompt, der das zu generierende Bild beschreibt.',
+                        'description' => 'Beschreibung des gewünschten Bildes. Je '
+                            . 'genauer (Motiv, Stil, Licht, Perspektive), desto besser.',
                     ],
                     'negative_prompt' => [
                         'type' => 'string',
-                        'description' => 'Optionaler negativer Prompt – Elemente, die im Bild vermieden werden sollen.',
+                        'description' => 'Optional: Elemente, die im Bild vermieden werden sollen.',
                     ],
-                    'width' => [
-                        'type' => 'integer',
-                        'description' => 'Breite des Bildes in Pixeln (64–2048, Standard: 512).',
-                    ],
-                    'height' => [
-                        'type' => 'integer',
-                        'description' => 'Höhe des Bildes in Pixeln (64–2048, Standard: 512).',
+                    'size' => [
+                        'type' => 'string',
+                        'description' => 'Optional: Seitenverhältnis, z. B. "16:9", '
+                            . '"1:1" oder "4:3". Ohne Angabe bestimmt es der Enhancer.',
                     ],
                 ],
                 'required' => ['prompt'],
@@ -429,138 +431,6 @@ function createImageGenerationToolDefinition(): array
     ]];
 }
 
-/**
- * Returns true when at least one active SD endpoint is configured.
- */
-function hasSdEndpoints(): bool
-{
-    try {
-        $count = (int) getDb()->query(
-            "SELECT COUNT(*) FROM sd_endpoints WHERE is_active = 1"
-        )->fetchColumn();
-        return $count > 0;
-    } catch (Throwable $e) {
-        return false;
-    }
-}
-
-/**
- * Calls api/sd_generate.php internally by performing a loopback HTTP request.
- * Returns an associative array with either 'image_url' (success) or 'error'.
- */
-function callSdGenerate(array $params, int $timeout = 120): array
-{
-    $outputDir = __DIR__ . '/../sd_output';
-    if (!is_dir($outputDir)) {
-        mkdir($outputDir, 0755, true);
-    }
-
-    // Resolve a slot directly instead of doing an HTTP round-trip.
-    $mode = in_array($params['mode'] ?? '', ['img2img'], true) ? 'img2img' : 'txt2img';
-
-    try {
-        $slot = pickSdEndpoint($mode);
-    } catch (Throwable $e) {
-        return ['error' => 'Interner Fehler beim SD-Endpunkt-Routing.'];
-    }
-
-    if ($slot === null) {
-        return ['error' => 'Kein SD-Endpunkt verfügbar.'];
-    }
-
-    $endpoint = $slot['endpoint'];
-    $taskId   = $slot['task_id'];
-    $baseUrl  = rtrim($endpoint['base_url'], '/');
-    $epTimeout = max(1, (int) $endpoint['timeout']);
-
-    $prompt          = trim((string) ($params['prompt'] ?? ''));
-    $negativePrompt  = (string) ($params['negative_prompt'] ?? '');
-    $width           = max(64, min(2048, (int) ($params['width']  ?? 512)));
-    $height          = max(64, min(2048, (int) ($params['height'] ?? 512)));
-    $steps           = max(1,  min(150,  (int) ($params['steps']  ?? 20)));
-    $cfgScale        = max(1.0, min(30.0, (float) ($params['cfg_scale'] ?? 7.0)));
-
-    $sdPayload = [
-        'prompt'          => $prompt,
-        'negative_prompt' => $negativePrompt,
-        'width'           => $width,
-        'height'          => $height,
-        'steps'           => $steps,
-        'cfg_scale'       => $cfgScale,
-        'save_images'     => false,
-        'send_images'     => true,
-    ];
-
-    $apiPath = $mode === 'img2img' ? '/sdapi/v1/img2img' : '/sdapi/v1/txt2img';
-    $url     = $baseUrl . $apiPath;
-
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($sdPayload),
-        CURLOPT_HTTPHEADER     => [
-            'Content-Type: application/json',
-            'Accept: application/json',
-        ],
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => $epTimeout,
-    ]);
-
-    $body     = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlErr  = curl_error($ch);
-
-    if ($curlErr !== '') {
-        completeSdTask($taskId, 'error');
-        return ['error' => 'AUTOMATIC1111 nicht erreichbar: ' . $curlErr];
-    }
-
-    $data = json_decode($body, true);
-
-    if ($httpCode !== 200 || !is_array($data)) {
-        completeSdTask($taskId, 'error');
-        $msg = isset($data['detail']) ? (string) $data['detail'] : 'AUTOMATIC1111 Fehler (HTTP ' . $httpCode . ')';
-        return ['error' => $msg];
-    }
-
-    $images = $data['images'] ?? [];
-    if (!is_array($images) || count($images) === 0) {
-        completeSdTask($taskId, 'error');
-        return ['error' => 'AUTOMATIC1111 hat kein Bild zurückgegeben.'];
-    }
-
-    $imageData = base64_decode($images[0], true);
-    if ($imageData === false) {
-        completeSdTask($taskId, 'error');
-        return ['error' => 'Ungültige Bilddaten von AUTOMATIC1111.'];
-    }
-
-    $filename = 'sd_' . bin2hex(random_bytes(12)) . '.png';
-    $filePath = $outputDir . '/' . $filename;
-
-    if (file_put_contents($filePath, $imageData) === false) {
-        completeSdTask($taskId, 'error');
-        return ['error' => 'Bild konnte nicht gespeichert werden.'];
-    }
-
-    completeSdTask($taskId, 'done');
-
-    $seed = null;
-    if (isset($data['info'])) {
-        $info = json_decode((string) $data['info'], true);
-        if (is_array($info) && isset($info['seed'])) {
-            $seed = (int) $info['seed'];
-        }
-    }
-
-    return [
-        'image_url' => 'sd_output/' . $filename,
-        'width'     => $width,
-        'height'    => $height,
-        'prompt'    => $prompt,
-        'seed'      => $seed,
-    ];
-}
 
 function tokenizeQueryTerms(string $query): array
 {
@@ -1097,268 +967,6 @@ function queryDocuments(string $query, ?int $userId, string $chatSessionId = '')
 }
 
 
-/**
- * Returns true when at least one active ComfyUI endpoint is configured.
- */
-function hasComfyEndpoints(): bool
-{
-    try {
-        $count = (int) getDb()->query(
-            "SELECT COUNT(*) FROM comfy_endpoints WHERE is_active = 1"
-        )->fetchColumn();
-        return $count > 0;
-    } catch (Throwable $e) {
-        return false;
-    }
-}
-
-function createComfyToolDefinition(): array
-{
-    return [[
-        'type' => 'function',
-        'function' => [
-            'name' => 'generate_image_comfy',
-            'description' => 'Generiert ein Bild mit ComfyUI anhand eines Text-Prompts.',
-            'parameters' => [
-                'type' => 'object',
-                'properties' => [
-                    'prompt' => [
-                        'type' => 'string',
-                        'description' => 'Englischer Text-Prompt, der das zu generierende Bild beschreibt.',
-                    ],
-                    'negative_prompt' => [
-                        'type' => 'string',
-                        'description' => 'Optionaler negativer Prompt – Elemente, die im Bild vermieden werden sollen.',
-                    ],
-                    'width' => [
-                        'type' => 'integer',
-                        'description' => 'Breite des Bildes in Pixeln (64–2048, Standard: 512).',
-                    ],
-                    'height' => [
-                        'type' => 'integer',
-                        'description' => 'Höhe des Bildes in Pixeln (64–2048, Standard: 512).',
-                    ],
-                ],
-                'required' => ['prompt'],
-            ],
-        ],
-    ]];
-}
-
-/**
- * Generate an image via ComfyUI, analogous to callSdGenerate().
- * Returns an associative array with either 'image_url' (success) or 'error'.
- */
-function callComfyGenerate(array $params, int $timeout = 120): array
-{
-    $outputDir = __DIR__ . '/../sd_output';
-    if (!is_dir($outputDir)) {
-        mkdir($outputDir, 0755, true);
-    }
-
-    try {
-        $slot = pickComfyEndpoint();
-    } catch (Throwable $e) {
-        return ['error' => 'Interner Fehler beim ComfyUI-Endpunkt-Routing.'];
-    }
-
-    if ($slot === null) {
-        return ['error' => 'Kein ComfyUI-Endpunkt verfügbar.'];
-    }
-
-    $endpoint   = $slot['endpoint'];
-    $taskId     = $slot['task_id'];
-    $baseUrl    = rtrim($endpoint['base_url'], '/');
-    $epTimeout  = max(1, (int) $endpoint['timeout']);
-    $checkpoint = (string) ($endpoint['default_checkpoint'] ?: '');
-
-    $prompt         = trim((string) ($params['prompt'] ?? ''));
-    $negativePrompt = (string) ($params['negative_prompt'] ?? '');
-    $width          = max(64, min(2048, (int) ($params['width']  ?? 512)));
-    $height         = max(64, min(2048, (int) ($params['height'] ?? 512)));
-    $steps          = max(1,  min(150,  (int) ($params['steps']  ?? 20)));
-    $cfgScale       = max(1.0, min(30.0, (float) ($params['cfg_scale'] ?? 7.0)));
-    $seed           = isset($params['seed']) ? (int) $params['seed'] : random_int(0, PHP_INT_MAX);
-    $clientId       = bin2hex(random_bytes(8));
-
-    // If no checkpoint configured, query the first available one.
-    if ($checkpoint === '') {
-        $infoUrl = $baseUrl . '/object_info/CheckpointLoaderSimple';
-        $infoCh  = curl_init($infoUrl);
-        curl_setopt_array($infoCh, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 10,
-            CURLOPT_HTTPHEADER     => ['Accept: application/json'],
-        ]);
-        $infoBody = curl_exec($infoCh);
-        $infoData = json_decode((string) $infoBody, true);
-
-        $ckptList = $infoData['CheckpointLoaderSimple']['input']['required']['ckpt_name'][0] ?? [];
-        if (is_array($ckptList) && !empty($ckptList)) {
-            $checkpoint = (string) reset($ckptList);
-        } else {
-            completeComfyTask($taskId, 'error');
-            return ['error' => 'Kein Checkpoint konfiguriert und kein Checkpoint auf dem ComfyUI-Server gefunden.'];
-        }
-    }
-
-    $workflow = [
-        '4' => [
-            'class_type' => 'CheckpointLoaderSimple',
-            'inputs'     => ['ckpt_name' => $checkpoint],
-        ],
-        '5' => [
-            'class_type' => 'EmptyLatentImage',
-            'inputs'     => ['batch_size' => 1, 'height' => $height, 'width' => $width],
-        ],
-        '6' => [
-            'class_type' => 'CLIPTextEncode',
-            'inputs'     => ['clip' => ['4', 1], 'text' => $prompt],
-        ],
-        '7' => [
-            'class_type' => 'CLIPTextEncode',
-            'inputs'     => ['clip' => ['4', 1], 'text' => $negativePrompt],
-        ],
-        '3' => [
-            'class_type' => 'KSampler',
-            'inputs'     => [
-                'seed'         => $seed,
-                'steps'        => $steps,
-                'cfg'          => $cfgScale,
-                'sampler_name' => 'euler',
-                'scheduler'    => 'normal',
-                'denoise'      => 1.0,
-                'model'        => ['4', 0],
-                'positive'     => ['6', 0],
-                'negative'     => ['7', 0],
-                'latent_image' => ['5', 0],
-            ],
-        ],
-        '8' => [
-            'class_type' => 'VAEDecode',
-            'inputs'     => ['samples' => ['3', 0], 'vae' => ['4', 2]],
-        ],
-        '9' => [
-            'class_type' => 'SaveImage',
-            'inputs'     => ['filename_prefix' => 'ComfyUI', 'images' => ['8', 0]],
-        ],
-    ];
-
-    $ch = curl_init($baseUrl . '/prompt');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode(['client_id' => $clientId, 'prompt' => $workflow]),
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Accept: application/json'],
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 30,
-    ]);
-    $body     = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlErr  = curl_error($ch);
-
-    if ($curlErr !== '') {
-        completeComfyTask($taskId, 'error');
-        return ['error' => 'ComfyUI nicht erreichbar: ' . $curlErr];
-    }
-
-    $queueData = json_decode($body, true);
-    if ($httpCode !== 200 || !is_array($queueData) || empty($queueData['prompt_id'])) {
-        completeComfyTask($taskId, 'error');
-        $errMsg = isset($queueData['error']) ? (string) $queueData['error'] : 'ComfyUI Fehler beim Einreihen (HTTP ' . $httpCode . ')';
-        return ['error' => $errMsg];
-    }
-
-    $promptId = (string) $queueData['prompt_id'];
-    $deadline = time() + $epTimeout;
-    $historyData = null;
-
-    while (time() < $deadline) {
-        sleep(1);
-        $hCh = curl_init($baseUrl . '/history/' . rawurlencode($promptId));
-        curl_setopt_array($hCh, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 10,
-            CURLOPT_HTTPHEADER     => ['Accept: application/json'],
-        ]);
-        $hBody = curl_exec($hCh);
-        $hCode = curl_getinfo($hCh, CURLINFO_HTTP_CODE);
-
-        if ($hCode !== 200) {
-            continue;
-        }
-        $hData = json_decode($hBody, true);
-        if (!is_array($hData) || empty($hData[$promptId])) {
-            continue;
-        }
-        $entry = $hData[$promptId];
-
-        if (!empty($entry['status']['status_str']) && $entry['status']['status_str'] === 'error') {
-            completeComfyTask($taskId, 'error');
-            return ['error' => 'ComfyUI Generierungsfehler.'];
-        }
-        if (!empty($entry['outputs'])) {
-            $historyData = $entry;
-            break;
-        }
-    }
-
-    if ($historyData === null) {
-        completeComfyTask($taskId, 'error');
-        return ['error' => 'ComfyUI Timeout: Bild wurde nicht rechtzeitig fertiggestellt.'];
-    }
-
-    $imageInfo = null;
-    foreach ($historyData['outputs'] as $nodeOutput) {
-        $images = is_array($nodeOutput) ? ($nodeOutput['images'] ?? []) : [];
-        if (is_array($images) && !empty($images)) {
-            $imageInfo = $images[0];
-            break;
-        }
-    }
-
-    if (!is_array($imageInfo) || empty($imageInfo['filename'])) {
-        completeComfyTask($taskId, 'error');
-        return ['error' => 'ComfyUI hat kein Bild zurückgegeben.'];
-    }
-
-    $viewUrl = $baseUrl . '/view?' . http_build_query([
-        'filename'  => $imageInfo['filename'],
-        'subfolder' => $imageInfo['subfolder'] ?? '',
-        'type'      => $imageInfo['type'] ?? 'output',
-    ]);
-
-    $imgCh = curl_init($viewUrl);
-    curl_setopt_array($imgCh, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 30,
-    ]);
-    $imageData = curl_exec($imgCh);
-    $imgCode   = curl_getinfo($imgCh, CURLINFO_HTTP_CODE);
-    $imgErr    = curl_error($imgCh);
-
-    if ($imgErr !== '' || $imgCode !== 200 || $imageData === false || $imageData === '') {
-        completeComfyTask($taskId, 'error');
-        return ['error' => 'Bild konnte nicht von ComfyUI heruntergeladen werden.'];
-    }
-
-    $filename = 'comfy_' . bin2hex(random_bytes(12)) . '.png';
-    $filePath = $outputDir . '/' . $filename;
-
-    if (file_put_contents($filePath, $imageData) === false) {
-        completeComfyTask($taskId, 'error');
-        return ['error' => 'Bild konnte nicht gespeichert werden.'];
-    }
-
-    completeComfyTask($taskId, 'done');
-
-    return [
-        'image_url' => 'sd_output/' . $filename,
-        'width'     => $width,
-        'height'    => $height,
-        'prompt'    => $prompt,
-        'seed'      => $seed,
-    ];
-}
 function extractUsage(array $data): array
 {
     return [
@@ -2781,14 +2389,12 @@ if (!empty($endpoint['is_llamacpp'])) {
     $endpointSupportsToolCalling = false;
 }
 $useSearchTool   = $searxngBaseUrl !== '' && $endpointSupportsToolCalling;
-$useSdTool       = hasSdEndpoints() && $endpointSupportsToolCalling;
-$useComfyTool    = hasComfyEndpoints() && $endpointSupportsToolCalling;
+$useImageTool    = imageIntEnabled() && $endpointSupportsToolCalling;
 $useDocQueryTool = (hasDocumentUploads($sessionUserId, $sessionId) || vectorStoreEnabled()) && $endpointSupportsToolCalling;
-$useTools        = $useSearchTool || $useSdTool || $useComfyTool || $useDocQueryTool;
+$useTools        = $useSearchTool || $useImageTool || $useDocQueryTool;
 if ($openAiToolMode === 'disabled') {
     $useSearchTool = false;
-    $useSdTool = false;
-    $useComfyTool = false;
+    $useImageTool = false;
     $useDocQueryTool = false;
     $useTools = false;
 }
@@ -2812,6 +2418,14 @@ $chatDocumentPrompt = buildChatDocumentSystemPrompt($chatDocuments, $useDocQuery
 if ($chatDocumentPrompt !== '') {
     array_unshift($llmMessages, ['role' => 'system', 'content' => $chatDocumentPrompt]);
     writeLog('info', count($chatDocuments) . ' an den Chat angehängte Dokument(e) im Kontext berücksichtigt.');
+}
+// Image generation (ImageInt). The trigger and anti-trigger formulations live
+// in the settings so an administrator can extend them without a deployment.
+if ($useImageTool) {
+    $imageToolPrompt = buildImageToolSystemPrompt();
+    if ($imageToolPrompt !== '') {
+        array_unshift($llmMessages, ['role' => 'system', 'content' => $imageToolPrompt]);
+    }
 }
 // Central knowledge base: every request retrieves context from the active
 // vector store (docvecwizard API or local Milvus) for the latest user message
@@ -2941,6 +2555,10 @@ if ($useTools) {
     // this response, across all search_web calls, deduplicated by URL and
     // kept for the "used sources" pills as well as the persisted history.
     $searchSources = [];
+    // Set when generate_image returned a still-running job (HTTP 202). It is
+    // persisted on the assistant message so the chat can show the consent
+    // question, poll the status endpoint and deep-link back to the result.
+    $imageJobRecord = null;
 
     // When an intelligence upgrade re-runs a query that already used search_web,
     // the caller may supply the original search query so we can pre-fetch fresh
@@ -2988,11 +2606,8 @@ if ($useTools) {
         $tools = array_merge($tools, createSearchToolDefinition());
         $tools = array_merge($tools, createWebFetchToolDefinition());
     }
-    if ($useSdTool) {
+    if ($useImageTool) {
         $tools = array_merge($tools, createImageGenerationToolDefinition());
-    }
-    if ($useComfyTool) {
-        $tools = array_merge($tools, createComfyToolDefinition());
     }
     if ($useDocQueryTool) {
         $tools = array_merge($tools, createDocumentQueryToolDefinition());
@@ -3200,25 +2815,26 @@ if ($useTools) {
                         $toolResult = ['error' => $e->getMessage()];
                     }
                 }
-            } elseif ($toolName === 'generate_image' && $useSdTool) {
+            } elseif ($toolName === 'generate_image' && $useImageTool) {
                 $args = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
                 if (!is_array($args)) {
                     $args = [];
                 }
-                $toolResult = callSdGenerate($args, $timeout);
+                $toolResult = imageIntGenerate($args, $sessionUserId, $sessionId);
+                if (!empty($toolResult['pending'])) {
+                    // Remember the running job so the assistant message can carry
+                    // it: the browser renders the consent question from it, the
+                    // status endpoint resolves it, and the notification mail links
+                    // back to it.
+                    $imageJobRecord = $toolResult;
+                }
                 // Include a markdown image in the result so the LLM can reference it.
                 if (isset($toolResult['image_url'])) {
                     $toolResult['markdown'] = '![Generiertes Bild](' . $toolResult['image_url'] . ')';
                 }
-            } elseif ($toolName === 'generate_image_comfy' && $useComfyTool) {
-                $args = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
-                if (!is_array($args)) {
-                    $args = [];
-                }
-                $toolResult = callComfyGenerate($args, $timeout);
-                if (isset($toolResult['image_url'])) {
-                    $toolResult['markdown'] = '![Generiertes Bild (ComfyUI)](' . $toolResult['image_url'] . ')';
-                }
+                // The model and the browser must not see the internal ImageInt
+                // URLs (service host, token-protected status endpoint).
+                unset($toolResult['status_url'], $toolResult['image_int_url']);
             } elseif ($toolName === 'query_documents' && $useDocQueryTool) {
                 $args  = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
                 $query = trim((string) ($args['query'] ?? ''));
@@ -3268,6 +2884,15 @@ if ($useTools) {
             $responseDetails['search_sources'] = array_slice(array_values($searchSources), 0, 8);
         }
         addContextUsageToResponseDetails($responseDetails, $endpoint, $usage['total'], $finalData['choices'][0]['finish_reason'] ?? null);
+        if ($imageJobRecord !== null) {
+            // The browser polls api/image_status.php with the job id and renders
+            // the consent question; the internal ImageInt URLs stay server-side.
+            $responseDetails['image_job'] = imageIntClientJob($imageJobRecord);
+            $responseDetails['image_job']['notify'] = imageIntNotifyClientPayload(
+                $sessionUserId,
+                (string) ($imageJobRecord['prompt'] ?? '')
+            );
+        }
         $finalData['response_details'] = $responseDetails;
     }
 
@@ -3287,6 +2912,12 @@ if ($useTools) {
         // separate lookup at load time.
         if (isset($responseDetails['search_sources']) && $responseDetails['search_sources'] !== []) {
             $assistantMessage['sources'] = $responseDetails['search_sources'];
+        }
+        // The running image job is stored on the message so the consent
+        // question, the status polling and the mail deep link all survive a
+        // page reload without a separate table.
+        if ($imageJobRecord !== null) {
+            $assistantMessage['image_job'] = $imageJobRecord;
         }
         $sessionMessages = array_merge(
             $payload['messages'],

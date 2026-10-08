@@ -51,14 +51,16 @@ COPY docker/apache.conf /etc/apache2/sites-available/000-default.conf
 COPY --chown=www-data:www-data . /var/www/html/
 
 # Ensure upload/output directories exist and are writable by the web server
-RUN mkdir -p /var/www/html/doc_uploads /var/www/html/sd_output /var/www/html/vector_imports \
+RUN mkdir -p /var/www/html/doc_uploads /var/www/html/sd_output /var/www/html/image_output /var/www/html/vector_imports \
     && chown -R www-data:www-data \
         /var/www/html/doc_uploads \
         /var/www/html/sd_output \
+        /var/www/html/image_output \
         /var/www/html/vector_imports \
     && chmod 755 \
         /var/www/html/doc_uploads \
         /var/www/html/sd_output \
+        /var/www/html/image_output \
         /var/www/html/vector_imports
 
 # ── Entrypoint ─────────────────────────────────────────────────────────────────

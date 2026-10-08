@@ -557,6 +557,77 @@ $csrfToken = $_SESSION['csrf_token'];
             font-size: .8rem;
         }
 
+        /* Bildauftrag (ImageInt): Statusblock, Zustimmungsfrage und das fertige
+           Bild. Der Block sitzt wie eine Assistentenantwort im Verlauf und
+           bleibt beim Nachladen bestehen. */
+        .image-job-status {
+            font-size: .9rem;
+        }
+
+        .image-job-consent {
+            margin-top: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: 8px;
+            background: var(--surface);
+            font-size: .88rem;
+        }
+
+        .image-job-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .image-job-actions button {
+            padding: 6px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface);
+            color: var(--text);
+            font-size: .82rem;
+            cursor: pointer;
+        }
+
+        .image-job-actions button:hover:not(:disabled) {
+            border-color: var(--accent);
+        }
+
+        .image-job-actions button:disabled {
+            opacity: .55;
+            cursor: default;
+        }
+
+        .image-job-note {
+            margin-top: 8px;
+            font-size: .8rem;
+            color: var(--text-muted);
+        }
+
+        .image-job-meta {
+            margin-top: 6px;
+            font-size: .78rem;
+            color: var(--text-muted);
+        }
+
+        .image-job-msg .bubble img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+        }
+
+        @keyframes image-job-flash {
+            0%, 100% { box-shadow: 0 0 0 0 transparent; }
+            50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 55%, transparent); }
+        }
+
+        .image-job-flash {
+            animation: image-job-flash 1.1s ease-in-out 2;
+            border-radius: 10px;
+        }
+
         .message.intelligence-upgrade {
             justify-content: flex-start;
             padding-top: 0;
@@ -3006,14 +3077,47 @@ $csrfToken = $_SESSION['csrf_token'];
         history = [];
 
         const msgs = data.messages || [];
+
+        // Bilder, die im geladenen Verlauf bereits irgendwo stehen. Ein fertig
+        // gewordener Auftrag hängt sein Bild als eigene Assistenten-Nachricht an
+        // (api/image_status.php), deshalb darf das Nachziehen unten nicht ein
+        // zweites Exemplar erzeugen.
+        const storedImageUrls = new Set();
+        for (const msg of msgs) {
+            if (typeof msg.content === 'string') {
+                const found = msg.content.match(/!\[[^\]]*\]\(([^)\s]+)\)/g) || [];
+                for (const mark of found) {
+                    const url = mark.slice(mark.indexOf('](') + 2, -1);
+                    if (url) storedImageUrls.add(url);
+                }
+            }
+            if (msg.image) storedImageUrls.add(msg.image);
+        }
+
         for (const msg of msgs) {
             if (msg.role === 'user' || msg.role === 'assistant') {
-                const content = msg.content;
+                let content = msg.content;
+                const job = (msg.role === 'assistant') ? msg.image_job : null;
+                // Ein fertig gewordener Auftrag, dessen Bild noch nicht im
+                // gespeicherten Text steht: Bildmarkdown nachziehen, damit das
+                // Bild auch nach einem Reload im Verlauf erscheint.
+                if (job && job.image_url && content.indexOf(job.image_url) === -1
+                    && !storedImageUrls.has(job.image_url)) {
+                    content = (content ? content.replace(/\s*$/, '') + '\n\n' : '')
+                        + '![Generiertes Bild](' + job.image_url + ')';
+                }
                 const bubble = appendMessage(msg.role, content);
                 if (msg.role === 'assistant' && Array.isArray(msg.sources)) {
                     setSourcePillsForBubble(bubble, msg.sources);
                 }
                 history.push({ role: msg.role, content });
+
+                // Laufende Bildaufträge dieses Chats weiter verfolgen, damit
+                // Fortschritt und Zustimmungsfrage nach einem Reload nicht
+                // verschwinden.
+                if (job && !job.image_url && job.status !== 'error') {
+                    startImageJobWatch(job, { afterBubble: bubble });
+                }
             }
         }
 
@@ -4434,6 +4538,12 @@ $csrfToken = $_SESSION['csrf_token'];
             setResponseDetailsForBubble(bubble, responseDetails);
             bubble.classList.remove('streaming');
 
+            // Läuft der Bildauftrag noch (HTTP 202 von ImageInt), zeigt der
+            // Block darunter den Fortschritt und die Zustimmungsfrage.
+            if (responseDetails && responseDetails.image_job) {
+                startImageJobWatch(responseDetails.image_job, { afterBubble: bubble });
+            }
+
             // Store assistant reply in history.
             history.push({ role: 'assistant', content: accumulated });
             const assistantHistoryIndex = history.length - 1;
@@ -4452,6 +4562,347 @@ $csrfToken = $_SESSION['csrf_token'];
             sendBtn.disabled  = false;
             userInput.focus();
         }
+    }
+
+    /* ── Bildgenerierung (ImageInt) ──────────────────────────
+     * Ein `generate_image`-Aufruf kann als laufender Auftrag zurückkommen
+     * (HTTP 202 von ImageInt). Der Auftrag steht am Assistenten-Message unter
+     * `image_job` und in `response_details.image_job`. Dieser Block fragt
+     * api/image_status.php ab, bis das PNG da ist, holt die Zustimmung zur
+     * Benachrichtigungsmail ein und ist zugleich das Ziel des Deep-Links aus
+     * dieser Mail.
+     */
+    const watchedImageJobs = new Map();
+    const IMAGE_JOB_RUNNING = ['queued', 'running', 'enhancing', 'rendering'];
+
+    function ensureImageJobBlock(jobId, state) {
+        let wrapper = chatArea.querySelector('[data-image-job="' + jobId + '"]');
+        if (wrapper) return wrapper;
+
+        wrapper = document.createElement('div');
+        wrapper.className = 'message assistant image-job-msg';
+        wrapper.dataset.imageJob = jobId;
+
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar';
+        avatar.textContent = '🖼';
+
+        const content = document.createElement('div');
+        content.className = 'assistant-content';
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        content.appendChild(bubble);
+
+        wrapper.appendChild(avatar);
+        wrapper.appendChild(content);
+
+        const anchor = state && state.afterBubble ? state.afterBubble.closest('.message') : null;
+        if (anchor && anchor.parentNode === chatArea) {
+            anchor.insertAdjacentElement('afterend', wrapper);
+        } else {
+            chatArea.appendChild(wrapper);
+        }
+        return wrapper;
+    }
+
+    function renderImageJobBlock(state) {
+        const job = state.job;
+        const wrapper = ensureImageJobBlock(state.jobId, state);
+        const bubble = wrapper.querySelector('.bubble');
+
+        if (job.image_url) {
+            wrapper.dataset.imageJobDone = '1';
+            const meta = [
+                job.width && job.height ? job.width + ' × ' + job.height + ' px' : '',
+                job.duration || ''
+            ].filter(Boolean).join(' · ');
+            bubble.innerHTML = renderMarkdown('![Generiertes Bild](' + job.image_url + ')')
+                + (meta ? '<div class="image-job-meta">' + escapeHtmlContent(meta) + '</div>' : '');
+            makeAnswerListsClickable(bubble);
+            return wrapper;
+        }
+
+        let html = '<div class="image-job-status">'
+            + escapeHtmlContent(job.message || 'Das Bild wird erzeugt …')
+            + '</div>';
+
+        if (job.failed || job.expired) {
+            html += '<div class="image-job-note">Für diesen Auftrag wird keine '
+                + 'Benachrichtigungsmail mehr versendet.</div>';
+        } else if (state.declined) {
+            html += '<div class="image-job-note">Alles klar – Du bleibst hier. '
+                + 'Das Bild erscheint automatisch in diesem Chat, sobald es fertig ist.</div>';
+        } else if (state.notify && state.notify.enabled) {
+            if (state.notify.requested) {
+                html += '<div class="image-job-note">'
+                    + escapeHtmlContent(state.confirmation
+                        || ('Wir benachrichtigen Dich unter ' + (state.notify.email || 'Deiner Adresse')
+                            + ', sobald das Bild fertig ist.'))
+                    + '</div>';
+            } else {
+                html += '<div class="image-job-consent">'
+                    + escapeHtmlContent(state.notify.consent_text || '')
+                    + '</div>'
+                    + '<div class="image-job-actions">'
+                    + '<button type="button" class="image-job-yes">Ja, per E-Mail benachrichtigen</button>'
+                    + '<button type="button" class="image-job-no">Nein, ich warte hier</button>'
+                    + '</div>';
+            }
+        }
+
+        bubble.innerHTML = html;
+
+        const yes = bubble.querySelector('.image-job-yes');
+        if (yes) yes.addEventListener('click', () => requestImageNotification(state));
+        const no = bubble.querySelector('.image-job-no');
+        if (no) no.addEventListener('click', () => {
+            state.declined = true;
+            renderImageJobBlock(state);
+        });
+
+        return wrapper;
+    }
+
+    /** "Ja" auf die Zustimmungsfrage: genau eine Mail vormerken. */
+    async function requestImageNotification(state) {
+        const wrapper = ensureImageJobBlock(state.jobId, state);
+        wrapper.querySelectorAll('.image-job-actions button').forEach(btn => { btn.disabled = true; });
+        try {
+            const res = await fetch('api/image_notify.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: state.sessionId, job_id: state.jobId })
+            });
+            const data = await res.json();
+            if (data.ok) {
+                state.notify = Object.assign({}, state.notify, {
+                    requested: true, enabled: true, email: data.email || (state.notify && state.notify.email) || ''
+                });
+                state.confirmation = data.message || '';
+                setStatus(data.message || 'Benachrichtigung vorgemerkt.', 'ok');
+            } else {
+                setStatus(data.message || 'Benachrichtigung nicht möglich.', 'error');
+            }
+        } catch (_) {
+            setStatus('Benachrichtigung nicht möglich.', 'error');
+        }
+        renderImageJobBlock(state);
+    }
+
+    function startImageJobWatch(job, options) {
+        if (!job || !job.job_id) return null;
+        const jobId = String(job.job_id);
+        const sid = String((options && options.sessionId) || sessionId || '');
+        if (!sid) return null;
+
+        const existing = watchedImageJobs.get(jobId);
+        if (existing) {
+            if (options && options.afterBubble && !existing.afterBubble) {
+                existing.afterBubble = options.afterBubble;
+            }
+            return existing;
+        }
+
+        const state = {
+            jobId: jobId,
+            sessionId: sid,
+            job: Object.assign({}, job),
+            notify: job.notify || null,
+            afterBubble: (options && options.afterBubble) || null,
+            declined: false,
+            confirmation: '',
+            timer: null,
+            stopped: false,
+            pollMs: Math.max(5, Number(job.poll_after_seconds) || 15) * 1000
+        };
+        watchedImageJobs.set(jobId, state);
+
+        renderImageJobBlock(state);
+        scrollToBottom();
+        pollImageJob(state);
+        return state;
+    }
+
+    async function pollImageJob(state) {
+        if (state.stopped) return;
+
+        let data = null;
+        try {
+            const res = await fetch('api/image_status.php?session_id='
+                + encodeURIComponent(state.sessionId) + '&job_id=' + encodeURIComponent(state.jobId));
+            data = await res.json();
+        } catch (_) {
+            data = null;
+        }
+        if (state.stopped) return;
+
+        if (data) {
+            if (data.stage) state.job.stage = data.stage;
+            if (data.stage_label) state.job.stage_label = data.stage_label;
+            if (data.message) state.job.message = data.message;
+            if (data.notify) state.notify = data.notify;
+            if (data.poll_after_seconds) {
+                state.pollMs = Math.max(5, Number(data.poll_after_seconds) || 15) * 1000;
+            }
+        }
+
+        const status = data ? String(data.status || '') : '';
+        const isRunning = IMAGE_JOB_RUNNING.indexOf(status) !== -1;
+
+        if (data && data.ok === true && status === 'done' && data.image_url) {
+            state.stopped = true;
+            clearTimeout(state.timer);
+            state.job.image_url = data.image_url;
+            state.job.width = data.width;
+            state.job.height = data.height;
+            state.job.duration = data.duration;
+            state.job.message = data.message;
+            renderImageJobBlock(state);
+            scrollToBottom();
+            setStatus('Bild fertig.', 'ok');
+            afterExchangeRefresh();
+            return;
+        }
+
+        if (data && (data.expired || status === 'expired' || (status === 'done' && !data.image_url))) {
+            state.stopped = true;
+            clearTimeout(state.timer);
+            state.job.expired = true;
+            state.job.message = data.message
+                || 'Dieser Bildauftrag ist nicht mehr abrufbar: Der Dienst bewahrt '
+                + 'fertige Bilder nur für eine begrenzte Zeit auf.';
+            renderImageJobBlock(state);
+            setStatus(state.job.message, 'error');
+            return;
+        }
+
+        if (data && !isRunning) {
+            state.stopped = true;
+            clearTimeout(state.timer);
+            state.job.failed = true;
+            state.job.message = data.message || 'Die Bildgenerierung ist fehlgeschlagen.';
+            renderImageJobBlock(state);
+            setStatus(state.job.message, 'error');
+            return;
+        }
+
+        // Still running – or the service did not answer this round, in which
+        // case the last known status is kept and simply polled again.
+        if (!data) {
+            state.job.message = state.job.message || 'Das Bild wird erzeugt …';
+        }
+        renderImageJobBlock(state);
+        state.timer = setTimeout(() => pollImageJob(state), state.pollMs);
+    }
+
+    /** Hebt das fertig gewordene Bild im Verlauf kurz hervor (Deep-Link-Ziel). */
+    function highlightImageJob(imageUrl) {
+        if (!imageUrl) return false;
+        const img = chatArea.querySelector('img[src="' + CSS.escape(imageUrl) + '"]');
+        if (!img) return false;
+        img.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        img.classList.add('image-job-flash');
+        setTimeout(() => img.classList.remove('image-job-flash'), 2600);
+        return true;
+    }
+
+    /** Deep-Link aus der Benachrichtigungsmail:
+     *  index.php?session=<id>&job=<id>. Die Sitzung wird gegen die angemeldete
+     *  user_id geprüft (api/chat_sessions.php und api/image_status.php tun das
+     *  beide), ein fremder Link öffnet also keinen fremden Chat. */
+    function adoptImageDeepLink() {
+        const params = new URLSearchParams(window.location.search);
+        const linkSession = params.get('session') || '';
+        const linkJob = params.get('job') || '';
+        if (!linkSession || !linkJob) return false;
+
+        // Die Parameter verschwinden sofort aus der Adresse, damit ein
+        // Neuladen oder Weitergeben nicht erneut einen Deep-Link auslöst.
+        // Achtung: `history` ist hier der Chatverlauf, nicht window.history.
+        try {
+            window.history.replaceState({}, '', window.location.pathname);
+        } catch (_) { /* ignore */ }
+
+        if (!loggedIn || !/^[a-f0-9]{8,128}$/.test(linkSession) || !/^[A-Za-z0-9_-]{1,64}$/.test(linkJob)) {
+            setStatus('Dieser Link ist ungültig.', 'error');
+            return true;
+        }
+
+        (async () => {
+            try {
+                const res = await fetch('api/chat_sessions.php?action=load&session_id='
+                    + encodeURIComponent(linkSession));
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    setStatus(data && data.error
+                        ? data.error
+                        : 'Dieser Chat existiert nicht mehr oder gehört zu einem anderen Konto.', 'error');
+                    return;
+                }
+                applyLoadedSession(linkSession, data);
+                await focusImageJob(linkJob);
+            } catch (_) {
+                setStatus('Der verlinkte Chat konnte nicht geladen werden.', 'error');
+            }
+        })();
+
+        return true;
+    }
+
+    /** Holt den verlinkten Auftrag: zeigt das fertige Bild bzw. nimmt die
+     *  Statusabfrage wieder auf. */
+    async function focusImageJob(jobId) {
+        let data = null;
+        try {
+            const res = await fetch('api/image_status.php?session_id='
+                + encodeURIComponent(sessionId) + '&job_id=' + encodeURIComponent(jobId));
+            data = await res.json();
+        } catch (_) {
+            data = null;
+        }
+
+        if (!data) {
+            appendSystemMessage('Der Bilddienst antwortet gerade nicht. Bitte versuche es '
+                + 'in einem Moment noch einmal.');
+            return;
+        }
+
+        if (data.ok === true && data.status === 'done' && data.image_url) {
+            // Der Auftrag ist fertig, aber noch nie in diesem Browser angekommen:
+            // api/image_status.php hat ihn gerade in den Verlauf geschrieben.
+            if (!highlightImageJob(data.image_url)) {
+                appendMessage('assistant', data.image_markdown || ('![Generiertes Bild](' + data.image_url + ')'));
+                history.push({ role: 'assistant', content: data.image_markdown || ('![Generiertes Bild](' + data.image_url + ')') });
+                scrollToBottom();
+                highlightImageJob(data.image_url);
+            }
+            setStatus('Bild fertig.', 'ok');
+            return;
+        }
+
+        if (data.expired || data.status === 'expired' || (data.status === 'done' && !data.image_url)) {
+            appendSystemMessage(data.message
+                || 'Dieser Bildauftrag ist nicht mehr abrufbar: Der Dienst bewahrt fertige '
+                + 'Bilder nur für eine begrenzte Zeit auf.');
+            return;
+        }
+
+        if (!data.ok && IMAGE_JOB_RUNNING.indexOf(String(data.status || '')) === -1
+            && String(data.status || '') !== 'done') {
+            appendSystemMessage(data.message || 'Dieser Bildauftrag ist nicht mehr verfügbar.');
+            return;
+        }
+
+        // Läuft noch: denselben Block aufbauen wie im normalen Chatverlauf.
+        startImageJobWatch({
+            job_id: jobId,
+            status: data.status,
+            stage: data.stage,
+            stage_label: data.stage_label,
+            message: data.message,
+            poll_after_seconds: data.poll_after_seconds,
+            notify: data.notify
+        }, { sessionId: sessionId });
     }
 
     /* ── Event bindings ──────────────────────────────────── */
@@ -4488,11 +4939,15 @@ $csrfToken = $_SESSION['csrf_token'];
     /* ── Load session list on startup (logged-in users) ─── */
     if (loggedIn) {
         refreshSessionList();
-        // Restore the conversation tied to the current session ID (e.g. after
-        // a page reload or a full-page navigation such as login) so a stale
-        // sessionId never gets silently overwritten by a shorter, unrelated
-        // history. This also restores the active intelligence group.
-        restoreCurrentSession();
+        // Ein Deep-Link aus der Benachrichtigungsmail (?session=&job=) hat
+        // Vorrang vor der zuletzt geöffneten Sitzung aus dem sessionStorage.
+        if (!adoptImageDeepLink()) {
+            // Restore the conversation tied to the current session ID (e.g. after
+            // a page reload or a full-page navigation such as login) so a stale
+            // sessionId never gets silently overwritten by a shorter, unrelated
+            // history. This also restores the active intelligence group.
+            restoreCurrentSession();
+        }
     }
 })();
 </script>

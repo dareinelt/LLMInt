@@ -49,14 +49,14 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `admin/endpoint_tech.php` | – | Endpunkte technische Verwaltung: quickinfo-Pairing je Endpunkt und Live-Übersicht (CPU/GPU/RAM/VRAM, Temperaturen) |
 | `admin/quickinfo_stats.php` | – | JSON-Livedaten aller gekoppelten quickinfo-Instanzen (parallel per curl_multi) |
 | `lib/quickinfo.php` | – | Client für die quickinfo Management-Board-API (`/api/v1/status`, `info`, `history`) |
-| `lib/balancer_engine.php` | 468 | Gemeinsame Balancer-Logik für LLM, AUTOMATIC1111 und ComfyUI |
+| `lib/balancer_engine.php` | 468 | Gemeinsame Balancer-Logik für LLM-Endpunkte (kennt die Altbestände `sd_*`/`comfy_*` nur noch lesend) |
 | `lib/prompt_security.php` | 499 | Regelwerk, Normalisierung, Scoring, Entscheidung, Logging |
 | `lib/openai_api.php` | 264 | optionale API-Key-Erkennung inkl. Modellbindung je Key, anonymer API-Kontext mit Log-Präfix, öffentliche Basis-URL, Payload-Normalisierung (Key- oder Gast-Standardmodell), Fehlerformat |
 | `lib/ldap_auth.php` | 320 | LDAP-Bind, Benutzerabgleich, Kerberos-SSO (direkt oder über Reverse-Proxy) |
 | `lib/reverse_proxy.php` | – | Betrieb hinter Reverse-Proxy (lanpa): `TRUSTED_PROXIES`, Client-IP, HTTPS, `X-Forwarded-Prefix`, Proxy-SSO-Header, `appPublicBaseUrl()` |
 | `lib/mailer.php` | 334 | Eigener SMTP-Client (kein PHPMailer) |
 | `lib/prompt.txt` | – | Fallback-Kategorien/Prompt für das Routing, importierbar in die DB |
-| `doc_uploads/`, `sd_output/` | – | Laufzeitdaten (per `.htaccess` geschützt), Docker-Volumes |
+| `doc_uploads/`, `image_output/`, `sd_output/` | – | Laufzeitdaten (per `.htaccess` geschützt), Docker-Volumes; `sd_output/` ist Bestand aus der früheren AUTOMATIC1111-Integration |
 | `docker/`, `Dockerfile`, `docker-compose.yml` | – | Container-Setup inklusive phpMyAdmin mit Basic Auth |
 | `docker-compose.lanpa.yml` | – | Override: `web` im externen Netz `llmint-proxy` (Alias `llmint-web`) hinter dem lanpa-`auth`-Container |
 | `README.md`, `Demo.md` | – | technische bzw. nicht-technische Dokumentation |
@@ -98,8 +98,10 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `search_logs` | SearXNG-Suchen mit Status und Ergebnissen |
 | `active_clients` | Heartbeat-Token aktiver Browser-Tabs (IP, Hostname, `last_seen`) |
 | `client_count_log` | Zeitreihe gleichzeitiger Clients |
-| `sd_endpoints`, `sd_tasks` | AUTOMATIC1111-Endpunkte und deren Aufträge |
-| `comfy_endpoints`, `comfy_tasks` | ComfyUI-Endpunkte und deren Aufträge |
+| `image_endpoints` | ImageInt-Endpunkte (`base_url`, `token`, `timeout`, `is_active`, Balancer-Gesundheit) |
+| `image_notifications` | Zustimmungen zu Fertigstellungs-Mails (`session_id`, `job_id`, `user_id`, `prompt`, `status_url`, `image_url`, `status`, `sent_at`; `UNIQUE KEY uniq_job_user`; Empfängeradresse kommt aus `users.email`) |
+| `sd_endpoints`, `sd_tasks` | Altbestand der AUTOMATIC1111-Integration – wird nicht mehr adressiert, die Tabellen bleiben erhalten |
+| `comfy_endpoints`, `comfy_tasks` | Altbestand der ComfyUI-Integration – wird nicht mehr adressiert, die Tabellen bleiben erhalten |
 | `document_uploads` | Upload-Metadaten, Verarbeitungs- und Embedding-Status (`is_global_rag` fest `0`) |
 | `vector_documents`, `vector_chunks`, `vector_imports`, `vector_query_logs` | Zentrale Wissensdatenbank (docvecwizard-Importe, Import-Protokoll, Abfrage-Log) |
 | `document_chunks` | Chunks mit optionalem Embedding (`FK` auf `document_uploads`, `ON DELETE CASCADE`) |
@@ -184,8 +186,7 @@ Aufruf: `POST api/chat.php` mit JSON-Body. Antwort ist JSON oder – bei `stream
 |---|---|---|
 | `search_web` | `searxng_base_url` gesetzt | `query` (erforderlich) |
 | `web_fetch` | wie `search_web` | `url` (erforderlich), `max_chars` (500–20000, Standard 6000) |
-| `generate_image` | aktive `sd_endpoints` | `prompt` (erforderlich), `negative_prompt`, `width`, `height` |
-| `generate_image_comfy` | aktive `comfy_endpoints` | wie `generate_image` |
+| `generate_image` | aktive `image_endpoints` | `prompt` (erforderlich), `negative_prompt`, `size` |
 | `query_documents` | vorhandene Uploads | `query` (erforderlich) |
 
 Neue Tools benötigen jeweils eine `create...ToolDefinition()`-Funktion, eine Verfügbarkeits-
@@ -211,8 +212,8 @@ die LLMInt-spezifischen Frames.
 
 ## 7. Balancer
 
-`lib/balancer_engine.php` ist die gemeinsame Basis für LLM-, AUTOMATIC1111- und
-ComfyUI-Endpunkte; die Tabellen werden als Parameter übergeben.
+`lib/balancer_engine.php` ist die gemeinsame Basis für LLM-Endpunkte; die Tabellen werden
+als Parameter übergeben.
 
 Funktionen: `ensureBalancerHealthColumns()`, `getBalancerMaxConcurrent()`,
 `getBalancerCircuitFailThreshold()`, `getBalancerCircuitCooldownSeconds()`,
@@ -237,8 +238,9 @@ Auswahl in `pickEndpointForModel()` (`api/balancer.php`):
 4. Reservierung in einer Transaktion mit `SELECT ... FOR UPDATE` und erneuter Kapazitäts-
    prüfung, anschließend `INSERT` in `tasks` mit Status `running`.
 
-Abschluss über `completeTask()`; Bildpfade nutzen `pickSdEndpoint()`/`completeSdTask()`
-bzw. `pickComfyEndpoint()`/`completeComfyTask()`.
+Abschluss über `completeTask()`. Die früheren Bildpfade (`pickSdEndpoint()`/
+`completeSdTask()` und `pickComfyEndpoint()`/`completeComfyTask()`) sind mit
+`api/sd_balancer.php`/`api/comfy_balancer.php` entfallen.
 
 ---
 
@@ -326,9 +328,12 @@ Verfügbare Aktionen:
 `toggle_endpoint_pause`, `save_search_settings`, `save_request_handling`,
 `save_new_user_model`, `save_balancer_settings`, `save_streaming_settings`,
 `save_intelligence_group_settings`, `save_global_system_prompt`, `save_system_messages`,
-`save_vision_settings`, `save_smtp_settings`, `save_ldap_settings`, `add_sd_endpoint`,
-`update_sd_endpoint`, `delete_sd_endpoint`, `add_comfy_endpoint`, `update_comfy_endpoint`,
-`delete_comfy_endpoint`, `save_routing_settings`, `add_routing_category`,
+`save_vision_settings`, `save_smtp_settings`, `save_ldap_settings`,
+`save_image_generation_settings`, `add_image_endpoint`, `update_image_endpoint`,
+`delete_image_endpoint`, `move_image_endpoint`,
+`add_sd_endpoint`, `update_sd_endpoint`, `delete_sd_endpoint`, `add_comfy_endpoint`,
+`update_comfy_endpoint`, `delete_comfy_endpoint` (Altbestand, Karten sind ausgeblendet),
+`save_routing_settings`, `add_routing_category`,
 `update_routing_category`, `delete_routing_category`, `import_prompt_txt`, `save_log_config`,
 `add_embedding_endpoint`, `update_embedding_endpoint`, `delete_embedding_endpoint`,
 `save_hybrid_search_settings`, `save_reranker_settings`,
@@ -336,7 +341,8 @@ Verfügbare Aktionen:
 
 Die Oberfläche ist in Karten mit stabilen IDs gegliedert, unter anderem `dashboard-card`,
 `config-endpoints-card`, `config-request-handling-card`, `config-balancer-card`,
-`config-routing-card`, `config-decision-card`, `config-sd-card`, `config-comfy-card`,
+`config-routing-card`, `config-decision-card`, `config-image-card` (`config-sd-card`,
+`config-comfy-card` sind als Altbestand per `hidden` ausgeblendet),
 `config-embedding-card`, `config-hybrid-search-card`, `config-reranker-card`,
 `embedding-stats-card`, `config-global-system-prompt-card`, `config-system-messages-card`,
 `config-smtp-card`, `config-ldap-card`, `config-searxng-card`, `log-config-card`,
@@ -365,15 +371,17 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/test_vector_store.php` | POST | Admin | Verbindungstest docvecwizard-API / Milvus |
 | `api/document_delete.php` | POST | Session + CSRF | Eigenes Dokument samt Chunks löschen |
 | `api/rebuild_embeddings.php` | POST | Admin + CSRF | Embeddings neu berechnen |
-| `api/sd_generate.php`, `api/comfy_generate.php` | POST | Session | Bildgenerierung |
-| `api/sd_checkpoints.php`, `api/comfy_checkpoints.php` | GET | – | verfügbare Checkpoints |
+| `api/image_status.php` | GET/POST | Session | Status eines Bildauftrags abfragen bzw. Bild in die Sitzung übernehmen |
+| `api/image_notify.php` | POST | Session + CSRF | Zustimmung zur Fertigstellungsmail hinterlegen |
+| `api/image_health.php` | GET | Admin | Verbindungstest gegen ImageInt (`/v1/ready`, `/v1/health`) |
+| `api/image_notify_worker.php` | CLI/Cron | – | Fertige Bildaufträge abarbeiten und die Benachrichtigungsmails versenden |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
 | `api/admin_user_action.php` | POST | Admin + CSRF | Benutzerverwaltung |
 | `api/verify_email.php`, `api/reset_password.php` | GET/POST | Token | E-Mail-Verifikation, Passwort-Reset |
 | `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | anonym (API-Key optional: Log-Zuordnung und optional festes Modell) | OpenAI-kompatibel, ohne Tools; Key-Modell bzw. Gast-Standardmodell, Log-Präfix `[API]` |
 | `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | anonym (API-Key optional: Log-Zuordnung und optional festes Modell) | OpenAI-kompatibel, mit Tools; Key-Modell bzw. Gast-Standardmodell, Log-Präfix `[API]` |
 
-`api/balancer.php`, `api/sd_balancer.php`, `api/comfy_balancer.php` und `api/embedding.php`
+`api/balancer.php` und `api/embedding.php`
 sind reine Bibliotheken und werden eingebunden, nicht direkt aufgerufen.
 
 ---
@@ -401,9 +409,10 @@ Legacy-Schlüssel: `lmstudio_base_url`, `lmstudio_timeout`, `endpoints_bootstrap
   `ENTRYPOINT` ist `docker/entrypoint.sh` (wartet auf die Datenbank, ruft `setup.php` auf).
 - `docker-compose.yml`: Dienste `db` (MySQL 8.0 mit Healthcheck), `web`
   (Port `HTTP_PORT`, Standard 8080) und `phpmyadmin` (Port `PMA_PORT`, Standard 8081, durch
-  HTTP Basic Auth geschützt). Volumes: `db_data`, `doc_uploads`, `sd_output`.
+  HTTP Basic Auth geschützt). Volumes: `db_data`, `doc_uploads`, `image_output`, `sd_output`.
 - `.env.example`: `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_ROOT_PASS`, `HTTP_PORT`, `PMA_PORT`,
-  `PMA_BASIC_AUTH_USER`, `PMA_BASIC_AUTH_PASSWORD`, `TZ`.
+  `PMA_BASIC_AUTH_USER`, `PMA_BASIC_AUTH_PASSWORD`, `TZ`, `IMAGEINT_URL`, `IMAGEINT_TOKEN`,
+  `IMAGEINT_TIMEOUT`, `IMAGEINT_SYNC_TIMEOUT`.
 
 ---
 
@@ -415,7 +424,7 @@ Legacy-Schlüssel: `lmstudio_base_url`, `lmstudio_timeout`, `endpoints_bootstrap
 | Neue Tabelle oder Spalte | `ensureRuntimeSchema()` in `db.php` (idempotent), bei Erstinstallation zusätzlich `setup.php` |
 | Neues LLM-Tool | Definition, Verfügbarkeitsprüfung und Ausführungszweig in `api/chat.php`; bei Bedarf Anzeige im Frontend |
 | Neuer HTTP-Endpunkt | neue Datei unter `api/`, `require_once __DIR__ . '/../db.php'`, Auth-/CSRF-Prüfung analog zu bestehenden Dateien |
-| Änderung an der Endpunktauswahl | `lib/balancer_engine.php` und `pickEndpointForModel()` in `api/balancer.php`; Bildpfade nutzen dieselbe Engine |
+| Änderung an der Endpunktauswahl | `lib/balancer_engine.php` und `pickEndpointForModel()` in `api/balancer.php` |
 | Frontend-Anpassung | `index.php`; JS und CSS liegen inline, keine Build-Schritte |
 | Neue Sicherheitsregel | Seed in `ensureRuntimeSchema()` oder Pflege über `admin/prompt_security.php` |
 

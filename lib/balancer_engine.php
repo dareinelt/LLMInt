@@ -3,8 +3,11 @@
 /**
  * lib/balancer_engine.php
  *
- * Shared load-balancing / routing engine used by api/balancer.php,
- * api/sd_balancer.php and api/comfy_balancer.php.
+ * Shared load-balancing / routing engine used by api/balancer.php.
+ *
+ * The engine also knows the legacy `sd_tasks`/`comfy_tasks` tables so that
+ * existing data keeps being readable; since ImageInt replaced the
+ * AUTOMATIC1111/ComfyUI integration, nothing addresses them any more.
  *
  * Provides:
  *   - Configurable limits (max concurrent tasks per endpoint, circuit breaker
@@ -482,7 +485,7 @@ function maybeHalfOpenCircuit(string $table, int $endpointId): void
  * Marks tasks that have been stuck in 'running' state for longer than the
  * configured orphan timeout as 'error', freeing up the slot they occupy.
  * This handles crashed PHP workers / killed requests that never reached
- * their completeTask()/completeSdTask()/completeComfyTask() call.
+ * their completeTask() call.
  *
  * Runs probabilistically (not on every call) to keep the overhead low; pass
  * $force = true to always run (e.g. from a maintenance script).

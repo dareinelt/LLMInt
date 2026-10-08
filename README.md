@@ -32,6 +32,7 @@ Weitere Dokumente im Repository:
 - [Hybrid-RAG](#hybrid-rag)
 - [Prompt Security](#prompt-security)
 - [Spracherkennung und Diktat](#spracherkennung-und-diktat)
+- [Bildgenerierung (ImageInt)](#bildgenerierung-imageint)
 - [API](#api)
 - [Datenmodell](#datenmodell)
 - [Entwicklung](#entwicklung)
@@ -67,12 +68,11 @@ Weitere Dokumente im Repository:
 | API | `api/chat.php`, Routing, RAG, Uploads, Bildgenerierung und OpenAI-Endpunkte |
 | Administration | `admin/` für Endpunkte, Benutzer, Einstellungen, API-Keys und Statistik |
 | Persistenz | MySQL oder MariaDB; das Schema wird idempotent durch `setup.php` und `db.php` erweitert |
-| Externe Dienste | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP, SMTP, AUTOMATIC1111 und ComfyUI; für das Diktat ein oder mehrere [SpeechInt](https://github.com/dareinelt/SpeechInt)-Dienste (whisper.cpp + Qwen3.5-2B), die auf einem separaten Docker-Host laufen |
+| Externe Dienste | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP, SMTP; für das Diktat ein oder mehrere [SpeechInt](https://github.com/dareinelt/SpeechInt)-Dienste (whisper.cpp + Qwen3.5-2B) und für die Bildgenerierung ein oder mehrere [ImageInt](https://github.com/dareinelt/ImageInt)-Dienste (Qwen-Image-2.1), die jeweils auf einem separaten Docker-Host laufen |
 
 Wichtige Komponenten:
 
 - `api/balancer.php` wählt LLM-Endpunkte und erfasst deren Task-Lifecycle.
-- `api/sd_balancer.php` und `api/comfy_balancer.php` wenden dieselben Balancer-Grundsätze auf die Bildgenerierung an.
 - `lib/balancer_engine.php` bündelt Circuit Breaker, Backoff, Fallback-Ketten, verwaiste Tasks und die konfigurierbaren Balancer-Einstellungen.
 - `api/embedding.php` erstellt Embeddings, führt Ähnlichkeitssuche und optionales Reranking aus.
 - `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an; `api/doc_convert.php`, `api/pdf_render.php` und `api/vision.php` kapseln Konverter-Dienst, PDF-Rendering und Vision-Analyse.
@@ -102,7 +102,7 @@ Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Bu
 | `docker-compose.test.yml` | Compose-Override für einen schnellen lokalen Stack beim Testen des Diktats (siehe [Spracherkennung und Diktat](#spracherkennung-und-diktat)) |
 | `docker-compose.lanpa.yml` | optionaler Override für den Betrieb hinter dem `auth`-Container von lanpa |
 | `docconvert/` | Python/FastAPI-Container zur Konvertierung von Office- und Textdateien in strukturierte Chunks |
-| `doc_uploads/`, `sd_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
+| `doc_uploads/`, `sd_output/`, `image_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
 | `assets/`, `docs/`, `ressources/` | Bilder der Oberfläche, Diagramme der Dokumentation, Beispiel-Systemprompt |
 
 ## Modellrouting und Entscheidungsfindung
@@ -348,7 +348,8 @@ Persistente Docker-Volumes:
 
 - `db_data` für die Datenbank
 - `doc_uploads` für hochgeladene Dokumente
-- `sd_output` für generierte Bilder
+- `sd_output` für generierte Bilder der früheren AUTOMATIC1111-Integration (Bestand)
+- `image_output` für generierte Bilder der ImageInt-Integration
 - `docconvert_cache` für den Konvertierungs-Cache
 - `milvus_data` für die lokale Milvus-Vektordatenbank (Modus `local` der Wissensdatenbank)
 - `vector_imports` für docvecwizard-Exportarchive, die serverseitig importiert werden sollen
@@ -440,7 +441,7 @@ Ablauf der Anmeldung: Beim ersten Aufruf je Sitzung leitet `index.php` (bzw. `ad
 
 Technik: `lib/reverse_proxy.php` wird im Container per `auto_prepend_file` (`docker/php.ini`) vor jedem Skript geladen und zusätzlich von `db.php` eingebunden. Es ermittelt die Client-IP aus `X-Forwarded-For` (von rechts, vertrauenswürdige Hops übersprungen), setzt `HTTPS` und das `secure`-Flag des Sitzungscookies und bildet absolute Links (E-Mail-Verifikation, Passwort-Reset, OpenAI-Basis-URL) mit dem Präfix aus `X-Forwarded-Prefix`. Alle übrigen Links der Oberfläche sind relativ und funktionieren unter `/ki/` ohne Anpassung; den Cookie-Pfad schreibt lanpa auf `/ki/` um. Bei klassischer Installation `auto_prepend_file` auf `lib/reverse_proxy.php` setzen, damit das `secure`-Flag greift.
 
-Hinweis: LLMInt läuft unter `/ki/` im selben Origin wie lanpa. Beide Anwendungen verwenden unterschiedliche, `HttpOnly`-gesetzte Sitzungscookies (`PHPSESSID` bzw. `INTRANETSESSID`); generierte Bilder in `sd_output/` werden nur als PNG mit `X-Content-Type-Options: nosniff` ausgeliefert, Dokument-Uploads gar nicht.
+Hinweis: LLMInt läuft unter `/ki/` im selben Origin wie lanpa. Beide Anwendungen verwenden unterschiedliche, `HttpOnly`-gesetzte Sitzungscookies (`PHPSESSID` bzw. `INTRANETSESSID`); generierte Bilder in `sd_output/` und `image_output/` werden nur als PNG mit `X-Content-Type-Options: nosniff` ausgeliefert, Dokument-Uploads gar nicht.
 
 ## Erstkonfiguration
 
@@ -597,6 +598,102 @@ Ohne erreichbaren Endpunkt bleibt der Chat vollständig nutzbar; das Diktat ist 
 SPEECHINT_URL=http://speech-host:8080 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
 ```
 
+## Bildgenerierung (ImageInt)
+
+Bilder erzeugt der separate Dienst [ImageInt](https://github.com/dareinelt/ImageInt): ein Prompt-Enhancer und ein Renderer auf Basis von **Qwen-Image-2.1**, hinter einem gemeinsamen HTTP-Service. LLMInt startet keine Bildmodelle selbst, sondern präsentiert dem laufenden Text-LLM das Tool `generate_image` und schickt den Bildwunsch per HTTP an einen ImageInt-Endpunkt. Ist kein Endpunkt konfiguriert oder erreichbar, bleibt der Chat vollständig nutzbar – nur das Tool fehlt dann im Angebot.
+
+ImageInt ersetzt die früheren Integrationen **AUTOMATIC1111** und **ComfyUI**. Das Tool heißt weiterhin `generate_image`; `generate_image_comfy` ist entfallen. Die Admin-Karten der alten Integrationen sind nur noch ausgeblendet, ihre Tabellen und Einstellungen bleiben erhalten.
+
+### Ablauf
+
+1. **Erkennung:** Der Systemprompt enthält die Auslöse-Formulierungen aus `image_prompt_trigger_text` (Standard: „Generiere ein Bild …", „Erstelle eine Grafik …", „Zeige mir ein Bild von …"). Genauso wichtig ist die Gegenregel aus `image_prompt_anti_trigger_text`: eine Frage *über* Bilder („Wie funktioniert Bildgenerierung?") darf das Tool nicht auslösen. Beide Texte sind in der Admin-Karte editierbar, damit sie ohne Deployment erweitert werden können.
+2. **Aufruf:** `api/chat.php` schickt `POST /v1/images/generations` mit `prompt`, optional `negative_prompt` und `size` (z. B. `16:9`, `1:1`, `4:3`) – und immer mit `wait: false`. Der Dienst antwortet sofort mit **202** und einer `job_id`; ein PHP-Request bleibt damit nicht minutenlang offen.
+3. **Warten:** LLMInt pollt `status_url`, solange der Auftrag `queued` oder `running` ist, und zeigt den Fortschritt anhand von `stage` (`queued` → `enhancing` → `rendering` → `done`). Nach `IMAGEINT_SYNC_TIMEOUT` (Standard 120 s) gibt der Request den Auftrag an den Browser zurück, der über `api/image_status.php` weiterpollt.
+4. **Ergebnis:** Ist der Auftrag `done`, lädt LLMInt das PNG über `image_url` herunter und legt es in `image_output/` ab. Im Chat erscheint es als Markdown-Bild.
+
+Die `image_url` aus dem Job-Dokument zeigt auf den ImageInt-Host, den ein Browser in der Regel nicht erreichen kann. LLMInt spiegelt das PNG deshalb lokal und verwendet für Chat und Mail die lokale Adresse.
+
+### Lade-Feedback
+
+Nach einem Neustart lädt ImageInt erst den Enhancer und den Renderer. Solange antwortet `/v1/ready` und `POST /v1/images/generations` mit **503** und `transient: true` samt deutschem Hinweistext und `Retry-After`. LLMInt behandelt das **nicht** als Fehler: Der Chat zeigt eine Wartemeldung und fragt nach der von `Retry-After` vorgegebenen Zeit erneut an. Erst wenn der Host die Hardwareanforderung nicht erfüllt (`503 host_unsupported`, AVX2 fehlt), meldet der Verbindungstest einen echten Fehler – Warten hilft dort nicht.
+
+### Zustimmung und Benachrichtigungsmail
+
+Eine CPU-Generierung dauert Minuten. Läuft der Auftrag nach `IMAGEINT_SYNC_TIMEOUT` noch, blendet der Chat die Zustimmungsfrage aus `image_notify_consent_text` ein:
+
+> Das Generieren dieser Antwort kann einige Zeit in Anspruch nehmen. Möchten Sie per E-Mail über die Fertigstellung benachrichtigt werden?
+
+![Zustimmungsfrage im Chat nach einem laufenden Bildauftrag](docs/images/bildgenerierung-zustimmung.png)
+
+Darunter stehen „Ja, per E-Mail benachrichtigen" und „Nein, ich warte hier". Ein „Ja" legt über `api/image_notify.php` genau eine Zeile in `image_notifications` an; ein zweiter Klick oder ein Neuladen erzeugt dank `UNIQUE KEY uniq_job_user` keine zweite Mail. Ein „Nein" erzeugt keine Zeile und keine Mail.
+
+Die Mail verschickt **nicht** der Browser, sondern `api/image_notify_worker.php`:
+
+```bash
+* * * * * php /var/www/html/api/image_notify_worker.php --limit=20 >/dev/null
+```
+
+Der Worker fragt den Auftragsstatus ab und schickt die Mail, sobald das Bild fertig ist – auch bei geschlossenem Browser. Er läuft nur einmal gleichzeitig (Dateisperre), damit zwei überlappende Cron-Läufe nicht doppelt zustellen. ImageInt bewahrt fertige Bilder nur `IMAGEINT_JOB_RETENTION_SECONDS` lang auf (Standard 24 h); ist der Auftrag danach weg, antwortet der Dienst mit `404 not_found` und die Zeile wird als `expired` markiert, statt einen toten Link zu verschicken.
+
+### Platzhalter
+
+Beide Texte – Zustimmungsfrage und Mail – sind vollständig templatisiert. Alle Platzhalter werden über `str_replace()` aufgelöst; unbekannte bleiben unverändert stehen.
+
+| Platzhalter | Inhalt |
+|---|---|
+| `{sitename}` | Absendername (`smtp_from_name`) |
+| `{username}` | Benutzername des Empfängers |
+| `{email}` | hinterlegte E-Mail-Adresse des Empfängers |
+| `{prompt}` | der Bildwunsch |
+| `{chat_url}` | Deep-Link in den Chat |
+| `{image_url}` | direkte Adresse des fertigen Bildes |
+| `{duration}` | Dauer der Generierung, lesbar formatiert |
+| `{width}`, `{height}` | Abmessungen des fertigen Bildes |
+| `{job_id}` | Auftragsnummer bei ImageInt |
+
+Der Deep-Link hat die Form `index.php?session=<session_id>&job=<job_id>`. `index.php` übernimmt die Sitzung aus der URL **nur**, wenn sie dem angemeldeten Benutzer gehört; ein Link aus einer fremden Mail öffnet keine fremde Sitzung. Danach wird zum Bild gescrollt, das Ergebnis kurz hervorgehoben und die Parameter werden per `history.replaceState()` aus der Adresszeile entfernt.
+
+![Fertiges Bild im Chat mit Abmessungen und Dauer](docs/images/bildgenerierung-ergebnis.png)
+
+![Deep-Link aus der Mail: hervorgehobenes Bild im Chat](docs/images/bildgenerierung-deeplink.png)
+
+### Administration
+
+Die Karte **🖼️ Bildgenerierung** bündelt Aktivierung, aktiven Endpunkt, die Zustimmungs- und Mailtexte, die Basis-URL für die Links sowie Auslöse- und Gegenregel. Darunter lassen sich die Image-Endpunkte verwalten; der Verbindungstest fragt `/v1/ready` ab und zeigt bei Erfolg zusätzlich die beiden Modellserver und die Dimensionierung des Hosts.
+
+![Karte „Bildgenerierung" im Adminbereich](docs/images/bildgenerierung-admin.png)
+
+Die Tabelle `image_endpoints` speichert `alias`, `base_url`, `token`, `timeout`, `is_active` und `sort_order`. Die Umgebungsvariablen `IMAGEINT_URL`, `IMAGEINT_TOKEN` und `IMAGEINT_TIMEOUT` belegen den Standard-Endpunkt vor und haben – wie bei SpeechInt – Vorrang vor der Datenbank; die Karte zeigt unter „Aktuell wirksam" an, woher der Wert stammt. Das Token wird als `X-Auth-Token` gesendet und in der Oberfläche nur maskiert angezeigt.
+
+| Einstellungsschlüssel | Bedeutung |
+|---|---|
+| `image_generation_enabled` | stellt das Tool `generate_image` bereit |
+| `image_endpoint_id` | fest gewählter Endpunkt (`0` = erster aktiver) |
+| `image_notify_enabled` | blendet die Zustimmungsfrage ein |
+| `image_notify_consent_text` | Text der Rückfrage |
+| `image_notify_email_subject`, `image_notify_email_body` | Betreff und Text der Mail |
+| `image_notify_base_url` | Präfix für `{chat_url}` und `{image_url}` |
+| `image_prompt_trigger_text`, `image_prompt_anti_trigger_text` | Systemprompt-Regeln |
+
+### ImageInt-Dienst
+
+Die rechenintensiven Bestandteile wurden in das Projekt [ImageInt](https://github.com/dareinelt/ImageInt) extrahiert. LLMInt spricht einen oder mehrere ImageInt-Endpunkte über HTTP an:
+
+| Aufruf in LLMInt | Endpunkt in ImageInt |
+|---|---|
+| Verbindungstest und Lade-Feedback | `GET /v1/ready`, `GET /v1/health`, `GET /v1/models` |
+| Auftrag starten | `POST /v1/images/generations` (mit `wait: false`) |
+| Auftrag verfolgen | `GET /v1/jobs/{job_id}` |
+| Bild abholen | `GET /v1/jobs/{job_id}/image` bzw. `GET /v1/images/{job_id}` |
+
+**Mindestanforderung an den ImageInt-Host:** eine CPU mit **AVX2** (der Renderer nutzt `diffusers`/`transformers` und läuft nur auf der CPU). Der Verbindungstest liest die tatsächliche Ausstattung über `/v1/health` aus und meldet sie im Adminbereich.
+
+Ohne erreichbaren Endpunkt bleibt der Chat vollständig nutzbar; das Tool fehlt dann. Ein lokaler Testaufbau lässt sich mit dem Compose-Override `docker-compose.test.yml` starten, der nur `db` und `web` benötigt und auf einen externen ImageInt-Host zeigt:
+
+```bash
+IMAGEINT_URL=http://image-host:8080 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+```
+
 ## API
 
 ### Chat und Sitzungen
@@ -652,7 +749,7 @@ print(response.choices[0].message.content)
 |---|---|
 | Dokumente | `api/upload_document.php`, `api/document_status.php`, `api/document_retention.php`, `api/document_delete.php`, `api/rebuild_embeddings.php` |
 | Wissensdatenbank (Admin) | `api/vector_import.php` (docvecwizard-Export importieren / Archive auflisten), `api/test_vector_store.php` (Verbindungstest Remote-API oder Milvus) |
-| Bildgenerierung | `api/sd_generate.php`, `api/sd_checkpoints.php`, `api/comfy_generate.php`, `api/comfy_checkpoints.php` |
+| Bildgenerierung | `api/image_status.php` (Status und PNG eines Auftrags), `api/image_notify.php` (Zustimmung zur Benachrichtigungsmail), `api/image_health.php` (Verbindungstest eines Endpunkts), `api/image_notify_worker.php` (Cron/CLI-Versand der Benachrichtigungsmails) |
 | Integrationen | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` |
 | Benutzer und Status | `api/verify_email.php`, `api/reset_password.php`, `api/admin_user_action.php`, `api/heartbeat.php` |
 | Spracherkennung und Diktat | `api/speech_config.php` (Konfiguration und CSRF für die Oberfläche), `api/speech_transcribe.php` (Audiodatei → Rohtext), `api/speech_process.php` (Fragment → bereinigter Text), `api/speech_health.php` (Verbindungstest eines Endpunkts, optional `url`/`token`) |
@@ -679,11 +776,17 @@ Beim Streaming werden zusätzlich zu den OpenAI-Chunks folgende Frames gesendet:
 |---|---|---|
 | `search_web` | konfiguriertes SearXNG | `query` |
 | `web_fetch` | konfiguriertes SearXNG | `url`, optional `max_chars` (500–20000, Standard 6000) |
-| `generate_image` | aktiver AUTOMATIC1111-Endpunkt | `prompt`, optional `negative_prompt`, `width`, `height` |
-| `generate_image_comfy` | aktiver ComfyUI-Endpunkt | wie `generate_image` |
+| `generate_image` | aktiver ImageInt-Endpunkt | `prompt`, optional `negative_prompt`, `size` (z. B. `16:9`, `1:1`, `4:3`) |
 | `query_documents` | vorhandene Dokument-Uploads | `query` |
 
 Tools werden nur an Endpunkte gesendet, die als Tool-Calling-fähig markiert sind.
+
+`generate_image` ist das einzige Bild-Tool: die früheren Integrationen AUTOMATIC1111
+(`generate_image` mit `width`/`height`) und ComfyUI (`generate_image_comfy`) sind
+entfallen. Die Seitenverhältnisse wählt ImageInt selbst über seinen Prompt-Enhancer;
+`size` bleibt als Notausgang. Da eine CPU-Generierung mehrere Minuten dauert, kann
+sich der Nutzer per E-Mail benachrichtigen lassen; die Mail schickt
+`api/image_notify_worker.php`, damit sie auch bei geschlossenem Browser ankommt.
 
 ## Datenmodell
 
@@ -696,7 +799,7 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 | Chat und Routing | `conversation_sessions`, `routing_categories`, `routing_rules`, `search_logs` |
 | Dokumente und Embeddings | `document_uploads`, `document_chunks`, `embedding_endpoints`, `embedding_cache`, `embedding_logs` |
 | Zentrale Wissensdatenbank | `vector_documents`, `vector_chunks`, `vector_imports`, `vector_query_logs` (Vektoren selbst liegen in Milvus) |
-| Bildgenerierung | `sd_endpoints`, `sd_tasks`, `comfy_endpoints`, `comfy_tasks` |
+| Bildgenerierung | `image_endpoints`, `image_notifications`; die Tabellen der früheren Integrationen (`sd_endpoints`, `sd_tasks`, `comfy_endpoints`, `comfy_tasks`) bleiben erhalten, werden aber nicht mehr angesprochen |
 | Monitoring | `active_clients`, `client_count_log`, `client_count_daily`, `user_login_log` |
 | Sicherheit | `prompt_security_rules`, `prompt_security_logs` |
 
@@ -716,7 +819,7 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 - Alle Standardpasswörter in `.env` und das initiale Admin-Passwort vor dem produktiven Einsatz ändern.
 - Den Admin-Bereich nur über vertrauenswürdige Netze zugänglich machen.
 - API-Keys, LDAP-Bind-Passwörter, SMTP-Zugangsdaten und Kerberos-Dateien nicht in das Repository einchecken.
-- Speicherbedarf von `doc_uploads` und `sd_output` sowie die Log-Aufbewahrung regelmäßig prüfen.
+- Speicherbedarf von `doc_uploads`, `sd_output` und `image_output` sowie die Log-Aufbewahrung regelmäßig prüfen.
 - Nach einem Wechsel des Embedding-Modells fehlende Embeddings über den Admin-Bereich neu berechnen und bei Bedarf den Embedding-Cache leeren.
 
 ## Troubleshooting

@@ -372,9 +372,76 @@ function ensureRuntimeSchema(PDO $pdo): void
         try { $pdo->exec($speechAlter); } catch (Throwable $_e) { /* column already exists */ }
     }
 
+    // ImageInt endpoints: the image-generation service
+    // (https://github.com/dareinelt/ImageInt) that serves Qwen-Image-2.1 behind
+    // one HTTP API and replaces the former AUTOMATIC1111 / ComfyUI integrations.
+    // The `timeout` is the ceiling of the whole operation including job polling,
+    // which is why it defaults to 1800 seconds and not to the 120 of SpeechInt:
+    // rendering on a CPU takes minutes.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS image_endpoints (
+            id          INT          NOT NULL AUTO_INCREMENT,
+            alias       VARCHAR(120) NOT NULL DEFAULT '',
+            base_url    VARCHAR(500) NOT NULL,
+            token       TEXT         NULL,
+            timeout     INT          NOT NULL DEFAULT 1800,
+            is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+            sort_order  INT          NOT NULL DEFAULT 0,
+            created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                     ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    // Idempotent column upgrades for installations whose image_endpoints table
+    // was created by an earlier version.
+    foreach ([
+        "ALTER TABLE image_endpoints ADD COLUMN alias      VARCHAR(120) NOT NULL DEFAULT '' AFTER id",
+        "ALTER TABLE image_endpoints ADD COLUMN token      TEXT NULL AFTER base_url",
+        "ALTER TABLE image_endpoints ADD COLUMN timeout    INT NOT NULL DEFAULT 1800 AFTER token",
+        "ALTER TABLE image_endpoints ADD COLUMN is_active  TINYINT(1) NOT NULL DEFAULT 1 AFTER timeout",
+        "ALTER TABLE image_endpoints ADD COLUMN sort_order INT NOT NULL DEFAULT 0 AFTER is_active",
+        "ALTER TABLE image_endpoints ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER sort_order",
+        "ALTER TABLE image_endpoints ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at",
+    ] as $imageAlter) {
+        try { $pdo->exec($imageAlter); } catch (Throwable $_e) { /* column already exists */ }
+    }
+
+    // E-mail notifications for long-running image jobs: one row per
+    // (job, user) pair. Written by api/image_notify.php as soon as the user
+    // agrees to be notified, drained by api/image_notify_worker.php (cron/CLI),
+    // which polls ImageInt and sends the mail once the job is done. The job
+    // itself is only retrievable for IMAGEINT_JOB_RETENTION_SECONDS (24 h by
+    // default), so the worker has to deliver inside that window – a job that
+    // expires first is marked `expired` and reported instead of mailed as a
+    // dead link.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS image_notifications (
+            id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            job_id        VARCHAR(64)  NOT NULL,
+            user_id       INT          NOT NULL,
+            session_id    CHAR(64)     NOT NULL,
+            prompt        TEXT         NOT NULL,
+            status_url    VARCHAR(500) NOT NULL,
+            image_url     VARCHAR(500) NOT NULL,
+            status        ENUM('pending','sent','failed','expired') NOT NULL DEFAULT 'pending',
+            error         VARCHAR(500) NOT NULL DEFAULT '',
+            created_at    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            sent_at       TIMESTAMP(3) NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uniq_job_user (job_id, user_id),
+            KEY idx_status (status, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     // Balancer health / circuit-breaker / latency columns.
     // Shared shape across endpoints, sd_endpoints and comfy_endpoints so the
     // routing engine (lib/balancer_engine.php) can treat all three uniformly.
+    // sd_endpoints and comfy_endpoints stay in the list even though the
+    // integrations behind them were replaced by ImageInt: the tables are kept
+    // (a DROP TABLE would run on every start and destroy data), so their
+    // columns must keep being upgraded.
     foreach (['endpoints', 'sd_endpoints', 'comfy_endpoints'] as $balancerTable) {
         foreach ([
             "ALTER TABLE {$balancerTable} ADD COLUMN consecutive_failures INT UNSIGNED NOT NULL DEFAULT 0 AFTER is_active",
@@ -1135,6 +1202,150 @@ function renderRegistrationEmailTemplate(string $template, array $vars): string
 }
 
 /**
+ * Default consent question shown in the chat as soon as an image job is
+ * queued (HTTP 202). Supports the placeholders documented in
+ * imageGenerationPlaceholderHelp() – in particular {prompt}, {duration},
+ * {email} and {sitename}.
+ */
+const IMAGE_NOTIFY_CONSENT_DEFAULT = 'Das Generieren dieser Antwort kann einige Zeit in Anspruch nehmen. Möchten Sie per E-Mail über die Fertigstellung benachrichtigt werden?';
+
+/**
+ * Default subject line for the "your image is ready" notification e-mail.
+ */
+const IMAGE_NOTIFY_EMAIL_SUBJECT_DEFAULT = 'Dein Bild ist fertig – {sitename}';
+
+/**
+ * Default body template for the "your image is ready" notification e-mail.
+ * Supports the placeholders {sitename}, {username}, {email}, {prompt},
+ * {chat_url}, {image_url}, {duration}, {width}, {height} and {job_id}, all of
+ * which are substituted by renderImageNotificationTemplate().
+ */
+const IMAGE_NOTIFY_EMAIL_BODY_DEFAULT = <<<'TEXT'
+Hallo {username},
+
+Dein Bild ist fertig.
+
+Bildwunsch: {prompt}
+Dauer: {duration}
+
+Zum Bild im Chat: {chat_url}
+Direkt zum Bild: {image_url}
+
+Viele Grüße,
+Dein {sitename}-Team
+TEXT;
+
+/**
+ * Default formulation that makes the text model call `generate_image`.
+ * Editable in the admin area so the trigger phrases can be extended without a
+ * deployment.
+ */
+const IMAGE_PROMPT_TRIGGER_DEFAULT = 'Wenn der Nutzer ausdrücklich ein Bild, eine Grafik, eine Illustration, ein Foto oder eine Visualisierung verlangt – erkennbar an Formulierungen wie „Generiere ein Bild", „Erstelle eine Grafik", „Zeichne …", „Zeige mir ein Bild von …", „Mach mir ein Bild von …" –, dann rufe **immer** das Tool `generate_image` auf. Antworte in diesem Fall **nicht** mit einer Textbeschreibung und **nicht** mit einem Platzhalterbild. Kündige den Aufruf kurz an und weise darauf hin, dass die Generierung einige Zeit dauern kann.';
+
+/**
+ * Default formulation that keeps the text model from calling `generate_image`
+ * when the user only talks about images. Editable in the admin area.
+ */
+const IMAGE_PROMPT_ANTI_TRIGGER_DEFAULT = 'Rufe `generate_image` **nicht** auf, wenn der Nutzer nur über Bilder *spricht* („wie funktioniert Bildgenerierung?", „welches Modell nutzt du?") oder wenn er ein vorhandenes Bild beschreiben lässt.';
+
+/**
+ * Return the configured consent question for the image notification.
+ */
+function getImageNotifyConsentText(): string
+{
+    $value = trim(getSetting('image_notify_consent_text', ''));
+    return $value !== '' ? $value : IMAGE_NOTIFY_CONSENT_DEFAULT;
+}
+
+/**
+ * Return the configured subject line of the image notification e-mail.
+ */
+function getImageNotifyEmailSubject(): string
+{
+    $value = trim(getSetting('image_notify_email_subject', ''));
+    return $value !== '' ? $value : IMAGE_NOTIFY_EMAIL_SUBJECT_DEFAULT;
+}
+
+/**
+ * Return the configured body template of the image notification e-mail.
+ */
+function getImageNotifyEmailBody(): string
+{
+    $value = getSetting('image_notify_email_body', '');
+    return trim($value) !== '' ? $value : IMAGE_NOTIFY_EMAIL_BODY_DEFAULT;
+}
+
+/**
+ * Whether the e-mail notification for finished image jobs is offered at all.
+ * When disabled the consent question is not rendered and api/image_notify.php
+ * refuses to queue anything.
+ */
+function imageNotifyEnabled(): bool
+{
+    return getSetting('image_notify_enabled', '1') === '1';
+}
+
+/**
+ * Return the configured formulation that triggers the generate_image tool.
+ */
+function getImagePromptTriggerText(): string
+{
+    $value = trim(getSetting('image_prompt_trigger_text', ''));
+    return $value !== '' ? $value : IMAGE_PROMPT_TRIGGER_DEFAULT;
+}
+
+/**
+ * Return the configured formulation that suppresses the generate_image tool.
+ */
+function getImagePromptAntiTriggerText(): string
+{
+    $value = trim(getSetting('image_prompt_anti_trigger_text', ''));
+    return $value !== '' ? $value : IMAGE_PROMPT_ANTI_TRIGGER_DEFAULT;
+}
+
+/**
+ * Human-readable list of the placeholders available in the consent question
+ * and the notification e-mail. Rendered in the admin card so an administrator
+ * sees which names exist without reading the code.
+ *
+ * @return array<string,string> placeholder (without braces) => description
+ */
+function imageGenerationPlaceholderHelp(): array
+{
+    return [
+        'sitename'  => 'Name der Installation (E-Mail-Absendername)',
+        'username'  => 'Anzeigename des Nutzers',
+        'email'     => 'E-Mail-Adresse des Nutzers',
+        'prompt'    => 'der ursprüngliche Bildwunsch',
+        'chat_url'  => 'Deep-Link in den Chat mit dem fertigen Bild',
+        'image_url' => 'direkte URL des PNG',
+        'duration'  => 'Dauer der Generierung, z. B. „2:41 Minuten"',
+        'width'     => 'Breite des Bildes in Pixeln',
+        'height'    => 'Höhe des Bildes in Pixeln',
+        'job_id'    => 'die ImageInt-Job-ID',
+    ];
+}
+
+/**
+ * Substitute {key} placeholders in an image notification subject/body template
+ * with the given values. Same contract as renderRegistrationEmailTemplate();
+ * the indirection exists so both templates stay independently greppable and a
+ * change to one cannot silently alter the other.
+ *
+ * @param array<string,string> $vars
+ */
+function renderImageNotificationTemplate(string $template, array $vars): string
+{
+    $search  = [];
+    $replace = [];
+    foreach ($vars as $key => $val) {
+        $search[]  = '{' . $key . '}';
+        $replace[] = $val;
+    }
+    return str_replace($search, $replace, $template);
+}
+
+/**
  * Record a successful login of $userId and refresh users.last_login.
  *
  * Feeds the "angemeldete Nutzer" series of the usage statistics. Failures are
@@ -1635,6 +1846,41 @@ function loadConversationSession(string $sessionId): ?array
             'SELECT model, messages FROM conversation_sessions WHERE session_id = ?'
         );
         $stmt->execute([$sessionId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+        $messages = json_decode((string) $row['messages'], true);
+        if (!is_array($messages)) {
+            return null;
+        }
+        return ['model' => (string) $row['model'], 'messages' => $messages];
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+/**
+ * Load a conversation session that belongs to $userId.
+ *
+ * Unlike loadConversationSession() this enforces ownership, which is what the
+ * image deep link needs: a session id taken from a URL must never open someone
+ * else's chat. Returns null when the session does not exist, is expired or
+ * belongs to another user.
+ *
+ * @return array{model: string, messages: array}|null
+ */
+function loadUserConversationSession(string $sessionId, int $userId): ?array
+{
+    if ($sessionId === '' || $userId <= 0) {
+        return null;
+    }
+    try {
+        $stmt = getDb()->prepare(
+            'SELECT model, messages FROM conversation_sessions
+              WHERE session_id = ? AND user_id = ? LIMIT 1'
+        );
+        $stmt->execute([$sessionId, $userId]);
         $row = $stmt->fetch();
         if ($row === false) {
             return null;

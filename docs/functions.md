@@ -15,6 +15,7 @@ kompakte Navigationshilfe siehe [`agent_index.md`](agent_index.md).
 - [config.php](#configphp)
 - [lib/balancer_engine.php](#libbalancer_enginephp)
 - [lib/healthcheck.php](#libhealthcheckphp)
+- [lib/image_generation.php](#libimage_generationphp)
 - [lib/ldap_auth.php](#libldap_authphp)
 - [lib/mailer.php](#libmailerphp)
 - [lib/openai_api.php](#libopenai_apiphp)
@@ -28,8 +29,6 @@ kompakte Navigationshilfe siehe [`agent_index.md`](agent_index.md).
 - [api/doc_convert.php](#apidoc_convertphp)
 - [api/pdf_render.php](#apipdf_renderphp)
 - [api/vision.php](#apivisionphp)
-- [api/sd_balancer.php](#apisd_balancerphp)
-- [api/comfy_balancer.php](#apicomfy_balancerphp)
 - [api/heartbeat.php](#apiheartbeatphp)
 - [api/reset_password.php](#apireset_passwordphp)
 - [api/verify_email.php](#apiverify_emailphp)
@@ -57,6 +56,14 @@ Intelligenzgruppen.
 | `getRegistrationEmailSubject` | `getRegistrationEmailSubject(): string` | Liefert den konfigurierten Betreff für die Registrierungs-E-Mail oder einen Standard. |
 | `getRegistrationEmailBody` | `getRegistrationEmailBody(): string` | Liefert die konfigurierte Vorlage für die Registrierungs-E-Mail mit Fallback-Kette. |
 | `renderRegistrationEmailTemplate` | `renderRegistrationEmailTemplate(string $template, array $vars): string` | Ersetzt `{key}`-Platzhalter in einer E-Mail-Vorlage durch Werte aus einem Array. |
+| `getImageNotifyConsentText` | `getImageNotifyConsentText(): string` | Liefert die konfigurierte Zustimmungsfrage zur Benachrichtigungs-Mail (mit Standardwert). |
+| `getImageNotifyEmailSubject` | `getImageNotifyEmailSubject(): string` | Liefert den konfigurierten Betreff der Benachrichtigungs-Mail. |
+| `getImageNotifyEmailBody` | `getImageNotifyEmailBody(): string` | Liefert die konfigurierte Textvorlage der Benachrichtigungs-Mail. |
+| `imageNotifyEnabled` | `imageNotifyEnabled(): bool` | Ist der Mail-Versand nach der Generierung aktiviert (`image_notify_enabled`)? |
+| `getImagePromptTriggerText` | `getImagePromptTriggerText(): string` | Liefert die Auslöseformulierungen, die dem Text-LLM den Werkzeugaufruf nahelegen. |
+| `getImagePromptAntiTriggerText` | `getImagePromptAntiTriggerText(): string` | Liefert die Gegenregeln, die einen unnötigen Werkzeugaufruf verhindern. |
+| `imageGenerationPlaceholderHelp` | `imageGenerationPlaceholderHelp(): array` | Liefert die verfügbaren Platzhalter (ohne Klammern) mit Beschreibung für Admin-UI und Vorlagenprüfung. |
+| `renderImageNotificationTemplate` | `renderImageNotificationTemplate(string $template, array $vars): string` | Ersetzt `{key}`-Platzhalter in Zustimmungsfrage und Benachrichtigungs-Mail; unbekannte Platzhalter bleiben stehen. |
 | `currentUserRole` | `currentUserRole(): ?string` | Liefert die Rolle (`user`/`admin`) des angemeldeten Benutzers oder `null`. |
 | `isCurrentUserAdmin` | `isCurrentUserAdmin(): bool` | Prüft, ob der angemeldete Benutzer Administratorrechte hat. |
 | `requireAdminOrRedirect` | `requireAdminOrRedirect(string $loginUrl = 'login.php'): void` | Schützt HTML-Seiten; leitet zum Login um oder zeigt 403, falls kein Administrator. |
@@ -105,7 +112,7 @@ Einstellungen ab.
 
 ## lib/balancer_engine.php
 
-Gemeinsame Balancer-Logik für LLM-, AUTOMATIC1111- und ComfyUI-Endpunkte.
+Gemeinsame Balancer-Logik für LLM- und Embedding-Endpunkte.
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
@@ -135,6 +142,99 @@ Gemeinsame Balancer-Logik für LLM-, AUTOMATIC1111- und ComfyUI-Endpunkte.
 |---|---|---|
 | `probeLlmEndpoints` | `probeLlmEndpoints(int $timeoutSeconds = 3): array` | Prüft aktiv alle aktiven LLM-Endpunkte parallel über `/models`; liefert Ergebnisse je Endpunkt. |
 | `isAnyLlmEndpointHealthy` | `isAnyLlmEndpointHealthy(): bool` | Liefert, ob mindestens ein LLM-Endpunkt erreichbar ist (10 Sekunden gecacht). Steuert den Wartungsmodus in `index.php`. |
+
+## lib/image_generation.php
+
+Bildgenerierung als HTTP-Client des separaten Dienstes
+[ImageInt](https://github.com/dareinelt/ImageInt): Endpunktauflösung, Rendering
+(Anlegen, Polling, PNG-Cache), Zustimmung, Benachrichtigungs-E-Mail und der
+Systemprompt, der dem Text-LLM das Werkzeug `generate_image` erklärt. Der Dienst
+ist zustandslos; jeder Auftrag wird über `job_id` und `status_url` verfolgt.
+Details zur Pipeline in [`architecture.md`](architecture.md#132-bildgenerierungs-pipeline).
+
+**Konstanten:** `IMAGE_INT_TIMEOUT_DEFAULT` (1800 s – Obergrenze eines Rendervorgangs
+inkl. Polling), `IMAGE_INT_SYNC_TIMEOUT_DEFAULT` (120 s – Budget einer einzelnen
+PHP-Anfrage, danach übernimmt das Browser-Polling), `IMAGE_INT_POLL_INTERVAL_DEFAULT`
+(15 s – Rückfallwert, falls ImageInt kein `poll_after_seconds` liefert),
+`IMAGE_INT_OUTPUT_DIR` (`image_output` – lokaler PNG-Cache).
+
+### Endpunkt, URL und Token
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `imageIntEndpoints` | `imageIntEndpoints(): array` | Alle Zeilen der Tabelle `image_endpoints`, sortiert nach `sort_order`, `id`; bei fehlender Tabelle `[]`. |
+| `imageIntEndpoint` | `imageIntEndpoint(int $id): ?array` | Ein Endpunkt per ID oder `null`. |
+| `imageIntEndpointId` | `imageIntEndpointId(): int` | ID des in den Einstellungen gewählten Endpunkts (`image_endpoint_id`), `0` wenn keiner gewählt ist. |
+| `imageIntActiveEndpoint` | `imageIntActiveEndpoint(): ?array` | Der wirksame Endpunkt: der gewählte, sonst der erste aktive (`enabled = 1`). |
+| `imageIntUrl` | `imageIntUrl(): string` | Basis-URL; Reihenfolge `IMAGEINT_URL` → Endpunktzeile → leer. |
+| `imageIntToken` | `imageIntToken(): string` | Zugangstoken; Reihenfolge `IMAGEINT_TOKEN` → Endpunktzeile → leer. Wird als `X-Auth-Token` gesendet. |
+| `imageIntTimeout` | `imageIntTimeout(): int` | Obergrenze eines Rendervorgangs in Sekunden; `IMAGEINT_TIMEOUT` → Endpunktzeile → 1800. |
+| `imageIntSyncTimeout` | `imageIntSyncTimeout(): int` | Zeitbudget einer einzelnen PHP-Anfrage; `IMAGEINT_SYNC_TIMEOUT` → 120, nie größer als `imageIntTimeout()`. |
+| `imageIntUrlSource` | `imageIntUrlSource(): string` | Quelle der wirksamen URL (`env`, `endpoint`, `none`) für die Admin-Anzeige. |
+| `imageIntSourceLabel` | `imageIntSourceLabel(string $source): string` | Menschenlesbares Label zu einer Quelle aus `imageIntUrlSource()`. |
+| `imageIntEndpointLabel` | `imageIntEndpointLabel(array $endpoint): string` | Anzeigename eines Endpunkts (Alias, sonst Host:Port, sonst Basis-URL). |
+| `imageIntMaskToken` | `imageIntMaskToken(string $token): string` | Maskiert ein Token für UI und Logs (nur Länge und die letzten vier Zeichen bleiben sichtbar). |
+| `imageIntEnabled` | `imageIntEnabled(): bool` | Ist die Bildgenerierung aktiviert (`image_generation_enabled`)? |
+| `imageIntConfigured` | `imageIntConfigured(): bool` | Ist eine Basis-URL vorhanden (Voraussetzung für das Werkzeug)? |
+| `imageIntSiteName` | `imageIntSiteName(): string` | Name der Installation für den Platzhalter `{sitename}`. |
+| `imageIntPublicBaseUrl` | `imageIntPublicBaseUrl(): string` | Öffentlich erreichbare Basis-URL für Links in der Benachrichtigungs-Mail. |
+| `imageIntChatUrl` | `imageIntChatUrl(string $sessionId, string $jobId): string` | Baut den Deep-Link `index.php?session=…&job=…` für die Mail. |
+| `imageIntAbsoluteImageUrl` | `imageIntAbsoluteImageUrl(string $relativePath): string` | Macht einen lokalen PNG-Pfad zu einer absoluten URL für Platzhalter und Chat. |
+
+### HTTP-Transport und Zustandsabfragen
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `imageIntHttpCall` | `imageIntHttpCall(string $url, array $options = []): array` | Gemeinsamer cURL-Aufruf mit `X-Auth-Token`, Timeout-Klemmen und flacher Fehlerauswertung (`ok`, `error`, `message`, `transient`). |
+| `imageIntDownloadImage` | `imageIntDownloadImage(string $url, string $token = '', int $timeout = 60): array` | Lädt das fertige PNG als Binärdaten. |
+| `imageIntReady` | `imageIntReady(?string $url = null, ?string $token = null, array $options = []): array` | `GET /v1/ready`; unterscheidet Ladephase (`transient`, `retry_after`) von permanenter Fehlkonfiguration (`host_unsupported`). |
+| `imageIntHealth` | `imageIntHealth(?string $url = null, ?string $token = null, array $options = []): array` | `GET /v1/health`; liefert Komponenten- und Host-Dimensionierung (`host.cpu_cores`, `host.memory_gb`, `host.avx2`, `host.blocking`, `host.warnings`). |
+| `imageIntModels` | `imageIntModels(?string $url = null, ?string $token = null): array` | `GET /v1/models`; Zustand beider Modellserver. |
+| `imageIntDashboardStatus` | `imageIntDashboardStatus(bool $allowProbe = true): array` | Aggregierter Status für Admin-Dashboard und Karte (`configured`, `ready`, `loading`, `reachable`, `status`, `message`, `retry_after`, `source`). |
+
+### Darstellung und Auftragsdaten
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `imageIntStageMessage` | `imageIntStageMessage(string $stage): string` | Fortschrittstext zur Phase (`queued` → `enhancing` → `rendering` → `done`). |
+| `imageIntStageLabel` | `imageIntStageLabel(string $stage): string` | Kurzes Label zur Phase. |
+| `imageIntFormatDuration` | `imageIntFormatDuration(int $milliseconds): string` | Formatiert Millisekunden als Dauer für den Platzhalter `{duration}`. |
+| `imageIntJobDurationMs` | `imageIntJobDurationMs(array $job): int` | Gesamtdauer eines Auftrags aus `timings.total_ms` (inkl. Enhancer). |
+| `imageIntClientJob` | `imageIntClientJob(array $job): array` | Reduziert ein Auftragsdokument auf die Felder, die die Chat-Oberfläche braucht. |
+| `imageIntUserName` | `imageIntUserName(int $userId): string` | Anzeigename des Nutzers für Platzhalter und Mails. |
+
+### Zustimmung und Benachrichtigung
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `imageIntRenderConsentText` | `imageIntRenderConsentText(array $vars): string` | Rendert die konfigurierte Zustimmungsfrage; noch unbekannte Platzhalter bleiben leer. |
+| `imageIntNotificationStatus` | `imageIntNotificationStatus(string $jobId, int $userId): string` | Zustand der Benachrichtigung (`pending`, `sent`, `failed`, `expired`) oder `''`. |
+| `imageIntNotifyClientPayload` | `imageIntNotifyClientPayload(int $userId, string $prompt = '', bool $requested = false): array` | Nutzlast für die Oberfläche: Zustimmungstext, Zustand und ob bereits eine Mail vorgemerkt ist. |
+| `imageIntQueueNotification` | `imageIntQueueNotification(string $jobId, int $userId, string $sessionId, string $prompt, string $statusUrl, string $imageUrl): array` | Legt die Benachrichtigung in `image_notifications` an (Upsert über `job_id`+`user_id`). |
+| `imageIntPendingNotifications` | `imageIntPendingNotifications(int $limit = 20): array` | Offene Benachrichtigungen samt Empfängeradresse aus `users.email`. |
+| `imageIntPersistJobResult` | `imageIntPersistJobResult(int $userId, string $sessionId, string $jobId, array $job, string $imageUrl): void` | Schreibt Maße, Seed und Dauer in die gespeicherte Chat-Sitzung – nötig, weil der PNG-Cache die spätere Statusabfrage abkürzt. |
+| `imageIntMarkNotification` | `imageIntMarkNotification(int $id, string $status, string $error = ''): void` | Setzt Zustand und Fehlertext einer Benachrichtigung. |
+| `imageIntTemplateVars` | `imageIntTemplateVars(array $job, string $username, string $email, string $sessionId, string $imageUrl = ''): array` | Baut alle Platzhalterwerte für Zustimmungsfrage und Mail (siehe `imageGenerationPlaceholderHelp()`). |
+| `imageIntSendNotificationEmail` | `imageIntSendNotificationEmail(array $notification, array $job, string $imageUrl): array` | Rendert Betreff und Text der Mail und versendet sie über `sendMail()`. |
+| `imageIntProcessNotifications` | `imageIntProcessNotifications(int $limit = 20, ?callable $log = null): array` | Arbeitet offene Benachrichtigungen ab: Auftrag nachladen, PNG cachen, Ergebnis persistieren, Mail senden, Zustand fortschreiben. |
+| `buildImageToolSystemPrompt` | `buildImageToolSystemPrompt(): string` | Systemprompt mit Auslöse- und Gegenregeln aus den Einstellungen, damit das Text-LLM den Werkzeugaufruf selbst erkennt. |
+
+### Rendering
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `imageIntOutputDir` | `imageIntOutputDir(): string` | Absoluter Pfad des PNG-Caches `image_output/` (wird bei Bedarf angelegt). |
+| `imageIntJobFileName` | `imageIntJobFileName(string $jobId): string` | Dateiname des zwischengespeicherten PNGs zu einer `job_id`. |
+| `imageIntStoreImage` | `imageIntStoreImage(string $jobId, string $binary): string` | Legt PNG-Binärdaten im Cache ab und liefert den relativen Pfad. |
+| `imageIntEnsureImage` | `imageIntEnsureImage(array $job): string` | Liefert den lokalen PNG-Pfad, lädt das Bild bei Bedarf von ImageInt nach. |
+| `imageIntPollJob` | `imageIntPollJob(array $job, int $deadline, string $token, ?callable $onProgress = null): array` | Fragt `status_url` ab, solange `queued`/`running`, und meldet den Phasenwechsel über `$onProgress`. |
+| `imageIntGenerate` | `imageIntGenerate(array $args, int $userId = 0, string $sessionId = ''): array` | Hauptpfad des Werkzeugs: sendet `wait: false`, verfolgt den Auftrag bis `done` oder übergibt bei Zeitüberschreitung an das Browser-Polling. |
+| `imageIntFetchJob` | `imageIntFetchJob(string $statusUrl, string $token = ''): array` | Holt ein Auftragsdokument; übersetzt `404` in einen abgelaufenen Auftrag. |
+| `imageIntResolveJob` | `imageIntResolveJob(array $record): array` | Löst einen gespeicherten Auftrag auf: aus dem Cache, sonst per HTTP; mit `enrich` wird das Dokument trotz Cache nachgeladen. |
+| `imageIntMarkdown` | `imageIntMarkdown(string $relativeImageUrl): string` | Markdown-Bildverweis auf den lokalen PNG-Pfad. |
+| `imageIntFindJobInMessages` | `imageIntFindJobInMessages(array $messages, string $jobId): ?array` | Sucht den Auftrag in einer gespeicherten Chat-Sitzung. |
+| `imageIntPatchJobInMessages` | `imageIntPatchJobInMessages(array $messages, string $jobId, array $patch): array` | Aktualisiert Felder eines Auftrags in einer gespeicherten Chat-Sitzung. |
+| `imageIntMessagesContainImage` | `imageIntMessagesContainImage(array $messages, string $relativeImageUrl): bool` | Prüft, ob ein Bild bereits in den Nachrichten steht (verhindert Dubletten beim Deep-Link). |
 
 ## lib/ldap_auth.php
 
@@ -331,18 +431,14 @@ Zentrale Chat-Pipeline (~3.300 Zeilen). Funktionen sind thematisch gruppiert.
 |---|---|---|
 | `createSearchToolDefinition` | `createSearchToolDefinition(): array` | OpenAI-kompatible Tool-Definition für die Websuche via SearXNG. |
 | `createWebFetchToolDefinition` | `createWebFetchToolDefinition(): array` | OpenAI-kompatible Tool-Definition für das Nachladen von Webseiteninhalten. |
-| `createImageGenerationToolDefinition` | `createImageGenerationToolDefinition(): array` | OpenAI-kompatible Tool-Definition für die Bildgenerierung mit AUTOMATIC1111. |
+| `createImageGenerationToolDefinition` | `createImageGenerationToolDefinition(): array` | OpenAI-kompatible Tool-Definition für die Bildgenerierung mit ImageInt (`generate_image`, Parameter `prompt`, `negative_prompt`, `size`). |
 | `createDocumentQueryToolDefinition` | `createDocumentQueryToolDefinition(): array` | OpenAI-kompatible Tool-Definition für RAG-Dokumentenabfragen. |
-| `createComfyToolDefinition` | `createComfyToolDefinition(): array` | OpenAI-kompatible Tool-Definition für die Bildgenerierung mit ComfyUI. |
 
-### Bildgenerierung (AUTOMATIC1111 / ComfyUI)
+### Bildgenerierung
 
-| Funktion | Signatur | Beschreibung |
-|---|---|---|
-| `hasSdEndpoints` | `hasSdEndpoints(): bool` | Prüft, ob mindestens ein aktiver Stable-Diffusion-Endpunkt konfiguriert ist. |
-| `callSdGenerate` | `callSdGenerate(array $params, int $timeout = 120): array` | Ruft die AUTOMATIC1111-API zur Bildgenerierung auf, liefert `{image_url}` oder `{error}`. |
-| `hasComfyEndpoints` | `hasComfyEndpoints(): bool` | Prüft, ob mindestens ein aktiver ComfyUI-Endpunkt konfiguriert ist. |
-| `callComfyGenerate` | `callComfyGenerate(array $params, int $timeout = 120): array` | Generiert ein Bild über ComfyUI-Workflow-Queueing, liefert `{image_url}` oder `{error}`. |
+Die Ausführung liegt vollständig in [`lib/image_generation.php`](#libimage_generationphp)
+(`imageIntGenerate()`); `api/chat.php` definiert nur die Tool-Beschreibung und reicht das
+Ergebnis als `image_job` an die Oberfläche weiter.
 
 ### RAG / Dokumentenabfrage
 
@@ -493,20 +589,6 @@ Zentrale Chat-Pipeline (~3.300 Zeilen). Funktionen sind thematisch gruppiert.
 | `visionModelConfigured` | `visionModelConfigured(): bool` | Ob ein Vision-Modell hinterlegt ist. |
 | `analyzeImageWithVision` | `analyzeImageWithVision(string $imagePath, string $mimeType, string $prompt = VISION_DEFAULT_PROMPT): array` | Schickt ein Bild an das Vision-Modell (inkl. Endpunktwahl über den Balancer und Task-Abrechnung) und liefert den extrahierten Text. |
 
-## api/sd_balancer.php
-
-| Funktion | Signatur | Beschreibung |
-|---|---|---|
-| `pickSdEndpoint` | `pickSdEndpoint(string $mode = 'txt2img', ?int $maxConcurrent = null): ?array` | Wählt den besten verfügbaren Stable-Diffusion-Endpunkt für txt2img/img2img. |
-| `completeSdTask` | `completeSdTask(int $taskId, string $status = 'done', ?float $latencyMs = null): void` | Markiert einen SD-Task als abgeschlossen und erfasst das Ergebnis für die Gesundheitsprüfung. |
-
-## api/comfy_balancer.php
-
-| Funktion | Signatur | Beschreibung |
-|---|---|---|
-| `pickComfyEndpoint` | `pickComfyEndpoint(?int $maxConcurrent = null): ?array` | Wählt den besten verfügbaren ComfyUI-Endpunkt, reserviert einen Task. |
-| `completeComfyTask` | `completeComfyTask(int $taskId, string $status = 'done', ?float $latencyMs = null): void` | Markiert einen ComfyUI-Task als abgeschlossen und erfasst das Ergebnis. |
-
 ## api/heartbeat.php
 
 | Funktion | Signatur | Beschreibung |
@@ -539,16 +621,16 @@ Diese Dateien enthalten ausschließlich prozeduralen Code (kein top-level `funct
 | Datei | Zweck |
 |---|---|
 | `api/chat_sessions.php` | Sitzungsverwaltung: `action=list\|load\|delete` |
-| `api/comfy_checkpoints.php` | Proxy für verfügbare ComfyUI-Checkpoints |
-| `api/comfy_generate.php` | Bildgenerierung via ComfyUI (Workflow-Queueing/Polling) |
 | `api/document_status.php` | Upload-Status als JSON (optional per `session_id` auf einen Chat gefiltert) |
 | `api/document_delete.php` | Entfernt einen Upload samt Datei und Chunks |
 | `api/healthcheck.php` | Ruft `isAnyLlmEndpointHealthy()` auf und liefert JSON |
+| `api/image_status.php` | Auftragsstatus für das Browser-Polling; übernimmt die Sitzung aus dem Deep-Link, nachdem sie gegen `user_id` geprüft wurde |
+| `api/image_notify.php` | Nimmt die Zustimmung zur Benachrichtigungs-Mail entgegen bzw. widerruft sie |
+| `api/image_health.php` | Verbindungstest aus der Admin-Karte; meldet Ladephase und Host-Dimensionierung, prüft den Token authentifiziert gegen |
+| `api/image_notify_worker.php` | Cron-/CLI-Worker: versendet offene Benachrichtigungen serverseitig (Dateisperre gegen Doppelläufe) |
 | `api/models.php` | Proxy für `GET /v1/models` eines Endpunkts |
 | `api/admin_user_action.php` | Admin-Benutzeraktionen (`create_user`, `send_password_reset`, `set_user_model`, `set_user_doc_permission`, `set_user_role`) |
 | `api/rebuild_embeddings.php` | Neuberechnung von Chunk-Embeddings |
-| `api/sd_checkpoints.php` | Proxy für `GET /sdapi/v1/sd-models` (AUTOMATIC1111) |
-| `api/sd_generate.php` | Bildgenerierung via AUTOMATIC1111 |
 | `api/test_ldap.php` | Ruft `ldapTestConnection()` auf |
 | `api/test_smtp.php` | Ruft `sendMail()` zum Testversand auf |
 | `api/speech_config.php` | Liefert die Diktat-Konfiguration an die Chat-Oberfläche und stellt ein CSRF-Token bereit |
@@ -578,7 +660,9 @@ Nur eine top-level Funktion:
 `save_request_handling`, `save_new_user_model`, `save_balancer_settings`,
 `save_streaming_settings`, `save_intelligence_group_settings`,
 `save_global_system_prompt`, `save_system_messages`, `save_vision_settings`,
-`save_smtp_settings`, `save_ldap_settings`, `add_sd_endpoint`, `update_sd_endpoint`,
+`save_smtp_settings`, `save_ldap_settings`, `save_image_generation_settings`,
+`add_image_endpoint`, `update_image_endpoint`, `delete_image_endpoint`,
+`move_image_endpoint`, `add_sd_endpoint`, `update_sd_endpoint`,
 `delete_sd_endpoint`, `add_comfy_endpoint`, `update_comfy_endpoint`,
 `delete_comfy_endpoint`, `save_routing_settings`, `add_routing_category`,
 `update_routing_category`, `delete_routing_category`, `import_prompt_txt`,
@@ -587,6 +671,16 @@ Nur eine top-level Funktion:
 `create_api_key`, `toggle_api_key`, `delete_api_key`, `change_password`,
 `save_speech_dictation_settings`, `add_speech_endpoint`, `update_speech_endpoint`,
 `delete_speech_endpoint`, `move_speech_endpoint`.
+
+Die Bildgenerierung wird in der Karte `#config-image-card` verwaltet (Endpunktliste,
+Aktivierung, Vorlagen für Zustimmungsfrage und Mail inkl. Platzhalterhilfe,
+Verbindungstest). Der Test fragt `api/image_health.php` ab.
+
+Die Aktionen `add_sd_endpoint`, `update_sd_endpoint`, `delete_sd_endpoint`,
+`add_comfy_endpoint`, `update_comfy_endpoint` und `delete_comfy_endpoint` werden von
+keiner sichtbaren Karte mehr ausgelöst (die Karten `#config-sd-card` und
+`#config-comfy-card` sind ausgeblendet); die Handler bleiben für die Altbestandsdaten
+erhalten.
 
 ## admin/refresh_sys_stats.php
 
@@ -601,7 +695,7 @@ Nur eine top-level Funktion:
 | `admin/api_keys.php` | Weiterleitung auf die Karte `#api-keys-card` in `admin/index.php` (CRUD für OpenAI-kompatible API-Keys, Modellwahl je Key, kopierbare API-Basis-URLs) |
 | `admin/endpoint_tech.php` | quickinfo-Pairing je Endpunkt (`pair_quickinfo`, `test_quickinfo`, `unpair_quickinfo`) und Live-Übersicht |
 | `admin/quickinfo_stats.php` | JSON: Modell, Ø Token/s (heute) und quickinfo-Metriken je Endpunkt |
-| `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients, SD/ComfyUI-Zahlen) |
+| `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients); liefert zusätzlich die Altbestandszahlen aus `sd_*`/`comfy_*`. Die ImageInt-Karte holt ihren Status über `api/image_health.php`. |
 | `admin/login.php` | Anmeldung (LDAP/SSO/lokal) mit Sitzungsverwaltung; bei Proxy-SSO einmal je Sitzung Umleitung auf `../sso.php` |
 | `admin/logout.php` | Beendet die Sitzung (setzt `sso_attempted` in der neuen Sitzung) und leitet zum Login um |
 | `admin/prompt_security.php` | Verwaltung der Prompt-Security-Regeln, -Logs und -Einstellungen (4 Tabs) |
