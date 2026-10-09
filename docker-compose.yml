@@ -58,6 +58,17 @@ services:
       SPEECHINT_URL: ${SPEECHINT_URL:-}
       SPEECHINT_TOKEN: ${SPEECHINT_TOKEN:-}
       SPEECHINT_TIMEOUT: ${SPEECHINT_TIMEOUT:-120}
+      # Image generation (see lib/image_generation.php). The Qwen-Image-2.1
+      # prompt enhancer and renderer run in the separate ImageInt project,
+      # usually on another Docker host. Set IMAGEINT_URL to that service;
+      # additional endpoints can be managed in the admin UI. Leaving
+      # IMAGEINT_URL empty keeps image generation disabled unless an endpoint
+      # is configured there. IMAGEINT_SYNC_TIMEOUT caps how long the chat waits
+      # for a render before it hands over to the notification worker.
+      IMAGEINT_URL: ${IMAGEINT_URL:-}
+      IMAGEINT_TOKEN: ${IMAGEINT_TOKEN:-}
+      IMAGEINT_TIMEOUT: ${IMAGEINT_TIMEOUT:-1800}
+      IMAGEINT_SYNC_TIMEOUT: ${IMAGEINT_SYNC_TIMEOUT:-120}
       # PHP timezone (overrides docker/php.ini if set)
       TZ: ${TZ:-Europe/Berlin}
       # Reverse proxy (e.g. lanpa auth container, see docker-compose.lanpa.yml):
@@ -69,6 +80,9 @@ services:
       # Persist uploaded documents and generated images across restarts
       - doc_uploads:/var/www/html/doc_uploads
       - sd_output:/var/www/html/sd_output
+      # Generated ImageInt images, kept so a mail deep-link still resolves
+      # after a restart.
+      - image_output:/var/www/html/image_output
       # docvecwizard export archives (*.tar.gz) placed here can be imported
       # from the admin UI without a browser upload.
       - vector_imports:/var/www/html/vector_imports
@@ -160,6 +174,7 @@ volumes:
   db_data:
   doc_uploads:
   sd_output:
+  image_output:
   docconvert_cache:
   milvus_data:
   vector_imports:

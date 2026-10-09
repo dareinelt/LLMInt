@@ -46,7 +46,7 @@ auf Deutsch. Kommentare sind auf Englisch verfasst.
 | **Administration** | `admin/index.php`, `admin/prompt_security.php`, `admin/load_stats.php`, `admin/refresh_sys_stats.php`, `admin/api_keys.php`, `admin/endpoint_tech.php`, `admin/quickinfo_stats.php` | Endpunkte, Benutzer, Einstellungen, Monitoring, API-Keys, quickinfo-Pairing |
 | **Bibliotheken** | `lib/balancer_engine.php`, `lib/prompt_security.php`, `lib/openai_api.php`, `lib/ldap_auth.php`, `lib/mailer.php`, `lib/healthcheck.php` | Wiederverwendbare Kernlogik, von mehreren Einstiegspunkten eingebunden |
 | **Persistenz** | MySQL/MariaDB, Schema aus `setup.php` + `db.php` | Einstellungen, Benutzer, Endpunkte, Tasks, Chunks, Logs |
-| **Externe Dienste** | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP/AD, SMTP, AUTOMATIC1111, ComfyUI | Modellinferenz, Suche, Verzeichnisdienst, Mailversand, Bildgenerierung |
+| **Externe Dienste** | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP/AD, SMTP, SpeechInt, ImageInt | Modellinferenz, Suche, Verzeichnisdienst, Mailversand, Diktat, Bildgenerierung |
 
 ```mermaid
 flowchart LR
@@ -82,7 +82,8 @@ flowchart LR
         SearX[SearXNG]
         LDAP[LDAP/AD]
         SMTP[SMTP-Server]
-        SD[AUTOMATIC1111 / ComfyUI]
+        Speech[SpeechInt-Dienst]
+        Image[ImageInt-Dienst]
     end
 
     Browser --> Index
@@ -94,7 +95,8 @@ flowchart LR
     Chat --> Embedding
     Chat --> PromptSec
     Chat --> SearX
-    Chat --> SD
+    Chat --> Speech
+    Chat --> Image
     Balancer --> BalEngine
     Upload --> Embedding
     Login --> LdapAuth
@@ -144,8 +146,10 @@ migrieren.
 | `endpoints` | LLM-Endpunkte: `base_url`, `default_model`, `timeout`, `is_active`, Fähigkeiten (Tool Calling, Vision), Balancer-Gesundheit (`circuit_state`, `consecutive_failures`, `cooldown_until`, `avg_latency_ms`) |
 | `tasks` | Lebenszyklus jeder LLM-Anfrage (`endpoint_id`, `status`, Tokenzähler, `tokens_per_second`) |
 | `endpoint_sys_stats` | per SSH gelesene Systemmetriken je Endpunkt |
-| `sd_endpoints`, `sd_tasks` | AUTOMATIC1111-Endpunkte und deren Aufträge |
-| `comfy_endpoints`, `comfy_tasks` | ComfyUI-Endpunkte und deren Aufträge |
+| `image_endpoints` | ImageInt-Endpunkte (`base_url`, `token`, `timeout`, `is_active`, Balancer-Gesundheit) |
+| `image_notifications` | Zustimmungen zu Fertigstellungs-Mails (`session_id`, `job_id`, `user_id`, `prompt`, `status_url`, `image_url`, `status`, `sent_at`; Empfängeradresse kommt aus `users.email`) |
+| `sd_endpoints`, `sd_tasks` | Altbestand der AUTOMATIC1111-Integration – wird nicht mehr adressiert, die Tabellen bleiben erhalten |
+| `comfy_endpoints`, `comfy_tasks` | Altbestand der ComfyUI-Integration – wird nicht mehr adressiert, die Tabellen bleiben erhalten |
 | `document_uploads` | Upload-Metadaten, Verarbeitungs-/Embedding-Status (`is_global_rag` ist immer `0` – Uploads sind privat) |
 | `document_chunks` | Chunks mit optionalem Embedding (FK auf `document_uploads`, `ON DELETE CASCADE`) |
 | `vector_documents`, `vector_chunks` | aus docvecwizard-Exporten importierte Dokumente/Chunk-Texte (Modus `local`; Vektoren liegen in Milvus) |
@@ -233,8 +237,7 @@ flowchart TD
 |---|---|---|
 | `search_web` | `searxng_base_url` gesetzt | `query` (erforderlich) |
 | `web_fetch` | wie `search_web` | `url` (erforderlich), `max_chars` (500–20000, Standard 6000) |
-| `generate_image` | aktive `sd_endpoints` | `prompt` (erforderlich), `negative_prompt`, `width`, `height` |
-| `generate_image_comfy` | aktive `comfy_endpoints` | wie `generate_image` |
+| `generate_image` | aktive `image_endpoints` | `prompt` (erforderlich), `negative_prompt`, `size` |
 | `query_documents` | vorhandene Uploads | `query` (erforderlich) |
 
 Neue Tools benötigen eine `create...ToolDefinition()`-Funktion, eine
@@ -261,8 +264,8 @@ entfallen die LLMInt-spezifischen Frames.
 
 ## 7. Balancer-Architektur
 
-`lib/balancer_engine.php` ist die gemeinsame Basis für LLM-, AUTOMATIC1111- und
-ComfyUI-Endpunkte; die jeweilige Tabelle wird als Parameter übergeben.
+`lib/balancer_engine.php` ist die gemeinsame Basis für LLM-Endpunkte; die jeweilige
+Tabelle wird als Parameter übergeben.
 
 ### 7.1 Auswahllogik (`pickEndpointForModel()` in `api/balancer.php`)
 
@@ -277,8 +280,10 @@ ComfyUI-Endpunkte; die jeweilige Tabelle wird als Parameter übergeben.
 4. Reservierung in einer Transaktion mit `SELECT ... FOR UPDATE` und erneuter
    Kapazitätsprüfung, anschließend `INSERT` in `tasks` mit Status `running`.
 
-Abschluss über `completeTask()`; Bildpfade nutzen `pickSdEndpoint()`/`completeSdTask()`
-bzw. `pickComfyEndpoint()`/`completeComfyTask()`.
+Abschluss über `completeTask()` in `api/balancer.php`. Die früheren Bildpfade
+(`pickSdEndpoint()`/`completeSdTask()` und `pickComfyEndpoint()`/`completeComfyTask()`)
+sind mit `api/sd_balancer.php`/`api/comfy_balancer.php` entfallen; die Engine kennt die
+Altbestandstabellen `sd_tasks`/`comfy_tasks` nur noch, damit deren Daten lesbar bleiben.
 
 ### 7.2 Circuit Breaker & Resilienz
 
@@ -477,13 +482,15 @@ CSRF-Token, u. a. `add_endpoint`, `update_endpoint`, `delete_endpoint`,
 `save_routing_settings`, `add_routing_category`, `save_hybrid_search_settings`,
 `save_reranker_settings`, `save_smtp_settings`, `save_ldap_settings`,
 `add_sd_endpoint`, `add_comfy_endpoint`, `add_embedding_endpoint`,
+`save_image_generation_settings`, `add_image_endpoint`,
 `create_api_key`, `toggle_api_key`, `delete_api_key`, `change_password`,
 `save_speech_dictation_settings` u. v. m. (vollständige Liste in
 [`functions.md`](functions.md#adminindexphp)).
 
 Die Oberfläche ist in Karten mit stabilen IDs gegliedert (`dashboard-card`,
 `config-endpoints-card`, `config-balancer-card`, `config-routing-card`,
-`config-sd-card`, `config-comfy-card`, `config-vector-store-card`,
+`config-image-card` (`config-sd-card` und `config-comfy-card` sind als
+Altbestand per `hidden` ausgeblendet), `config-vector-store-card`,
 `config-embedding-card`, `config-hybrid-search-card`, `config-reranker-card`,
 `config-global-system-prompt-card`, `config-speech-card`, `config-smtp-card`,
 `config-ldap-card`, `log-viewer-card`, `users-card`, `openai-api-card`,
@@ -512,8 +519,10 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/rebuild_embeddings.php` | POST | Admin + CSRF | Embeddings neu berechnen |
 | `api/vector_import.php` | GET/POST | Admin + CSRF | docvecwizard-Exportarchive auflisten bzw. in Milvus/MySQL importieren |
 | `api/test_vector_store.php` | POST | Admin | Verbindungstest docvecwizard-API (`mode=remote`) oder Milvus (`mode=local`) |
-| `api/sd_generate.php`, `api/comfy_generate.php` | POST | Session | Bildgenerierung |
-| `api/sd_checkpoints.php`, `api/comfy_checkpoints.php` | GET | – | verfügbare Checkpoints |
+| `api/image_status.php` | GET/POST | Session | Status eines Bildauftrags bzw. Übernahme des fertigen Bildes in die Sitzung |
+| `api/image_notify.php` | POST | Session + CSRF | Zustimmung zur Fertigstellungsmail hinterlegen |
+| `api/image_health.php` | GET | Admin | Verbindungstest gegen ImageInt (`/v1/ready`, `/v1/health`) |
+| `api/image_notify_worker.php` | CLI/Cron | – | fertige Bildaufträge abarbeiten und Benachrichtigungsmails versenden |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
 | `api/speech_config.php` | GET | Session | Diktat-Konfiguration und CSRF-Token für die Oberfläche |
 | `api/speech_transcribe.php` | POST | Session + CSRF | Audiodatei → Rohtext (`POST /v1/audio/transcriptions` des SpeechInt-Endpunkts) |
@@ -524,9 +533,8 @@ Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
 | `api/openai/v1/models`, `api/openai/v1/chat/completions` | GET/POST | anonym (API-Key optional: Log-Zuordnung und optional festes Modell) | OpenAI-kompatibel, ohne Tools; Key-Modell bzw. Gast-Standardmodell, Log-Präfix `[API]` |
 | `api/openai-tools/v1/models`, `api/openai-tools/v1/chat/completions` | GET/POST | anonym (API-Key optional: Log-Zuordnung und optional festes Modell) | OpenAI-kompatibel, mit Tools; Key-Modell bzw. Gast-Standardmodell, Log-Präfix `[API]` |
 
-`api/balancer.php`, `api/sd_balancer.php`, `api/comfy_balancer.php`,
-`api/embedding.php` und `api/vector_store.php` sind reine Bibliotheken und werden
-eingebunden, nicht direkt aufgerufen.
+`api/balancer.php`, `api/embedding.php` und `api/vector_store.php` sind reine
+Bibliotheken und werden eingebunden, nicht direkt aufgerufen.
 
 ---
 
@@ -547,9 +555,10 @@ eingebunden, nicht direkt aufgerufen.
   `phpmyadmin` (Port `PMA_PORT`, Standard 8081, per HTTP Basic Auth geschützt).
   Die früheren Dienste `whisper` und `qwen` sind entfallen: Spracherkennung und
   Diktat laufen jetzt im separaten Projekt
-  [SpeechInt](https://github.com/dareinelt/SpeechInt).
-  Volumes: `db_data`, `doc_uploads`, `sd_output`, `docconvert_cache`,
-  `milvus_data`, `vector_imports`.
+  [SpeechInt](https://github.com/dareinelt/SpeechInt), die Bildgenerierung im
+  separaten Projekt [ImageInt](https://github.com/dareinelt/ImageInt).
+  Volumes: `db_data`, `doc_uploads`, `image_output`, `sd_output` (Bestand),
+  `docconvert_cache`, `milvus_data`, `vector_imports`.
 - `docker-compose.test.yml`: Override für schnelle lokale Tests des Diktats. Er
   startet nur `db` und `web` und erwartet den SpeechInt-Dienst über
   `SPEECHINT_URL` auf einem anderen Host.
@@ -559,7 +568,8 @@ eingebunden, nicht direkt aufgerufen.
   `DOCCONVERT_CACHE_TTL`, `DOCCONVERT_MAX_BYTES`, `DOCCONVERT_MAX_CHARS`,
   `DOCCONVERT_OVERLAP`, `DOCCONVERT_CACHE_MAX`, `MILVUS_VERSION`, `MILVUS_URL`,
   `MILVUS_METRICS_URL`, `MILVUS_MEM_LIMIT`, `SPEECHINT_URL`, `SPEECHINT_TOKEN`,
-  `SPEECHINT_TIMEOUT`.
+  `SPEECHINT_TIMEOUT`, `IMAGEINT_URL`, `IMAGEINT_TOKEN`, `IMAGEINT_TIMEOUT`,
+  `IMAGEINT_SYNC_TIMEOUT`.
 
 ### 13.1 Diktat-Pipeline
 
@@ -615,6 +625,54 @@ Browser (MediaRecorder)
   `admin/index.php`. Der aktive Endpunkt erscheint als eigene Kachel mit
   Zustandsfarbe; zusätzliche Endpunkte werden als „nicht geprüft" dargestellt, weil
   pro Anfrage nur ein Endpunkt abgefragt wird.
+
+### 13.2 Bildgenerierungs-Pipeline
+
+Die Bildgenerierung wurde von AUTOMATIC1111/ComfyUI auf das Projekt
+[ImageInt](https://github.com/dareinelt/ImageInt) umgestellt. ImageInt bündelt einen
+Prompt-Enhancer (Qwen-Image-2.1) und den Renderer hinter einem HTTP-Dienst und läuft
+üblicherweise auf einem eigenen Docker-Host. LLMInt ist reiner Client; die früheren
+Endpunkte `api/sd_*.php` und `api/comfy_*.php` sind entfernt, die Tabellen
+`sd_endpoints`/`sd_tasks`/`comfy_endpoints`/`comfy_tasks` bleiben als Bestand liegen.
+
+```
+Text-LLM ── Tool-Aufruf generate_image ──► api/chat.php
+                                            └─ lib/image_generation.php
+                                                 ├─ POST /v1/images/generations (wait:false) ──► 202 job_id
+                                                 ├─ GET  /v1/jobs/{job_id}   (Polling, stage)  ──► done
+                                                 └─ GET  /v1/jobs/{job_id}/image               ──► PNG → image_output/
+```
+
+- `lib/image_generation.php` ist die einzige Stelle mit Kenntnis des Dienstes. Die
+  Tabelle `image_endpoints` (`alias`, `base_url`, `token`, `timeout`, `is_active`,
+  `sort_order`) hält einen oder mehrere Endpunkte; pro Anfrage wird genau einer
+  verwendet (`imageIntActiveEndpoint()`). `IMAGEINT_URL`/`IMAGEINT_TOKEN`/
+  `IMAGEINT_TIMEOUT` belegen den Standard-Endpunkt vor und haben Vorrang
+  (`imageIntUrlSource()`).
+- Der Aufruf sendet `wait: false` und bekommt sofort `202` mit `job_id`,
+  `status_url` und `poll_after_seconds`; danach wird `status_url` abgefragt, bis
+  `status` `done` oder `error` ist. `stage` (`queued` → `enhancing` → `rendering`)
+  liefert den Fortschrittstext im Chat (`imageIntStageMessage()`).
+- Ein `503` mit `transient: true` bedeutet „Modell lädt noch" und wird als
+  Wartehinweis mit erneutem Versuch nach `retry_after` behandelt, nicht als Fehler;
+  ein `503` mit `error: "host_unsupported"` ist dagegen eine dauerhafte
+  Fehlkonfiguration und wird als solche gemeldet.
+- Das fertige PNG wird nach `image_output/` geholt und von dort ausgeliefert
+  (`imageIntStoreImage()`, `imageIntEnsureImage()`); der Auftrag wird am
+  Assistenten-Eintrag der Sitzung unter `image_job` mitgeschrieben
+  (`imageIntPatchJobInMessages()`, `imageIntPersistJobResult()`).
+- Überschreitet der Render `IMAGEINT_SYNC_TIMEOUT`, gibt `api/chat.php` den Auftrag
+  an den Browser zurück, der `api/image_status.php` pollt. Auf Wunsch hinterlegt der
+  Nutzer über `api/image_notify.php` eine Zustimmung in `image_notifications`; der
+  Cron-/CLI-Worker `api/image_notify_worker.php` (`imageIntProcessNotifications()`)
+  versendet die Mail, sobald der Auftrag fertig ist. Der Deep-Link aus der Mail
+  (`index.php?session=…&job=…`) übernimmt die Sitzung nur, wenn sie dem angemeldeten
+  Benutzer gehört.
+- Die Dimensionierung des Hosts (`host.cpu_cores`, `host.memory_gb`, `host.avx2`,
+  `host.blocking`, `host.warnings`) sowie die beiden Modellserver (`components`)
+  liefert `GET /v1/health`; der Verbindungstest im Adminbereich zeigt sie an.
+- Tokens werden maskiert angezeigt (`imageIntMaskToken()`) und nie geloggt; Fehler-
+  und Statusmeldungen sind deutsch.
 
 ---
 

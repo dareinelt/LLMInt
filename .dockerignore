@@ -12,6 +12,7 @@ Dockerfile
 # Runtime / generated files (handled via named volumes)
 doc_uploads/
 sd_output/
+image_output/
 
 # Development / IDE artefacts
 .idea/
