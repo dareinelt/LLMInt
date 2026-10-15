@@ -473,7 +473,7 @@ test_case('der API-Zweig hängt direkt an LLMInt', function (): void {
     assert_same('Reverse Proxy · 4 Schlüssel', $api['subtitle']);
     assert_same('41 heute', $api['badge']);
     assert_true(topo_has_edge($topology, 'hub', 'api'));
-    assert_same('index.php#api-keys-card', $api['url']);
+    assert_same('api_keys.php#api-keys-card', $api['url']);
 });
 
 test_case('jede API-Nutzung wird ein eigener Knoten in der API-Wolke', function (): void {
@@ -747,13 +747,13 @@ test_case('slot_limit steuert die Auslastungswarnung', function (): void {
 
 test_case('base_url wird allen internen Verweisen vorangestellt', function (): void {
     $topology = topo([], ['base_url' => '/admin/']);
-    assert_same('/admin/index.php#config-balancer-card', topo_node($topology, 'hub')['url']);
-    assert_same('/admin/index.php#config-endpoints-card', topo_node($topology, 'ep:1')['url']);
+    assert_same('/admin/balancer.php#config-balancer-card', topo_node($topology, 'hub')['url']);
+    assert_same('/admin/endpoints.php#config-endpoints-card', topo_node($topology, 'ep:1')['url']);
     assert_same('/admin/index.php#dashboard-card', topo_node($topology, 'clients')['url']);
-    assert_same('/admin/index.php#config-image-card', topo_node($topology, 'image')['url']);
+    assert_same('/admin/image.php#config-image-card', topo_node($topology, 'image')['url']);
 
     $relative = topo();
-    assert_same('index.php#config-endpoints-card', topo_node($relative, 'ep:1')['url']);
+    assert_same('endpoints.php#config-endpoints-card', topo_node($relative, 'ep:1')['url']);
 });
 
 // ── Robustness ────────────────────────────────────────────────────────────────
