@@ -28,7 +28,8 @@ OpenAI-compatible API.
   classic install)
 - **Database**: MySQL/MariaDB via PDO, `utf8mb4` / `utf8mb4_unicode_ci`
 - **Frontend**: Server-rendered HTML with inline CSS and vanilla JS in `index.php` and
-  `admin/index.php` (no external JS dependencies)
+  the admin pages (`admin/*.php`, shared shell in `admin/partials/`; no external JS
+  dependencies)
 - **Architecture**: No router — each URL maps directly to a PHP file; `api/*.php` are the
   JSON/SSE endpoints, `lib/*.php` are shared libraries
 - **Runtime containers**: `web` (PHP 8.2 Apache), `db` (MySQL 8.0), `docconvert`
@@ -38,7 +39,8 @@ OpenAI-compatible API.
   (see [Dictation](#dictation-speech-to-text))
 - **Entry points**:
   - `index.php` – Chat UI (~5,300 lines)
-  - `admin/index.php` – Admin dashboard (~8,400 lines)
+  - `admin/index.php` – Admin dashboard; the other sidebar entries are their own pages
+    (`admin/<seite>.php`, e.g. `usage.php`, `smtp.php`, `api_keys.php`)
   - `api/*.php` – JSON/SSE endpoints
   - `login.php`, `register.php`, `logout.php` – user auth; `admin/login.php`,
     `admin/logout.php` – admin auth
@@ -99,7 +101,8 @@ OpenAI-compatible API.
 | `api/admin_user_action.php` | Admin user management actions |
 | `api/verify_email.php`, `api/reset_password.php` | Token-based email verification and password reset |
 | `docconvert/` | Python/FastAPI container converting Office & text files into structured chunks (TTL disk cache); unit tests in `docconvert/tests/` |
-| `admin/index.php` | Admin UI: endpoints, routing, balancer, RAG/embeddings, vector store, LDAP/SMTP, users, logs, OpenAI API keys, usage statistics |
+| `admin/index.php` + `admin/<seite>.php` | Admin UI as one page per sidebar entry (dashboard, usage, smtp, ldap, speech, image, search, endpoints, request_handling, system_prompt, balancer, routing, decision, vector_store, embedding, hybrid_search, reranker, rag_stats, system_messages, log_config, log_viewer, users, openai_api, api_keys, password); `admin/index.php` is the dashboard page |
+| `admin/partials/` | Shared shell of every admin page: `bootstrap.php` (session, auth, settings, CSRF), `actions.php` (all POST handlers), `data.php` (live data helpers), `nav.php` (sidebar, single source of the page list), `layout_head.php` / `layout_foot.php` (head with CSS, footer) |
 | `admin/prompt_security.php` | Prompt security dashboard, rule management, logs, settings |
 | `admin/load_stats.php` | Live dashboard stats (JSON), incl. `vector_store` status, `speech_endpoints`/`speech_status`, the API call counters (`api`, from `listApiKeyUsage()`) and the `topology` payload built by `topology_build()` for the message-flow graphic |
 | `admin/topology.php` | Full-screen view of the message-flow topology (same payload, own page) |
@@ -109,7 +112,7 @@ OpenAI-compatible API.
 | `admin/endpoint_tech.php` | quickinfo pairing per endpoint + live technical overview (CPU/GPU/RAM/VRAM, temps) |
 | `admin/quickinfo_stats.php` | JSON live metrics of all paired quickinfo instances |
 | `docker-compose.test.yml` | Override for fast local dictation tests: only `db` + `web`, expecting an external SpeechInt host via `SPEECHINT_URL` |
-| `admin/api_keys.php` | Legacy redirect to the `#api-keys-card` section of `admin/index.php` |
+| `admin/api_keys.php` | Own page *Verwaltung > API-Keys* (`#api-keys-card`): CRUD for OpenAI-compatible API keys, per-key model pinning, copyable base URLs |
 | `admin/login.php`, `admin/logout.php` | Admin login (own entry point) and logout |
 | `docker/` | Apache config, PHP ini, entrypoint, phpMyAdmin Basic-Auth config, Milvus etcd config |
 | `docker-compose.lanpa.yml` | Optional override to publish LLMInt behind lanpa's `auth` container under `/ki/` |
@@ -347,7 +350,7 @@ Two non-obvious constraints — change these only with the surrounding comment:
 Commands and pills are admin-editable JSON (`speech_dictation_commands`,
 `speech_dictation_pills`). Pills are executed by the **regular default model** via
 `api/chat.php`, not by the dictation model. Everything is configured in the
-`#config-speech-card` card of `admin/index.php` (`save_speech_dictation_settings` plus
+`#config-speech-card` card of `admin/speech.php` (`save_speech_dictation_settings` plus
 `add_speech_endpoint`/`update_speech_endpoint`/`delete_speech_endpoint`/
 `move_speech_endpoint` for the endpoint table). The active endpoint also appears as a
 node in the message-flow topology of the admin dashboard (`lib/topology.php`, fed by
@@ -772,29 +775,32 @@ Legacy keys (still read as fallback): `lmstudio_base_url`, `lmstudio_timeout`,
 
 | Task | File(s) |
 |---|---|
-| Add new setting | `admin/index.php` (form + `action` handler), read via `getSetting()` at the usage site |
+| Add new setting | Form on the matching admin page `admin/<seite>.php`, `action` handler in `admin/partials/actions.php`, read via `getSetting()` at the usage site |
 | Add new table/column | `db.php` → `ensureRuntimeSchema()` (idempotent); `setup.php` for first-install tables |
 | Add API endpoint | Create `api/new_endpoint.php`, `require_once __DIR__ . '/../db.php'` |
 | Modify chat pipeline | `api/chat.php` (main), `api/balancer.php` (model selection) |
 | Add tool/function | `api/chat.php` → new `create*ToolDefinition()` + handler in the tool-execution loop |
 | Change balancer logic | `lib/balancer_engine.php` (shared), `api/balancer.php` (LLM-specific) |
-| Change model routing | `admin/index.php` (`save_routing_settings`, `*_routing_category`), `db.php` (`loadRoutingCategories()`, `buildRoutingPrompt()`) |
+| Change model routing | `admin/routing.php` (form), `admin/partials/actions.php` (`save_routing_settings`, `*_routing_category`), `db.php` (`loadRoutingCategories()`, `buildRoutingPrompt()`) |
 | Modify prompt security | `lib/prompt_security.php` (logic), `admin/prompt_security.php` (UI) |
 | Add embedding provider | `api/embedding.php` → `pickEmbeddingEndpoint()`, `generateEmbedding()` |
 | Modify RAG/chunking | `api/upload_document.php` (routing/chunking), `docconvert/app/*.py` (format parsing), `api/embedding.php` (embeddings), `api/chat.php` → `queryDocuments()` |
 | Add a document format | `docconvert/app/converters.py` (parser + `SUPPORTED_FORMATS`), `api/doc_convert.php` (MIME map), `index.php` (accept lists) |
-| Change the central knowledge base | `api/vector_store.php` (search/status), `api/vector_import.php` (import), `admin/index.php` (`config-vector-store-card`) |
-| Admin UI changes | `admin/index.php` (main, incl. API keys), `admin/prompt_security.php` |
+| Change the central knowledge base | `api/vector_store.php` (search/status), `api/vector_import.php` (import), `admin/vector_store.php` (`config-vector-store-card`) |
+| Admin UI changes | `admin/<seite>.php` (page markup + page-specific inline JS), `admin/partials/` (shell, POST handlers, live data, sidebar), `admin/prompt_security.php` |
 | Add dashboard live data | `admin/load_stats.php` (live), `admin/usage_stats.php` (daily chart) |
-| Dashboard topology (nodes, edges, states) | `lib/topology.php` (payload), `assets/js/flow-topology.js` (renderer), `assets/css/flow-topology.css`, `admin/index.php` (`dashboard-card`), `admin/topology.php` (full screen), `db.php` (`recordApiCallUsage()`, `listApiKeyUsage()`, `recordClientRoute()`), `api/openai_common/chat_completions.php` (API counters), `tests/php/test_topology_*.php` + `tests/php/test_admin_payloads.php` + `tests/js/flow-topology.test.js`; reference: [`topologie-referenz.md`](../topologie-referenz.md) |
+| Dashboard topology (nodes, edges, states) | `lib/topology.php` (payload), `assets/js/flow-topology.js` (renderer), `assets/css/flow-topology.css`, `admin/index.php` (`dashboard-card`; deep links are built by `topology_admin_link()` in `lib/topology.php`), `admin/topology.php` (full screen), `db.php` (`recordApiCallUsage()`, `listApiKeyUsage()`, `recordClientRoute()`), `api/openai_common/chat_completions.php` (API counters), `tests/php/test_topology_*.php` + `tests/php/test_admin_payloads.php` + `tests/js/flow-topology.test.js`; reference: [`topologie-referenz.md`](../topologie-referenz.md) |
 | Auth changes | `login.php`, `register.php`, `admin/login.php`, `lib/ldap_auth.php`, `sso.php` |
 | Reverse proxy / SSO changes | `lib/reverse_proxy.php`, `sso.php`, `sso_fallback.php`, `docker-compose.lanpa.yml` |
 | OpenAI API changes | `lib/openai_api.php`, `api/openai_common/**`, `api/openai*/**` |
-| Image generation | `lib/image_generation.php`, `api/image_*.php`, `admin/index.php` (`config-image-card`) |
+| Image generation | `lib/image_generation.php`, `api/image_*.php`, `admin/image.php` (`config-image-card`) |
 | Frontend chat behaviour | `index.php` (SSE handling, prefixes, sessions, uploads) |
-| Dictation / speech-to-text | `lib/speech_dictation.php` (SpeechInt client), `api/speech_*.php`, `index.php` (dictation IIFE + `#dictate-btn`), `admin/index.php` (`config-speech-card`, `speech_endpoints` CRUD, SpeechInt node in the topology) |
+| Dictation / speech-to-text | `lib/speech_dictation.php` (SpeechInt client), `api/speech_*.php`, `index.php` (dictation IIFE + `#dictate-btn`), `admin/speech.php` (`config-speech-card`, `speech_endpoints` CRUD, SpeechInt node in the topology) |
 
-### Admin POST actions (`admin/index.php`)
+### Admin POST actions (`admin/partials/actions.php`)
+
+Dispatched by `admin/partials/bootstrap.php`; the sending form lives on the page that knows
+the `action` value.
 
 `add_endpoint`, `update_endpoint`, `delete_endpoint`, `reset_circuit`,
 `toggle_endpoint_pause`, `save_search_settings`, `save_request_handling`,
@@ -897,7 +903,15 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 │   ├── functions.md       # Full function reference
 │   └── images/            # Diagrams and screenshots used in README.md
 ├── admin/
-│   ├── index.php          # Admin dashboard (endpoints, routing, RAG, users, API keys)
+│   ├── index.php          # Dashboard page (topology, system status, usage today)
+│   ├── <seite>.php        # one page per sidebar entry: usage, smtp, ldap, speech, image,
+│   │                    # search, endpoints, request_handling, system_prompt, balancer,
+│   │                    # routing, decision, vector_store, embedding, hybrid_search,
+│   │                    # reranker, rag_stats, system_messages, log_config, log_viewer,
+│   │                    # users, openai_api, api_keys, password
+│   ├── partials/          # Shared shell: bootstrap.php (session/auth/settings/CSRF),
+│   │                    # actions.php (all POST handlers), data.php, nav.php,
+│   │                    # layout_head.php, layout_foot.php
 │   ├── topology.php       # Full-screen view of the message-flow topology
 │   ├── prompt_security.php
 │   ├── load_stats.php
@@ -905,7 +919,6 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 │   ├── refresh_sys_stats.php
 │   ├── endpoint_tech.php  # quickinfo pairing + technical overview
 │   ├── quickinfo_stats.php
-│   ├── api_keys.php       # legacy redirect to index.php#api-keys-card
 │   └── login.php / logout.php
 ├── api/
 │   ├── chat.php           # Main pipeline

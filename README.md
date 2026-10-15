@@ -64,6 +64,12 @@ Weitere Dokumente im Repository:
 
 ### Admin-Dashboard
 
+Der Adminbereich ist in eine Seite je Eintrag der linken Navigation aufgeteilt: `admin/index.php`
+ist das hier beschriebene Dashboard, daneben gibt es eigene Seiten für Nutzungsstatistik
+(`admin/usage.php`), Endpunkte (`admin/endpoints.php`), SMTP (`admin/smtp.php`) und alle
+weiteren Einträge. Die Knoten der Topologie verlinken direkt auf die Seite mit der
+passenden Karte.
+
 Das Dashboard im Adminbereich zeigt die Betriebsdaten als Nachrichtenflow-Topologie. **LLMInt** steht im Zentrum; darum liegen die direkten Kinder **LLM**, **SpeechInt**, **ImageInt**, **SearXNG**, **Wissensdatenbank**, **Clients** und **API**. Unter LLM hängen die Intelligenzgruppen (je Modell), unter diesen die einzelnen LLM-Endpunkte; ImageInt und SpeechInt bündeln ihre Endpunkte jeweils direkt. Die aktiven Clients erscheinen als 3D-Wolke aus Hostnamen beziehungsweise IP-Adressen um ihren Knoten, die Aufrufe über die OpenAI-kompatible API als zweite Wolke: ein Eintrag je API-Schlüssel mit Aufrufen heute, Aufrufen gesamt und dem zuletzt genutzten Modell, dazu ein Sammeleintrag „ohne Key" für Aufrufe ohne gültigen Schlüssel. Animierte Linien und Partikel verbinden die Bausteine und machen Richtung und Auslastung sichtbar; Farbe und Strichart folgen dem Zustand des Knotens (in Ordnung, eingeschränkt, Störung, nicht aktiv).
 
 Ein Klick auf einen Endpunkt öffnet die Detailkarte direkt im Netz: LLM-Endpunkte zeigen Modell, Status, belegte Slots, laufende Tasks und – sofern eine [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz gekoppelt ist – CPU-/GPU-Werte, SearXNG und die übrigen Dienste ihre Erreichbarkeit. Gleichzeitig hebt das Dashboard den kompletten Weg dieses Bausteins hervor: vom Endpunkt über seine Intelligenzgruppe und LLM hinauf zu LLMInt und von dort hinüber in die Zweige der Aufrufer – in die Clients-Wolke bis zu den einzelnen Client-Hostnamen und in den API-Zweig bis zu den einzelnen API-Schlüsseln. Umgekehrt funktioniert es genauso: Ein Klick auf einen Client-Hostnamen oder einen API-Schlüssel markiert den Weg von diesem Aufrufer über seinen Wolken-Knoten und LLMInt bis hinunter in die Endpunkt-Zweige; die Detailkarte eines Endpunkts öffnet sich dabei nicht, es erscheint allein die des Aufrufers. Läuft auf einem Client gerade eine Anfrage, bleibt der Weg auf genau deren Zweig beschränkt – vom Client über LLMInt und die Intelligenzgruppe bis zu dem Endpunkt, der sie beantwortet – und wird als laufender Weg mit einem hellen, wandernden Strichmuster gekennzeichnet; ist der Client untätig, ist sein Weg unbekannt und es wird keiner markiert, der Klick wählt dann nur die Sitzung aus. Welche Anfrage gerade läuft, meldet der Browser selbst: Die Chat-Seite schickt im Heartbeat zur Anwesenheit zusätzlich Endpunktart, Modell und Endpunkt-ID mit, beim Start einer Anfrage und – nach der Antwort – wieder als leer. Der Adminbereich zeigt das als Zeile „Laufende Anfrage" am Client-Knoten und nach spätestens 15 s auch in der Topologie. Alles daneben tritt zurück, die Kanten des Weges werden breiter und heller gezeichnet und führen als einzige noch Partikel. Die Karte sucht sich dafür eine freie Stelle neben dem angeklickten Knoten, statt ihn zu verdecken, und bleibt über eine gestrichelte Linie mit ihm verbunden. Gruppen, die beiden Wolken und Übersichtsknoten öffnen stattdessen das ausführliche Panel am Rand mit Mitglieder- und Nachbarlisten.
@@ -93,7 +99,7 @@ Wichtige Komponenten:
   Regel-Fallback, wenn kein Dienst erreichbar ist.
 - `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
 
-Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Build-Schritt: Jede URL entspricht einer PHP-Datei, Abhängigkeiten werden über `require_once` geladen, und Frontend-CSS/-JavaScript liegen inline in `index.php` beziehungsweise `admin/index.php`. Eine vollständige technische Referenz mit Funktions-, Tabellen- und Einstellungsnamen enthält [`description.md`](description.md); eine grafisch aufbereitete Architekturübersicht mit Diagrammen bietet [`docs/architecture.md`](docs/architecture.md), eine vollständige Funktionsreferenz [`docs/functions.md`](docs/functions.md) und eine kompakte Navigationshilfe für Coding-Agenten [`docs/agent_index.md`](docs/agent_index.md).
+Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Build-Schritt: Jede URL entspricht einer PHP-Datei, Abhängigkeiten werden über `require_once` geladen, und Frontend-CSS/-JavaScript liegen inline in `index.php` beziehungsweise in den Adminseiten unter `admin/` (gemeinsame Hülle: `admin/partials/`). Eine vollständige technische Referenz mit Funktions-, Tabellen- und Einstellungsnamen enthält [`description.md`](description.md); eine grafisch aufbereitete Architekturübersicht mit Diagrammen bietet [`docs/architecture.md`](docs/architecture.md), eine vollständige Funktionsreferenz [`docs/functions.md`](docs/functions.md) und eine kompakte Navigationshilfe für Coding-Agenten [`docs/agent_index.md`](docs/agent_index.md).
 
 ## Repository-Struktur
 
@@ -107,7 +113,7 @@ Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Bu
 | `setup.php` | Erstinstallation: Tabellen, Migrationen, Standardeinstellungen, Standardadministrator |
 | `api/` | JSON- und SSE-Endpunkte sowie die Bibliotheken für Balancer und Embeddings |
 | `lib/` | Balancer-Engine, Prompt Security, Spracherkennung/Diktat (`speech_dictation.php`), OpenAI-Hilfsfunktionen, LDAP-Anbindung, SMTP-Client, Routing-Prompt, Reverse-Proxy-Unterstützung |
-| `admin/` | Administration, Dashboard-Livedaten, Nutzungsstatistik, SSH-Systemmetriken, API-Keys, Prompt Security |
+| `admin/` | Administration als eine Seite je Navigationseintrag (`admin/<seite>.php`, z. B. `index.php`, `usage.php`, `smtp.php`, `api_keys.php`) über der gemeinsamen Hülle `admin/partials/` (Bootstrap, POST-Verarbeitung, Livedaten, Navigation, Layout); dazu Dashboard-Livedaten, Nutzungsstatistik, SSH-Systemmetriken, Prompt Security |
 | `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth |
 | `docker-compose.test.yml` | Compose-Override für einen schnellen lokalen Stack beim Testen des Diktats (siehe [Spracherkennung und Diktat](#spracherkennung-und-diktat)) |
 | `docker-compose.lanpa.yml` | optionaler Override für den Betrieb hinter dem `auth`-Container von lanpa |
@@ -562,7 +568,8 @@ Der Systemprompt und die Befehlsliste sind unter **Verwaltung → 🎙️ Sprach
 
 ### Administration
 
-Die Karte **🎙️ Spracherkennung / Diktat** bündelt Aktivierung, aktiven Endpunkt, Sprache, die Puffer- und Segmentgrenzen sowie den Prompt und die Befehlsliste. Darunter lassen sich die SpeechInt-Endpunkte verwalten.
+Die Seite **Verwaltung → 🎙️ Spracherkennung / Diktat** (`admin/speech.php`) bündelt
+Aktivierung, aktiven Endpunkt, Sprache, die Puffer- und Segmentgrenzen sowie den Prompt und die Befehlsliste. Darunter lassen sich die SpeechInt-Endpunkte verwalten.
 
 ![Spracherkennung-Karte im Adminbereich](docs/images/sprach-diktat-admin.png)
 
@@ -670,7 +677,8 @@ Der Deep-Link hat die Form `index.php?session=<session_id>&job=<job_id>`. `index
 
 ### Administration
 
-Die Karte **🖼️ Bildgenerierung** bündelt Aktivierung, aktiven Endpunkt, die Zustimmungs- und Mailtexte, die Basis-URL für die Links sowie Auslöse- und Gegenregel. Darunter lassen sich die Image-Endpunkte verwalten; der Verbindungstest fragt `/v1/ready` ab und zeigt bei Erfolg zusätzlich die beiden Modellserver und die Dimensionierung des Hosts.
+Die Seite **Verwaltung → 🖼️ Bildgenerierung** (`admin/image.php`) bündelt Aktivierung, aktiven
+Endpunkt, die Zustimmungs- und Mailtexte, die Basis-URL für die Links sowie Auslöse- und Gegenregel. Darunter lassen sich die Image-Endpunkte verwalten; der Verbindungstest fragt `/v1/ready` ab und zeigt bei Erfolg zusätzlich die beiden Modellserver und die Dimensionierung des Hosts.
 
 ![Karte „Bildgenerierung" im Adminbereich](docs/images/bildgenerierung-admin.png)
 
@@ -734,7 +742,7 @@ LLMInt arbeitet für externe Applikationen als Reverse-Proxy vor den LLM-Endpunk
 - Alle Log-Einträge einer API-Anfrage tragen das Präfix `[API]` bzw. `[API · Key „Name“]` und werden im Log-Viewer als Badge hervorgehoben; ein Eintrag „Zugriff über OpenAI-kompatible API …“ protokolliert Client-IP, Tool-Modus, angefordertes und verwendetes Modell sowie die Herkunft des Modells (API-Key-Modell oder Standardmodell).
 - Jede Anfrage an `chat/completions` zählt für den zugehörigen Key mit (Aufrufe heute, Aufrufe gesamt, zuletzt genutztes Modell); ohne gültigen Key landen die Aufrufe im Sammeleintrag „ohne Key". Beides erscheint als Wolke am Knoten **API** der Dashboard-Topologie. Das Auflisten der Modelle (`/v1/models`) wird nicht gezählt.
 
-Die Basis-URLs zum Kopieren zeigt der Admin-Bereich unter **Verwaltung → 🔌 OpenAI-API**, die Keys verwaltet die Karte **Verwaltung → 🗝️ API-Keys** im selben Tab wie alle anderen Einstellungen. API-Keys werden als Hash gespeichert; beim Erstellen lässt sich das zu verwendende Modell aus den Modellen der aktiven Endpunkte auswählen. Die alte Seite `admin/api_keys.php` leitet auf diese Karte weiter.
+Die Basis-URLs zum Kopieren zeigt der Admin-Bereich unter **Verwaltung → 🔌 OpenAI-API**, die Keys verwaltet die Seite **Verwaltung → 🗝️ API-Keys**. Seit der Aufteilung des Admin-One-Pagers hat jeder Navigationseintrag seine eigene Seite (`admin/api_keys.php`). API-Keys werden als Hash gespeichert; beim Erstellen lässt sich das zu verwendende Modell aus den Modellen der aktiven Endpunkte auswählen.
 
 ![API-Key anlegen mit Modellauswahl im Dropdown](docs/images/api-keys-modell-dropdown.png)
 
@@ -819,7 +827,7 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 
 - Voraussetzung ist lediglich PHP mit den genannten Erweiterungen sowie eine Datenbank; Composer, npm oder ein Build-Schritt werden nicht benötigt.
 - Änderungen am Schema gehören nach `ensureRuntimeSchema()` in `db.php`, damit bestehende Installationen automatisch migrieren; die Erstinstallation wird in `setup.php` ergänzt.
-- Neue Einstellungen erhalten ein Formular mit `action`-Wert in `admin/index.php` und werden über `getSetting()` beziehungsweise `setSetting()` verwendet.
+- Neue Einstellungen erhalten ein Formular mit `action`-Wert auf der zuständigen Adminseite `admin/<seite>.php` (POST-Zweig in `admin/partials/actions.php`) und werden über `getSetting()` beziehungsweise `setSetting()` verwendet.
 - Neue HTTP-Endpunkte werden als eigene Datei unter `api/` angelegt, binden `db.php` ein und prüfen Sitzung, Rolle und CSRF-Token wie die bestehenden Endpunkte.
 - Neue Chat-Tools benötigen eine Definition, eine Verfügbarkeitsprüfung und einen Zweig in der Tool-Schleife von `api/chat.php`.
 - Datenbankzugriffe erfolgen ausschließlich über vorbereitete PDO-Statements, Ausgaben werden mit `htmlspecialchars()` maskiert, Meldungen sind auf Deutsch, Protokollierung erfolgt über `writeLog()`.

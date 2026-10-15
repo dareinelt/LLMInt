@@ -49,7 +49,7 @@ Zwei Darstellungsorte nutzen denselben Payload und denselben Renderer:
 
 | Ort | Datei | Besonderheit |
 |---|---|---|
-| Dashboard-Karte | `admin/index.php` (`#dashboard-card`) | eingebettet in die Admin-Oberfläche, Panels und Legende im Kartenrahmen |
+| Dashboard-Karte | `admin/index.php` (`#dashboard-card`) | eingebettet in die Admin-Oberfläche, Panels und Legende im Kartenrahmen; die Knoten-Deeplinks führen auf die Adminseite mit der jeweiligen Karte (`topology_admin_link()`) |
 | Vollbildansicht | `admin/topology.php` | eigene Hülle ohne Admin-Sidebar, gleiche Bedienelemente |
 
 ---
@@ -171,7 +171,9 @@ Faustregeln:
   hat entweder das eine oder das andere, nie beides (siehe `usesPanel()` und
   `usesDetailCard()` im Renderer).
 - `url` macht den Knoten anklickbar bis „In der Konfiguration öffnen →"
-  (z. B. `index.php#api-keys-card`).
+  (z. B. `api_keys.php#api-keys-card`). Karten-ID → Seite bildet
+  `topology_admin_link()` ab, damit der Link auf der Seite landet, die die
+  Karte wirklich enthält.
 - `route` am Client-Knoten ist die einzige Ausnahme von der reinen Sicht: sie
   beschreibt die gerade laufende Anfrage.
 
@@ -209,6 +211,7 @@ SearXNG → Wissensdatenbank → ImageInt → SpeechInt → Zentrum und Hub-Kant
 | `topology_route_targets()` | löst die Route eines Clients in die Knotenschlüssel des Weges auf |
 | `topology_node()` | füllt die gemeinsamen Knotenvorgaben auf |
 | `topology_endpoint_state()` | Zustand eines LLM-Endpunkts aus `aktiv` + belegten Slots |
+| `topology_admin_link()` | Karten-ID → Adminseite für Knoten-Deeplinks (`api-keys-card` → `api_keys.php#api-keys-card`, `config-balancer-card` → `balancer.php#config-balancer-card`, unbekannt → `index.php#<anchor>`) |
 
 ### `topology_build(array $stats, array $options = []): array`
 
@@ -238,7 +241,7 @@ $apiAnon  = is_array($apiUsage['anonymous'] ?? null) ? $apiUsage['anonymous'] : 
   (Meldung „Mit diesem Schlüssel läuft gerade ein Aufruf."), sonst `off`
   („Zurzeit keine Aufrufe mit diesem Schlüssel.", bei deaktiviert/abgelaufen mit
   Begründung). `badge` ist `N heute` bzw. `inaktiv`, `activity` 4 bei Präsenz
-  sonst 1, `url` zeigt auf `index.php#api-keys-card`. Fakten in dieser
+  sonst 1, `url` zeigt auf `api_keys.php#api-keys-card`. Fakten in dieser
   Reihenfolge: Aufrufe, Aufrufe heute, Letztes Modell, Zuletzt benutzt, Präfix,
   Besitzer, ggf. Festes Modell, ggf. Gültig noch.
 - **Sammeleintrag** `api-key:anon` (Titel „ohne Key", Untertitel „Aufrufe ohne
@@ -248,7 +251,7 @@ $apiAnon  = is_array($apiUsage['anonymous'] ?? null) ? $apiUsage['anonymous'] : 
 - **Gruppenknoten** `api` (kind `api`, Titel „API", Untertitel
   „Reverse Proxy · N Schlüssel") mit `cloud.title` „Aufrufe über die API" und
   den Fakten Aufrufe heute, Aufrufe gesamt, Gerade aktiv, Schlüssel, ggf. Ohne
-  Schlüssel. `url` zeigt auf `index.php#api-keys-card`.
+  Schlüssel. `url` zeigt auf `api_keys.php#api-keys-card`.
 - **Kanten** `api → api-key:*` (synthetisch) und – weiter unten im Zentrum –
   `hub → api`.
 
@@ -543,6 +546,7 @@ Bei Änderungen mitzuziehen:
 | Wer liefert die Daten? | `admin/load_stats.php` (Abschnitt `api` aus `listApiKeyUsage()`) |
 | Wer zeichnet? | `mount()` in `assets/js/flow-topology.js` |
 | Wo wird eingebettet? | `admin/index.php` (`#dashboard-card`) und `admin/topology.php` |
+| Wohin führen Knoten-Deeplinks? | über `topology_admin_link()` auf die Adminseite mit der Karte (`admin/<seite>.php#<karte>`) |
 | Wie oft aktualisiert? | `data-refresh-interval`, Standard 15 s, Untergrenze 5 s |
 | Wo zählen API-Aufrufe? | `recordApiCallUsage()` in `db.php`, aufgerufen aus `api/openai_common/chat_completions.php` |
 | Wann gilt ein Schlüssel als aktiv? | `last_used_age <= TOPOLOGY_API_KEY_PRESENCE_SECONDS` (90 s) und Schlüssel nutzbar |

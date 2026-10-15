@@ -1,7 +1,8 @@
 # Tests
 
 Diese Tests sichern die beiden Teile ab, die beim Umbau des Admin-Dashboards
-zur Nachrichtenflow-Topologie entstanden sind:
+zur Nachrichtenflow-Topologie entstanden sind, und die Aufteilung des
+Admin-One-Pagers in eine Seite pro Navigationseintrag:
 
 | Ebene | Datei | Gegenstand |
 |---|---|---|
@@ -9,6 +10,7 @@ zur Nachrichtenflow-Topologie entstanden sind:
 | PHP | `php/test_topology_build.php` | `topology_build()`: Hierarchie (LLMInt → LLM/SpeechInt/ImageInt/SearXNG/Wissensdatenbank/Clients/API), Knoten-/Kantenvertrag für den Renderer, Detailkarten-Felder, Optionen (`include_off`, `slot_limit`), Störungsliste, API-Schlüssel als Wolke mit ihren Zählern, laufende Anfrage am Client-Knoten (`route`). |
 | JavaScript | `js/flow-topology.test.js` | Der Canvas-Renderer `assets/js/flow-topology.js` in einer VM-Sandbox: was `apply()` übernimmt und verwirft, Umschalten zwischen Detailkarte und HTML-Panel, Auswahl per Klick, der hervorgehobene Weg zwischen Endpunkt und Aufrufer (in beide Richtungen, bei laufender Anfrage auf deren Zweig eingegrenzt, bei einer Sitzung ohne laufende Anfrage gar kein Weg), das Lauflicht des laufenden Weges, die Platzierung der Detailkarte neben dem Knoten, ein vollständiger Frame, reduzierte Bewegung, ResizeObserver, JSON-Insel und `load()`. |
 | PHP | `php/test_admin_payloads.php` | Die beiden Stellen, die den Statistik-Payload für `topology_build()` zusammenbauen (`admin/load_stats.php` für den 15-s-Poll, `admin/index.php` für die serverseitig gerenderte Dashboard-Karte). Der Test liest die Array-Literale aus dem Quelltext und vergleicht ihre Abschnitte: fehlt ein Zweig in einer der beiden Aufbaustellen, bleibt er im Dashboard leer, bis der nächste Poll greift. |
+| PHP | `php/test_admin_split.php` | Der Vertrag der aufgeteilten Adminseiten (`admin/partials/` + eine Seite je Navigationseintrag): Seitenleiste und Seitendateien bleiben deckungsgleich, jede Seite hält `bootstrap → layout_head → Karte → layout_foot` ein, jede Karte und jede Element-ID existiert genau einmal, jedes `getElementById` und jedes `label for=` findet sein Element auf derselben Seite, kein Ankersprung zeigt auf eine Karte einer anderen Seite, Formulare senden an ihre eigene Seite mit einem Action-Namen, den der Dispatcher kennt, keine Seite leitet auf eine andere um, und die Topologie-Deeplinks aus `lib/topology.php` (`topology_admin_link()`) zeigen auf die Seite, die die Zielkarte wirklich enthält. |
 
 Die Tests sind bewusst **abhängigkeitsfrei**: kein Composer, kein PHPUnit, kein
 npm-Paket, kein Browser. `php/bootstrap.php` ist ein Mini-Harness,
@@ -35,6 +37,7 @@ PHP (benötigt PHP ≥ 8.1 mit `mbstring`, weil `db.php` eingebunden wird):
 php tests/php/test_topology_helpers.php
 php tests/php/test_topology_build.php
 php tests/php/test_admin_payloads.php
+php tests/php/test_admin_split.php
 ```
 
 Ohne lokales PHP per Docker (funktioniert auch in PowerShell):
@@ -55,7 +58,7 @@ Ohne lokales Node per Docker:
 docker run --rm -v "${PWD}:/app" -w /app node:22-alpine node --test tests/js/flow-topology.test.js
 ```
 
-Beide PHP-Dateien geben `PASS <Name>: n/m Tests bestanden` aus und beenden sich
+Alle PHP-Testdateien geben `PASS <Name>: n/m Tests bestanden` aus und beenden sich
 bei einem Fehlschlag mit Exit-Code 1; `node --test` ebenso. Damit sind sie
 direkt in CI oder einem Pre-Commit-Hook verwendbar.
 
@@ -69,13 +72,14 @@ tests/
 │   ├── fixtures.php              # realistische load_stats-Antworten als Vorlagen
 │   ├── test_topology_helpers.php # 31 Tests
 │   ├── test_topology_build.php   # 51 Tests
-│   └── test_admin_payloads.php   # 4 Tests
+│   ├── test_admin_payloads.php   # 4 Tests
+│   └── test_admin_split.php      # 19 Tests
 └── js/
     ├── support/sandbox.js        # DOM-/Canvas-Attrappe + node:vm-Lader
     └── flow-topology.test.js     # 50 Tests
 ```
 
-Zusammen 136 Tests: 86 in PHP, 50 in JavaScript.
+Zusammen 155 Tests: 105 in PHP, 50 in JavaScript.
 
 ## Neue Tests ergänzen
 
