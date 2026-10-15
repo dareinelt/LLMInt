@@ -16,7 +16,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
-          extensions: mbstring
+          extensions: mbstring, curl
           coverage: none
 
       - name: Node einrichten
@@ -26,3 +26,40 @@ jobs:
 
       - name: Tests ausführen
         run: ./tests/run.sh
+
+  db-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: llmint
+          MYSQL_DATABASE: llmint
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pllmint"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_NAME: llmint
+      DB_USER: root
+      DB_PASS: llmint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP einrichten
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, curl, pdo_mysql
+          coverage: none
+
+      - name: Datenbankgestützte Tests ausführen
+        run: ./tests/run.sh db
