@@ -2,6 +2,8 @@
 
 LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer internen KI-Plattform. Sie stellt Chat, Routing und Lastverteilung, Dokument-RAG, Bildgenerierung, Benutzerverwaltung sowie Betriebsmonitoring in einer Oberfläche bereit.
 
+![Admin-Dashboard als Nachrichtenflow-Topologie, aufgenommen mit Beispiel-Endpunkten, Mock-SearXNG und Mock-Clients](docs/images/admin-dashboard-topologie.png)
+
 Weitere Dokumente im Repository:
 
 | Dokument | Zielgruppe |
@@ -54,11 +56,19 @@ Weitere Dokumente im Repository:
 - **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO – direkt im Container oder über den `auth`-Container von lanpa.
 - **Betrieb hinter lanpa:** optional unter `https://<lanpa-host>/ki/` mit dem zentral in lanpa verwalteten Zertifikat (siehe [Betrieb hinter lanpa](#betrieb-hinter-lanpa)).
 - **OpenAI-kompatible API:** externe Applikationen nutzen LLMInt als Reverse-Proxy (Chat Completions, wahlweise mit den Chat-Tools); sie verhalten sich wie nicht angemeldete Benutzer, durchlaufen Routing und Lastverteilung wie ein direkter Zugriff und werden im Log mit `[API]` gekennzeichnet.
-- **Monitoring:** Endpunktlast, Tokenverbrauch, aktive Clients (als Wolke mit Hostname bzw. IP-Adresse rund um die Clients-Kachel), Such- und Generierungsjobs sowie optionale SSH-Systemmetriken. Die Lastverteilungs-Grafik lässt sich per **⛶ Vollbild** auf die volle Browserfenstergröße vergrößern (kein Browser-Vollbild, Beenden per Button oder Esc).
+- **Monitoring:** Endpunktlast, Tokenverbrauch, aktive Clients (als 3D-Wolke mit Hostname bzw. IP-Adresse um den Clients-Knoten), Aufrufe über die OpenAI-kompatible API (als eigene Wolke je API-Schlüssel), Such- und Generierungsjobs sowie optionale SSH-Systemmetriken – dargestellt als Nachrichtenflow-Topologie (siehe [Admin-Dashboard](#admin-dashboard)). Ein Klick auf einen Endpunkt, einen Dienst oder eine Gruppe öffnet die Detailkarte mit Modell, Auslastung, Slots und Systemwerten. Die Ansicht lässt sich per **⛶ Vollbild** auf die volle Browserfenstergröße vergrößern (kein Browser-Vollbild, Beenden per Button oder Esc).
 - **Endpunkte technische Verwaltung:** jeder LLM-Endpunkt lässt sich mit einer [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz koppeln (Server-URL + API-Schlüssel der Management-Board-API). Die Seite `admin/endpoint_tech.php` zeigt je Endpunkt in einer Zeile Modell, Ø Token/s, CPU-/GPU-Last, CPU-/GPU-Temperatur (mit 24h-Min./Max.) sowie RAM-/VRAM-Auslastung; ein Klick auf die Zeile öffnet quickinfo im neuen Tab.
 - **Nutzungsstatistik:** Liniendiagramm im Adminbereich (retinatauglich, umschaltbar auf 3, 7, 14, 30, 90, 180 Tage oder ein Jahr) mit Clients, angemeldeten Nutzern, durchgeführten Tasks, Websuchen und fehlgeschlagenen Tasks je Tag.
 - **Prompt Security:** mehrstufige Prüfung von Chat-Eingaben mit konfigurierbaren Regeln, Bewertung und Protokollierung.
 - **Spracherkennung und Diktat:** Diktat per Mikrofon-Button direkt in das Eingabefeld – ein [SpeechInt](https://github.com/dareinelt/SpeechInt)-Dienst transkribiert die Segmente mit whisper.cpp und formuliert die Fragmente mit einem Qwen3.5-2B aus; gesprochene Diktatbefehle („Punkt", „Neue Zeile", „Lösche letztes Wort") werden in Zeichen und Formatierung umgewandelt. Nach dem Sprechen schlägt die Oberfläche passende Befehle als Pillen zur Korrektur vor. Die rechenintensiven Modelle laufen nicht mehr in diesem Stack, sondern auf einem oder mehreren separaten SpeechInt-Hosts.
+
+### Admin-Dashboard
+
+Das Dashboard im Adminbereich zeigt die Betriebsdaten als Nachrichtenflow-Topologie. **LLMInt** steht im Zentrum; darum liegen die direkten Kinder **LLM**, **SpeechInt**, **ImageInt**, **SearXNG**, **Wissensdatenbank**, **Clients** und **API**. Unter LLM hängen die Intelligenzgruppen (je Modell), unter diesen die einzelnen LLM-Endpunkte; ImageInt und SpeechInt bündeln ihre Endpunkte jeweils direkt. Die aktiven Clients erscheinen als 3D-Wolke aus Hostnamen beziehungsweise IP-Adressen um ihren Knoten, die Aufrufe über die OpenAI-kompatible API als zweite Wolke: ein Eintrag je API-Schlüssel mit Aufrufen heute, Aufrufen gesamt und dem zuletzt genutzten Modell, dazu ein Sammeleintrag „ohne Key" für Aufrufe ohne gültigen Schlüssel. Animierte Linien und Partikel verbinden die Bausteine und machen Richtung und Auslastung sichtbar; Farbe und Strichart folgen dem Zustand des Knotens (in Ordnung, eingeschränkt, Störung, nicht aktiv).
+
+Ein Klick auf einen Endpunkt öffnet die Detailkarte direkt im Netz: LLM-Endpunkte zeigen Modell, Status, belegte Slots, laufende Tasks und – sofern eine [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz gekoppelt ist – CPU-/GPU-Werte, SearXNG und die übrigen Dienste ihre Erreichbarkeit. Gleichzeitig hebt das Dashboard den kompletten Weg dieses Bausteins hervor: vom Endpunkt über seine Intelligenzgruppe und LLM hinauf zu LLMInt und von dort hinüber in die Zweige der Aufrufer – in die Clients-Wolke bis zu den einzelnen Client-Hostnamen und in den API-Zweig bis zu den einzelnen API-Schlüsseln. Umgekehrt funktioniert es genauso: Ein Klick auf einen Client-Hostnamen oder einen API-Schlüssel markiert den Weg von diesem Aufrufer über seinen Wolken-Knoten und LLMInt bis hinunter in die Endpunkt-Zweige; die Detailkarte eines Endpunkts öffnet sich dabei nicht, es erscheint allein die des Aufrufers. Läuft auf einem Client gerade eine Anfrage, bleibt der Weg auf genau deren Zweig beschränkt – vom Client über LLMInt und die Intelligenzgruppe bis zu dem Endpunkt, der sie beantwortet – und wird als laufender Weg mit einem hellen, wandernden Strichmuster gekennzeichnet; ist der Client untätig, ist sein Weg unbekannt und es wird keiner markiert, der Klick wählt dann nur die Sitzung aus. Welche Anfrage gerade läuft, meldet der Browser selbst: Die Chat-Seite schickt im Heartbeat zur Anwesenheit zusätzlich Endpunktart, Modell und Endpunkt-ID mit, beim Start einer Anfrage und – nach der Antwort – wieder als leer. Der Adminbereich zeigt das als Zeile „Laufende Anfrage" am Client-Knoten und nach spätestens 15 s auch in der Topologie. Alles daneben tritt zurück, die Kanten des Weges werden breiter und heller gezeichnet und führen als einzige noch Partikel. Die Karte sucht sich dafür eine freie Stelle neben dem angeklickten Knoten, statt ihn zu verdecken, und bleibt über eine gestrichelte Linie mit ihm verbunden. Gruppen, die beiden Wolken und Übersichtsknoten öffnen stattdessen das ausführliche Panel am Rand mit Mitglieder- und Nachbarlisten.
+
+![Admin-Dashboard mit der Nachrichtenflow-Topologie](docs/images/admin-dashboard-topologie-kachel.png)
 
 ## Architektur
 
@@ -101,6 +111,7 @@ Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Bu
 | `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth |
 | `docker-compose.test.yml` | Compose-Override für einen schnellen lokalen Stack beim Testen des Diktats (siehe [Spracherkennung und Diktat](#spracherkennung-und-diktat)) |
 | `docker-compose.lanpa.yml` | optionaler Override für den Betrieb hinter dem `auth`-Container von lanpa |
+| `tests/` | abhängigkeitsfreie PHP- und JavaScript-Tests für Topologie und Canvas-Renderer (siehe [`tests/README.md`](tests/README.md)) |
 | `docconvert/` | Python/FastAPI-Container zur Konvertierung von Office- und Textdateien in strukturierte Chunks |
 | `doc_uploads/`, `sd_output/`, `image_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
 | `assets/`, `docs/`, `ressources/` | Bilder der Oberfläche, Diagramme der Dokumentation, Beispiel-Systemprompt |
@@ -489,7 +500,7 @@ Teamweites Wissen wird nicht mehr von Nutzern hochgeladen, sondern zentral mit [
 | `local` | Ein docvecwizard-**Export** (`.tar.gz` mit `manifest.json`, `checksums/SHA256SUMS`, `documents/<version>/{metadata,chunks,vectors}.json`) wird über die Admin-Oberfläche (`api/vector_import.php`) in die im Compose-Stack mitlaufende Milvus-Instanz (`milvus`-Service, Collection `docvec_<modell>`) und als Volltext nach MySQL (`vector_documents`, `vector_chunks`) importiert. Archive können per Browser hochgeladen oder in das Volume `vector_imports/` gelegt werden. Für die Suche muss ein Embedding-Endpunkt mit demselben Modell wie beim Export aktiv sein. |
 | `off` | Keine zentrale Wissensdatenbank; nur private Uploads werden durchsucht. |
 
-Ist ein Modus aktiv, zieht `api/chat.php` **bei jeder Anfrage** die `vector_top_k` besten Treffer (Mindest-Score `vector_min_score`) aus der Vektordatenbank, injiziert sie als Kontext-Systemnachricht und stellt sie zusätzlich dem Tool `query_documents` zur Verfügung. Jede Abfrage wird in `vector_query_logs` protokolliert. Status (online/offline, Dokumente, Vektoren, Abfragen heute, Ø Antwortzeit) erscheint als Kachel in der Dashboard-Grafik der Admin-Oberfläche – bei `remote` mit der URL des API-Endpunkts, bei `local` mit der Milvus-URL. Beide Modi lassen sich in der Admin-Oberfläche vor dem Speichern testen (`api/test_vector_store.php`).
+Ist ein Modus aktiv, zieht `api/chat.php` **bei jeder Anfrage** die `vector_top_k` besten Treffer (Mindest-Score `vector_min_score`) aus der Vektordatenbank, injiziert sie als Kontext-Systemnachricht und stellt sie zusätzlich dem Tool `query_documents` zur Verfügung. Jede Abfrage wird in `vector_query_logs` protokolliert. Status (online/offline, Dokumente, Vektoren, Abfragen heute, Ø Antwortzeit) erscheint am Knoten „Wissensdatenbank" der Dashboard-Topologie – bei `remote` mit der URL des API-Endpunkts, bei `local` mit der Milvus-URL. Beide Modi lassen sich in der Admin-Oberfläche vor dem Speichern testen (`api/test_vector_store.php`).
 
 ## Prompt Security
 
@@ -575,7 +586,7 @@ Ein Endpunkt besteht aus Adresse (`base_url`), optionalem Token und Timeout. Ein
 | `speech_dictation_prompt` | Systemprompt des Diktat-Modells (leer = Standard) |
 | `speech_dictation_commands`, `speech_dictation_pills` | Diktatbefehle und Schnellbefehl-Pillen als JSON |
 
-Die Tabelle `speech_endpoints` speichert `alias`, `base_url`, `token`, `timeout`, `is_active` und `sort_order`. Die Umgebungsvariablen `SPEECHINT_URL`, `SPEECHINT_TOKEN` und `SPEECHINT_TIMEOUT` belegen den Standard-Endpunkt vor und haben – wie bei docconvert – Vorrang vor der Datenbank; die Karte zeigt unter „Aktuell wirksam" an, woher der Wert stammt. Zusätzlich veröffentlicht die Admin-Oberfläche einen Sprach-Endpunkt als Knoten in der Dashboard-Grafik.
+Die Tabelle `speech_endpoints` speichert `alias`, `base_url`, `token`, `timeout`, `is_active` und `sort_order`. Die Umgebungsvariablen `SPEECHINT_URL`, `SPEECHINT_TOKEN` und `SPEECHINT_TIMEOUT` belegen den Standard-Endpunkt vor und haben – wie bei docconvert – Vorrang vor der Datenbank; die Karte zeigt unter „Aktuell wirksam" an, woher der Wert stammt. Zusätzlich veröffentlicht die Admin-Oberfläche die konfigurierten Endpunkte als Knoten unter der Gruppe „SpeechInt" in der Dashboard-Topologie.
 
 ### SpeechInt-Dienst
 
@@ -721,6 +732,7 @@ LLMInt arbeitet für externe Applikationen als Reverse-Proxy vor den LLM-Endpunk
 - Das Feld `model` der Anfrage wird ignoriert. Jede Anfrage startet mit dem am API-Key hinterlegten Modell (siehe Admin-Bereich → **Verwaltung → 🗝️ API-Keys**); ist dort keines gesetzt oder wird die Anfrage ohne gültigen Key gestellt, gilt das Gast-Standardmodell (Einstellung `default_model`). Ein am Key hinterlegtes Modell wird nur verwendet, solange es von einem aktiven Endpunkt angeboten wird – sonst greift das Standardmodell. Danach greifen Prompt Security, Entscheidungsmodell/Routing, Balancer, Fallback und Warteschlange genau wie bei einem direkten Zugriff. Reasoning lässt sich per `!!`-Präfix oder `reasoning_effort` aktivieren.
 - Ein API-Key im Header `Authorization: Bearer <key>` ist optional. Unbekannte, deaktivierte oder abgelaufene Keys (z. B. Platzhalter, die manche Clients zwingend senden) werden wie ein Zugriff ohne Key behandelt; ein gültiger Key dient der Zuordnung im Log und kann optional ein festes Modell festlegen, nicht der Anmeldung als Key-Besitzer.
 - Alle Log-Einträge einer API-Anfrage tragen das Präfix `[API]` bzw. `[API · Key „Name“]` und werden im Log-Viewer als Badge hervorgehoben; ein Eintrag „Zugriff über OpenAI-kompatible API …“ protokolliert Client-IP, Tool-Modus, angefordertes und verwendetes Modell sowie die Herkunft des Modells (API-Key-Modell oder Standardmodell).
+- Jede Anfrage an `chat/completions` zählt für den zugehörigen Key mit (Aufrufe heute, Aufrufe gesamt, zuletzt genutztes Modell); ohne gültigen Key landen die Aufrufe im Sammeleintrag „ohne Key". Beides erscheint als Wolke am Knoten **API** der Dashboard-Topologie. Das Auflisten der Modelle (`/v1/models`) wird nicht gezählt.
 
 Die Basis-URLs zum Kopieren zeigt der Admin-Bereich unter **Verwaltung → 🔌 OpenAI-API**, die Keys verwaltet die Karte **Verwaltung → 🗝️ API-Keys** im selben Tab wie alle anderen Einstellungen. API-Keys werden als Hash gespeichert; beim Erstellen lässt sich das zu verwendende Modell aus den Modellen der aktiven Endpunkte auswählen. Die alte Seite `admin/api_keys.php` leitet auf diese Karte weiter.
 
@@ -794,7 +806,7 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 
 | Gruppe | Tabellen |
 |---|---|
-| Konfiguration und Konten | `settings`, `users`, `api_keys` (optionales Modell je Key) |
+| Konfiguration und Konten | `settings`, `users`, `api_keys` (optionales Modell je Key, dazu die Aufrufzähler für die Topologie), `api_anonymous_usage` (Aufrufe ohne gültigen Key) |
 | LLM-Betrieb | `endpoints`, `tasks`, `endpoint_sys_stats`, `app_logs` |
 | Chat und Routing | `conversation_sessions`, `routing_categories`, `routing_rules`, `search_logs` |
 | Dokumente und Embeddings | `document_uploads`, `document_chunks`, `embedding_endpoints`, `embedding_cache`, `embedding_logs` |
@@ -812,6 +824,20 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 - Neue Chat-Tools benötigen eine Definition, eine Verfügbarkeitsprüfung und einen Zweig in der Tool-Schleife von `api/chat.php`.
 - Datenbankzugriffe erfolgen ausschließlich über vorbereitete PDO-Statements, Ausgaben werden mit `htmlspecialchars()` maskiert, Meldungen sind auf Deutsch, Protokollierung erfolgt über `writeLog()`.
 - Vor dem Commit sollten geänderte Dateien mit `php -l` geprüft werden. Details zu Funktionen, Tabellen und Einstellungsschlüsseln stehen in [`description.md`](description.md), [`docs/architecture.md`](docs/architecture.md) und [`docs/functions.md`](docs/functions.md).
+
+### Tests
+
+Die Übersetzungsschicht der Topologie (`lib/topology.php`) und der Canvas-Renderer (`assets/js/flow-topology.js`) sind durch abhängigkeitsfreie Tests abgesichert – kein Composer, kein PHPUnit, kein npm-Paket:
+
+```sh
+./tests/run.sh        # PHP- und JavaScript-Tests
+./tests/run.sh php    # nur tests/php/test_*.php
+./tests/run.sh js     # nur tests/js/*.test.js
+```
+
+Ohne lokale PHP-/Node-Installation laufen dieselben Tests per Docker; die genauen Befehle und der Aufbau der Suiten stehen in [`tests/README.md`](tests/README.md). Der Workflow `.github/workflows/tests.yml` führt sie bei jedem Pull Request aus.
+
+Aufbau, Funktionsweise und Anpassung der Topologie (Knoten, Wolken, Wege, Farben, Layout) beschreibt [`topologie-referenz.md`](topologie-referenz.md).
 
 ## Betrieb und Sicherheit
 

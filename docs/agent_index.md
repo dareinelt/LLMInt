@@ -65,6 +65,9 @@ OpenAI-compatible API.
 | `lib/mailer.php` | Custom SMTP client (no PHPMailer): registration/verification and password-reset mail |
 | `lib/quickinfo.php` | Client for the quickinfo Management-Board API (`/api/v1/*`) used for live CPU/GPU/RAM/VRAM metrics |
 | `lib/speech_dictation.php` | Dictation as HTTP client of a SpeechInt endpoint: endpoint table access, transcription, post-processing, dictation commands + quick-command pills, prompt, health/config probes, deterministic rule fallback (see [Dictation](#dictation-speech-to-text)) |
+| `lib/topology.php` | Translation layer from the `admin/load_stats.php` JSON to the node/edge payload of the message-flow topology; no DB access and no HTTP of its own. Hierarchy: `hub` (LLMInt) → `llm` → `model` → `endpoint`, plus `speech`, `image`, `search`, `vector`, `clients` → `client` and `api` → `api-key` (see [Admin dashboard topology](#admin-dashboard-topology) and [`topologie-referenz.md`](../topologie-referenz.md)) |
+| `assets/js/flow-topology.js` | Canvas renderer of the message-flow topology: 3D ring layout around LLMInt, animated edges with particles, hover/click, in-canvas detail cards placed beside the node, highlighting of the route between an endpoint and a caller (clients and API keys, both directions; a client with a running request narrows it to that branch and draws it as a running light), clouds for clients and API calls, full-screen mode (~2,360 lines) |
+| `assets/css/flow-topology.css` | Styles for the topology canvas, detail cards and overlay controls |
 | `lib/prompt.txt` | Seed/fallback routing categories (imported into `routing_categories`) |
 | `api/chat.php` | **Main chat pipeline** (~3,650 lines): prompt security → routing → balancer → tools (search, web fetch, RAG, vector store, image gen) → streaming → token accounting |
 | `api/balancer.php` | `pickEndpointForModel()`, `completeTask()`, upgrade suggestions, model availability, intelligence scoring |
@@ -78,7 +81,7 @@ OpenAI-compatible API.
 | `api/document_retention.php` | Toggles `document_uploads.is_library` ("Bibliothek") for a chat-attached document |
 | `api/document_status.php` / `api/document_delete.php` / `api/rebuild_embeddings.php` | Upload status, deletion (with chunks), embedding rebuild |
 | `api/chat_sessions.php` | `action=list\|load\|delete` for a user's conversation sessions |
-| `api/heartbeat.php` | Presence heartbeat → `active_clients`, `client_count_log`, `client_count_daily` |
+| `api/heartbeat.php` | Presence heartbeat → `active_clients`, `client_count_log`, `client_count_daily`; an optional `route:{kind, model, endpoint_id}` records the request the tab is waiting for |
 | `api/models.php` | Query the models of an endpoint |
 | `api/healthcheck.php` | Aggregated health status of all LLM endpoints |
 | `api/image_status.php` | Job status of a running image render; also adopts the finished PNG into the stored session |
@@ -98,7 +101,9 @@ OpenAI-compatible API.
 | `docconvert/` | Python/FastAPI container converting Office & text files into structured chunks (TTL disk cache); unit tests in `docconvert/tests/` |
 | `admin/index.php` | Admin UI: endpoints, routing, balancer, RAG/embeddings, vector store, LDAP/SMTP, users, logs, OpenAI API keys, usage statistics |
 | `admin/prompt_security.php` | Prompt security dashboard, rule management, logs, settings |
-| `admin/load_stats.php` | Live dashboard stats (JSON), incl. `vector_store` status and `speech_endpoints`/`speech_status` for the dashboard graphic |
+| `admin/load_stats.php` | Live dashboard stats (JSON), incl. `vector_store` status, `speech_endpoints`/`speech_status`, the API call counters (`api`, from `listApiKeyUsage()`) and the `topology` payload built by `topology_build()` for the message-flow graphic |
+| `admin/topology.php` | Full-screen view of the message-flow topology (same payload, own page) |
+| `tests/` | Dependency-free test suites: PHP tests for `lib/topology.php`, Node (`node:test`) tests for `assets/js/flow-topology.js` in a VM sandbox, plus `tests/run.sh` and a GitHub workflow (see [`tests/README.md`](../tests/README.md)) |
 | `admin/usage_stats.php` | Daily usage statistics JSON (clients, users, tasks, failures, searches) for the chart |
 | `admin/refresh_sys_stats.php` | SSH system metrics per endpoint |
 | `admin/endpoint_tech.php` | quickinfo pairing per endpoint + live technical overview (CPU/GPU/RAM/VRAM, temps) |
@@ -315,7 +320,7 @@ Server-side: `speechDictationProcessFragment()` is the single entry point;
 `speechDictationActiveEndpoint()` picks the endpoint (selected row, else the first
 active one); `speechDictationApplyCommands()` is the **deterministic fallback used only
 when the endpoint is unreachable or fails hard**. The endpoint state for the admin card
-and the dashboard tile comes from `speechDictationHealth()` /
+and the SpeechInt node of the dashboard topology comes from `speechDictationHealth()` /
 `speechDictationDashboardStatus()` (20 s cache in `speech_dictation_status_cache`).
 
 Two non-obvious constraints — change these only with the surrounding comment:
@@ -345,7 +350,7 @@ Commands and pills are admin-editable JSON (`speech_dictation_commands`,
 `#config-speech-card` card of `admin/index.php` (`save_speech_dictation_settings` plus
 `add_speech_endpoint`/`update_speech_endpoint`/`delete_speech_endpoint`/
 `move_speech_endpoint` for the endpoint table). The active endpoint also appears as a
-tile in the admin dashboard graphic (`renderLoadTree()` in `admin/index.php`, fed by
+node in the message-flow topology of the admin dashboard (`lib/topology.php`, fed by
 `admin/load_stats.php`).
 
 ---
@@ -417,6 +422,78 @@ client-side trigger alone would only send the mail while the browser tab is open
 
 ---
 
+## Admin dashboard topology
+
+The admin dashboard graphic is a message-flow topology in the style of lanpa's
+Nachrichtenflow view. Data and rendering are strictly separated:
+
+```
+admin/load_stats.php ──stats JSON──▶ topology_build()   (lib/topology.php)
+                                          │  node/edge payload
+                                          ▼
+                     admin/index.php  (#dashboard-card)  ─┐
+                     admin/topology.php (full screen)     ─┴─▶ flow-topology.js (canvas)
+```
+
+**Hierarchy** (every edge points parent → child, so the renderer can lay the graph out as
+a ring tree around the core):
+
+```
+hub (LLMInt, always the centre)
+  ├─ llm      → model (Intelligenzgruppe) → endpoint (LLM endpoint)
+  ├─ speech   → endpoint (SpeechInt)
+  ├─ image    → endpoint (ImageInt)
+  ├─ search   (SearXNG)
+  ├─ vector   (Wissensdatenbank)
+  ├─ clients  → client (one browser session)
+  └─ api      → api-key (one caller of the OpenAI-compatible API)
+```
+
+- The `llm`, `model`, `image` and `speech` nodes carry `'group' => true` and are excluded
+  from `incidents`, so a fault is always reported on the concrete endpoint.
+- The SpeechInt and ImageInt groups only produce nodes when endpoints exist for them.
+- `clients` and `api` carry a `cloud` list; the client hostnames/IPs and the API keys are
+  drawn as a 3D cloud around the node. `SERVICE_RING_OFFSET` in `flow-topology.js` pushes
+  SearXNG, SpeechInt and ImageInt further out so the clouds have room.
+- The `api` node counts the calls that arrive through the reverse-proxy endpoints
+  (`api/openai*/v1/chat/completions`). `recordApiCallUsage()` in
+  `api/openai_common/chat_completions.php` bumps the counter of the used key in
+  `api_keys` (`call_count`, `calls_today` with `counter_date`, `last_model`,
+  `last_used_at`); calls without a valid key are collected in the single-row table
+  `api_anonymous_usage` and show up as the node "ohne Key". `listApiKeyUsage()` reads
+  both and `topology_build()` turns them into the cloud. Listing models
+  (`/v1/models`) is not counted. A key is "just used" while
+  `TOPOLOGY_API_KEY_PRESENCE_SECONDS` (90 s) has not passed; disabled and expired keys
+  keep their counters but are shown as `off`.
+- Clicking a node turns the bubble into an **in-canvas detail card** (`facts` rows plus
+  the `slots` bar). Nodes whose payload is a list (`cloud`/`members`: clients, api, llm,
+  model, image, speech) keep the HTML side panel instead.
+- Selecting a node highlights the whole route through the branches: from an endpoint up
+  to LLMInt and across into every caller (client sessions and API keys), from a client
+  or an API key the other way round down into the endpoint branches. Clicking a cloud
+  node keeps the highlight inside its own branch. The card of a caller does not open an
+  endpoint card.
+- A client that is currently waiting for an answer highlights **only that branch** and
+  draws it as a running light (white, dashed, scrolling). The browser is the only source
+  that knows this: `index.php` reports `route:{kind, model, endpoint_id}` in its presence
+  heartbeat (immediately when a request starts, `null` once the answer arrived),
+  `api/chat.php` refines it with the endpoint that was really picked
+  (`recordClientRoute()` → `active_clients.route_*`) and `topology_build()` attaches it
+  as `route` to the client node. An idle client keeps the full fan-out. Age comes from
+  SQL (`TIMESTAMPDIFF`), never from comparing a DB timestamp with PHP's `time()` – the
+  DB writes wall-clock time in its own time zone.
+- `topology_initial_script()` embeds the payload as
+  `<script type="application/json" data-flow-initial>`, so the first paint needs no extra
+  request; `flow-topology.js` polls `admin/load_stats.php` afterwards.
+- Layout hints (`x`, `y`, `z`) and per-node state survive a refresh; the guard at the top
+  of `apply()` ignores empty or malformed payloads.
+- Payload contract, state ranks and the detail-card conventions are documented in the
+  file header of `lib/topology.php`; the test suites in `tests/` pin them down. A full
+  reference of function, code and customisation lives in
+  [`../topologie-referenz.md`](../topologie-referenz.md).
+
+---
+
 ## Auth, Sessions & Reverse Proxy
 
 - **Session keys**: `$_SESSION['admin_id']` (user id) and `$_SESSION['admin_user']`
@@ -453,6 +530,11 @@ request is attributed in the logs and an optional pinned model (`api_keys.model`
 otherwise the guest default model applies. Log prefix is `[API]`. Strict mode
 (`LLMINT_OPENAI_STRICT_MODE`) disables LLMInt-specific payload extensions.
 
+`api/openai_common/chat_completions.php` additionally calls `recordApiCallUsage()`
+after `openaiBeginAnonymousApiRequest()`, which counts the request on the used key (or
+on the anonymous bucket) – that is the data behind the `api` cloud of the dashboard
+topology. `/v1/models` deliberately does not count.
+
 ---
 
 ## Key Functions by Domain
@@ -468,6 +550,7 @@ domain:
   `resolveIntelligenceGroupModel()`, `resolveUserModel()`, `listActiveEndpointModels()`,
   `getGuestDefaultModel()`, `getGlobalSystemPrompt()`,
   `buildCurrentDateTimeSystemPrompt()`, `recordUserLogin()`, `currentUserRole()`,
+  `recordApiCallUsage()`/`listApiKeyUsage()` (API counters for the topology),
   `isCurrentUserAdmin()`, `requireAdminOrRedirect()`, `requireAdminOrJson403()`.
 - **Chat pipeline** (`api/chat.php`): `streamChatCompletionRequest()` (main entry),
   `create*ToolDefinition()`, `runSearxngSearch()`, `fetchWebPage()`, `queryDocuments()`,
@@ -534,7 +617,7 @@ domain:
 | `api/chat.php` | POST | session optional | Chat incl. routing, tools, streaming |
 | `api/chat_sessions.php` | GET/POST | session | `action=list\|load\|delete` |
 | `api/models.php` | GET | – | Models of an endpoint |
-| `api/heartbeat.php` | POST | – | Presence token |
+| `api/heartbeat.php` | POST | – | Presence token (optional with the running request) |
 | `api/healthcheck.php` | GET | – | Aggregated LLM endpoint health |
 | `api/document_status.php` | GET | session | Upload status (optionally `session_id`-filtered) |
 | `api/upload_document.php` | POST | session + CSRF | Document upload (Office, text, PDF, image) |
@@ -572,7 +655,8 @@ Tables are created in `setup.php` (first install) and kept current by
 |---|---|
 | `settings` | Key-value config (`setting_key`, `setting_value`) |
 | `users` | Accounts: username, password hash, email + verification tokens, role (user/admin), auth_source, can_upload_documents, default_model, requires_password_change, ldap_dn |
-| `api_keys` | OpenAI API key hashes per user (optional pinned `model`, expiry, `last_used_at`) |
+| `api_keys` | OpenAI API key hashes per user (optional pinned `model`, expiry, `last_used_at`) plus the topology counters (`call_count`, `calls_today`, `counter_date`, `last_model`) |
+| `api_anonymous_usage` | Single row collecting API calls made without a valid key (same counter fields) |
 | `app_logs` | Application log |
 | `user_login_log` | Login history (feeds usage statistics) |
 
@@ -582,7 +666,7 @@ Tables are created in `setup.php` (first install) and kept current by
 | `endpoints` | LLM endpoints: base_url, default_model, timeout, is_active, capabilities (`supports_tool_calling`, `supports_vision`, `is_llamacpp`, `reasoning_effort`, `specialized_for_category`, `max_context`, `context_limit_per_slot`), SSH + quickinfo pairing, balancer health (`circuit_state`, `consecutive_failures`, `cooldown_until`, `circuit_opened_at`, `avg_latency_ms`, `last_latency_ms`) |
 | `tasks` | LLM request lifecycle: endpoint_id, model, status, token counters, `tokens_per_second` |
 | `endpoint_sys_stats` | SSH system metrics per endpoint |
-| `active_clients`, `client_count_log`, `client_count_daily` | Presence tracking (heartbeat → live samples → daily aggregates) |
+| `active_clients`, `client_count_log`, `client_count_daily` | Presence tracking (heartbeat → live samples → daily aggregates); `active_clients.route_kind/route_model/route_endpoint_id/route_at` describe the request a tab is currently waiting for |
 | `search_logs` | SearXNG search history |
 
 **Image generation**
@@ -702,12 +786,13 @@ Legacy keys (still read as fallback): `lmstudio_base_url`, `lmstudio_timeout`,
 | Change the central knowledge base | `api/vector_store.php` (search/status), `api/vector_import.php` (import), `admin/index.php` (`config-vector-store-card`) |
 | Admin UI changes | `admin/index.php` (main, incl. API keys), `admin/prompt_security.php` |
 | Add dashboard live data | `admin/load_stats.php` (live), `admin/usage_stats.php` (daily chart) |
+| Dashboard topology (nodes, edges, states) | `lib/topology.php` (payload), `assets/js/flow-topology.js` (renderer), `assets/css/flow-topology.css`, `admin/index.php` (`dashboard-card`), `admin/topology.php` (full screen), `db.php` (`recordApiCallUsage()`, `listApiKeyUsage()`, `recordClientRoute()`), `api/openai_common/chat_completions.php` (API counters), `tests/php/test_topology_*.php` + `tests/php/test_admin_payloads.php` + `tests/js/flow-topology.test.js`; reference: [`topologie-referenz.md`](../topologie-referenz.md) |
 | Auth changes | `login.php`, `register.php`, `admin/login.php`, `lib/ldap_auth.php`, `sso.php` |
 | Reverse proxy / SSO changes | `lib/reverse_proxy.php`, `sso.php`, `sso_fallback.php`, `docker-compose.lanpa.yml` |
 | OpenAI API changes | `lib/openai_api.php`, `api/openai_common/**`, `api/openai*/**` |
 | Image generation | `lib/image_generation.php`, `api/image_*.php`, `admin/index.php` (`config-image-card`) |
 | Frontend chat behaviour | `index.php` (SSE handling, prefixes, sessions, uploads) |
-| Dictation / speech-to-text | `lib/speech_dictation.php` (SpeechInt client), `api/speech_*.php`, `index.php` (dictation IIFE + `#dictate-btn`), `admin/index.php` (`config-speech-card`, `speech_endpoints` CRUD, dashboard tile) |
+| Dictation / speech-to-text | `lib/speech_dictation.php` (SpeechInt client), `api/speech_*.php`, `index.php` (dictation IIFE + `#dictate-btn`), `admin/index.php` (`config-speech-card`, `speech_endpoints` CRUD, SpeechInt node in the topology) |
 
 ### Admin POST actions (`admin/index.php`)
 
@@ -776,7 +861,13 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 
 ## Testing / Linting
 
-- **No automated test suite for the PHP app.**
+- **Topology test suite**: `./tests/run.sh` runs the dependency-free PHP tests for
+  `lib/topology.php` and the `node:test` suite for `assets/js/flow-topology.js`
+  (no Composer, no PHPUnit, no npm packages). Select one half with
+  `./tests/run.sh php` or `./tests/run.sh js`. Details: [`tests/README.md`](../tests/README.md);
+  CI runs the same script on every pull request (`.github/workflows/tests.yml`).
+  Which node kinds, clouds and route rules the suites pin down is described in
+  [`topologie-referenz.md`](../topologie-referenz.md).
 - **Lint**: `php -l <file>` for a syntax check on every changed file.
 - **docconvert**: Python unit tests exist — `pytest docconvert/tests` (from the
   `docconvert/` directory).
@@ -807,6 +898,7 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 │   └── images/            # Diagrams and screenshots used in README.md
 ├── admin/
 │   ├── index.php          # Admin dashboard (endpoints, routing, RAG, users, API keys)
+│   ├── topology.php       # Full-screen view of the message-flow topology
 │   ├── prompt_security.php
 │   ├── load_stats.php
 │   ├── usage_stats.php    # Daily usage statistics JSON
@@ -845,15 +937,17 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 │   ├── quickinfo.php
 │   ├── speech_dictation.php   # SpeechInt client, commands, fallback
 │   ├── image_generation.php   # ImageInt client, job polling, notification mails
+│   ├── topology.php       # load_stats JSON → topology node/edge payload
 │   └── prompt.txt         # Fallback/seed routing categories
 ├── docconvert/            # Python/FastAPI converter (app/, tests/)
+├── tests/                 # PHP + node:test suites for the topology, tests/run.sh
 ├── doc_uploads/           # Runtime uploads (protected)
 ├── image_output/          # Generated images (protected)
 ├── sd_output/             # Legacy AUTOMATIC1111 images (protected)
 ├── vector_imports/        # Staging for docvecwizard export archives (protected)
 ├── docker/                # Docker configs (apache, php.ini, entrypoint, milvus etcd)
 ├── ressources/            # Example system prompt
-└── assets/                # Static assets (img/)
+└── assets/                # Static assets (img/, js/flow-topology.js, css/flow-topology.css)
 ```
 
 ---
@@ -866,7 +960,8 @@ Admin card IDs: `dashboard-card`, `config-endpoints-card`, `config-balancer-card
 4. **Modify** – follow existing patterns (no framework conventions, German UI strings,
    prepared statements, escaped output).
 5. **Schema changes** → add to `ensureRuntimeSchema()` in `db.php` (and `setup.php`).
-6. **Test** with `php -l file.php` and a manual browser/`curl` check.
+6. **Test** with `php -l file.php`, `./tests/run.sh` for topology changes, and a manual
+   browser/`curl` check.
 
 ---
 

@@ -29,6 +29,11 @@ $GLOBALS['LLMINT_REQUEST_BODY_OVERRIDE'] = json_encode($payload, JSON_UNESCAPED_
 
 openaiBeginAnonymousApiRequest($apiKey);
 
+// Count the call for the API cloud of the admin topology: per API key, or in
+// the shared "without key" entry when no usable key was presented. Model
+// listing requests are not counted – only calls that actually run inference.
+recordApiCallUsage($apiKey !== null ? (int) $apiKey['key_id'] : null, (string) $payload['model']);
+
 $requestedModel = trim((string) ($decoded['model'] ?? ''));
 writeLog('info', 'Zugriff über OpenAI-kompatible API von ' . getClientIp()
     . ($GLOBALS['LLMINT_OPENAI_TOOL_MODE'] === 'enabled' ? ' (mit Tools)' : ' (ohne Tools)')

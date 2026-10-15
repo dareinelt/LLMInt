@@ -33,7 +33,7 @@ auf Deutsch. Kommentare sind auf Englisch verfasst.
 | Persistenz | MySQL/MariaDB über PDO (`utf8mb4`) |
 | Frontend | serverseitig gerendertes HTML mit inline CSS/Vanilla-JS |
 | Einstiegspunkte | `index.php`, `admin/index.php`, `api/*.php`, `login.php`, `register.php`, `logout.php`, `setup.php` |
-| Tests/Linting | keine automatisierten Tests; `php -l <datei>` zur Syntaxprüfung |
+| Tests/Linting | abhängigkeitsfreie PHP- und `node:test`-Tests für die Topologie (`./tests/run.sh`), `php -l <datei>` zur Syntaxprüfung |
 
 ---
 
@@ -43,8 +43,8 @@ auf Deutsch. Kommentare sind auf Englisch verfasst.
 |---|---|---|
 | **Web** | `index.php`, `login.php`, `register.php`, `logout.php` | Chat-Oberfläche, Anmeldung, Selbstregistrierung |
 | **API** | `api/chat.php`, `api/balancer.php`, `api/embedding.php`, `api/upload_document.php`, `api/openai*/**`, weitere `api/*.php` | Chat-Pipeline, Routing, RAG, Uploads, Bildgenerierung, OpenAI-kompatible Fassade |
-| **Administration** | `admin/index.php`, `admin/prompt_security.php`, `admin/load_stats.php`, `admin/refresh_sys_stats.php`, `admin/api_keys.php`, `admin/endpoint_tech.php`, `admin/quickinfo_stats.php` | Endpunkte, Benutzer, Einstellungen, Monitoring, API-Keys, quickinfo-Pairing |
-| **Bibliotheken** | `lib/balancer_engine.php`, `lib/prompt_security.php`, `lib/openai_api.php`, `lib/ldap_auth.php`, `lib/mailer.php`, `lib/healthcheck.php` | Wiederverwendbare Kernlogik, von mehreren Einstiegspunkten eingebunden |
+| **Administration** | `admin/index.php`, `admin/prompt_security.php`, `admin/load_stats.php`, `admin/topology.php`, `admin/refresh_sys_stats.php`, `admin/api_keys.php`, `admin/endpoint_tech.php`, `admin/quickinfo_stats.php` | Endpunkte, Benutzer, Einstellungen, Monitoring, API-Keys, quickinfo-Pairing, Nachrichtenflow-Topologie |
+| **Bibliotheken** | `lib/balancer_engine.php`, `lib/prompt_security.php`, `lib/openai_api.php`, `lib/ldap_auth.php`, `lib/mailer.php`, `lib/healthcheck.php`, `lib/topology.php` | Wiederverwendbare Kernlogik, von mehreren Einstiegspunkten eingebunden |
 | **Persistenz** | MySQL/MariaDB, Schema aus `setup.php` + `db.php` | Einstellungen, Benutzer, Endpunkte, Tasks, Chunks, Logs |
 | **Externe Dienste** | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP/AD, SMTP, SpeechInt, ImageInt | Modellinferenz, Suche, Verzeichnisdienst, Mailversand, Diktat, Bildgenerierung |
 
@@ -142,7 +142,8 @@ migrieren.
 |---|---|
 | `settings` | Key-Value-Konfiguration (`setting_key`, `setting_value`) |
 | `users` | Konten: Anmeldedaten, Rolle (`user`/`admin`), `auth_source` (`local`/`ldap`), Dokument-Upload-Recht, Standardmodell |
-| `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer (optionales, fest am Key hinterlegtes Modell) |
+| `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer (optionales, fest am Key hinterlegtes Modell); dazu die Aufrufzähler der Topologie (`call_count`, `calls_today`, `counter_date`, `last_model`, `last_used_at`) |
+| `api_anonymous_usage` | Ein-Zeilen-Sammeltabelle für API-Aufrufe ohne gültigen Key (gleiche Zählerfelder wie `api_keys`) |
 | `endpoints` | LLM-Endpunkte: `base_url`, `default_model`, `timeout`, `is_active`, Fähigkeiten (Tool Calling, Vision), Balancer-Gesundheit (`circuit_state`, `consecutive_failures`, `cooldown_until`, `avg_latency_ms`) |
 | `tasks` | Lebenszyklus jeder LLM-Anfrage (`endpoint_id`, `status`, Tokenzähler, `tokens_per_second`) |
 | `endpoint_sys_stats` | per SSH gelesene Systemmetriken je Endpunkt |
@@ -161,7 +162,7 @@ migrieren.
 | `conversation_sessions` | Chatverläufe (`session_id`, `messages` als JSON, `model`, `upgrade_model`, `group_label`) |
 | `routing_categories`, `routing_rules` | Kategoriedefinitionen und Zuordnung Kategorie → Zielmodell |
 | `search_logs` | SearXNG-Suchhistorie |
-| `active_clients`, `client_count_log` | Heartbeat-/Präsenztracking |
+| `active_clients`, `client_count_log` | Heartbeat-/Präsenztracking (inklusive der Route der gerade laufenden Anfrage) |
 | `app_logs` | Anwendungslog (`info`/`warning`/`error`) |
 | `prompt_security_rules`, `prompt_security_logs` | Sicherheitsregeln und protokollierte Ereignisse |
 
@@ -386,7 +387,7 @@ flowchart LR
     MV --> MY
     VS --> CTX[buildVectorContextSystemPrompt\n+ Tool query_documents]
     VS --> LOG[(vector_query_logs)]
-    ST[vectorStoreStatus\n20-s-Cache] --> DB[Admin-Dashboard-Kachel\nadmin/load_stats.php]
+    ST[vectorStoreStatus\n20-s-Cache] --> DB[Topologie-Knoten Wissensdatenbank\nadmin/load_stats.php]
 ```
 
 - **remote**: `docvecLogin()` meldet sich mit `docvec_api_username`/`docvec_api_password`
@@ -407,8 +408,8 @@ flowchart LR
   `vector_min_score`); Treffer werden als Kontext-Systemnachricht vorangestellt und
   zusätzlich vom Tool `query_documents` zurückgegeben (zusammen mit privaten Uploads).
 - **Dashboard**: `vectorStoreStatus()` (Cache 20 s in `vector_store_status_cache`) und
-  `vectorQueryStats()` fließen über `admin/load_stats.php` (`vector_store`) in die
-  Kachel der Lastverteilungs-Grafik (online/offline, Basis-URL, Dokumente/Vektoren,
+  `vectorQueryStats()` fließen über `admin/load_stats.php` (`vector_store`) in den
+  Knoten der Nachrichtenflow-Topologie (online/offline, Basis-URL, Dokumente/Vektoren,
   Abfragen heute, Ø Antwortzeit).
 
 Relevante Einstellungen: `vector_store_mode`, `vector_top_k`, `vector_min_score`,
@@ -496,11 +497,23 @@ Altbestand per `hidden` ausgeblendet), `config-vector-store-card`,
 `config-ldap-card`, `log-viewer-card`, `users-card`, `openai-api-card`,
 `api-keys-card`, `password-card` u. a.).
 
-Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
+Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard, inklusive
+Topologie-Payload), `admin/topology.php` (Vollbildansicht der Topologie),
 `admin/refresh_sys_stats.php` (SSH-Metriken),
 `admin/api_keys.php` (Weiterleitung auf die Karte `api-keys-card` im Dashboard),
 `admin/endpoint_tech.php` + `admin/quickinfo_stats.php` (quickinfo-Pairing, technische Endpunktübersicht),
 `admin/prompt_security.php` (Sicherheitsmodul).
+
+Das Dashboard zeigt die Betriebsdaten als Nachrichtenflow-Topologie:
+`admin/load_stats.php` sammelt die Livedaten und übergibt sie an `topology_build()`
+in `lib/topology.php`, das daraus den Knoten-/Kanten-Payload baut; den zeichnet
+`assets/js/flow-topology.js` auf ein Canvas. Die Topologie kennt zwei Aufrufer-Zweige:
+die **Clients**-Wolke (aus den Heartbeats in `active_clients`, inklusive der Route der
+gerade laufenden Anfrage) und die **API**-Wolke (aus `listApiKeyUsage()`, das die
+Zähler in `api_keys` und `api_anonymous_usage` liest, die
+`recordApiCallUsage()` in `api/openai_common/chat_completions.php` fortlaufend
+pflegt). Aufbau, Interaktion und Anpassung beschreibt
+[`../topologie-referenz.md`](../topologie-referenz.md).
 
 ---
 
@@ -621,9 +634,9 @@ Browser (MediaRecorder)
   `speechDictationLogText()` protokolliert nur eine Längenangabe. Tokens werden
   maskiert angezeigt und nie geloggt.
 - **Dashboard**: `admin/load_stats.php` liefert `speech_endpoints` und
-  `speech_status` (aus `speechDictationDashboardStatus()`) an `renderLoadTree()` in
-  `admin/index.php`. Der aktive Endpunkt erscheint als eigene Kachel mit
-  Zustandsfarbe; zusätzliche Endpunkte werden als „nicht geprüft" dargestellt, weil
+  `speech_status` (aus `speechDictationDashboardStatus()`) an `topology_build()` in
+  `lib/topology.php`. Der aktive Endpunkt erscheint als Knoten unter der Gruppe
+  SpeechInt; zusätzliche Endpunkte werden als „nicht geprüft" dargestellt, weil
   pro Anfrage nur ein Endpunkt abgefragt wird.
 
 ### 13.2 Bildgenerierungs-Pipeline

@@ -108,12 +108,6 @@ function openaiAuthenticateApiRequest(): ?array
         return null;
     }
 
-    try {
-        getDb()->prepare('UPDATE api_keys SET last_used_at = NOW() WHERE id = ?')->execute([(int) $row['id']]);
-    } catch (Throwable $e) {
-        // best-effort
-    }
-
     return [
         'key_id' => (int) $row['id'],
         'name' => (string) $row['name'],

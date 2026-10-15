@@ -1780,6 +1780,16 @@ if (!is_array($payload)) {
     exit;
 }
 
+// The presence token of the browser tab this request comes from. Optional –
+// only the chat page of the current version sends it. It is used to record
+// which endpoint the running session is talking to (see recordClientRoute()
+// in db.php) and is never forwarded to the endpoint.
+$clientToken = '';
+if (isset($payload['client_token']) && is_string($payload['client_token'])
+    && preg_match('/^[0-9a-f]{32,128}$/i', $payload['client_token'])) {
+    $clientToken = strtolower($payload['client_token']);
+}
+
 if (($payload['action'] ?? '') === 'decline_intelligence_upgrade') {
     writeLog('info', 'Intelligence Upgrade durch User (' . getClientIp() . ') abgelehnt.');
     header('Content-Type: application/json; charset=utf-8');
@@ -2198,6 +2208,13 @@ $taskId   = $slot['task_id'];
 $baseUrl  = rtrim($endpoint['base_url'], '/');
 $timeout  = max(1, (int) $endpoint['timeout']);
 $responseDetails = buildResponseDetails($endpoint);
+
+// The tab that sent this request is waiting for the answer right now – record
+// it so the admin topology can highlight the path of the running session (the
+// browser only knows the model, the load balancer knows the endpoint).
+if ($clientToken !== '') {
+    recordClientRoute($clientToken, 'llm', $model, (int) ($endpoint['id'] ?? 0));
+}
 $searxngBaseUrl = trim(getSetting('searxng_base_url', ''));
 $requestStart = microtime(true);
 writeLog('info', 'Modell ' . $model . ' für die Bearbeitung des Prompts ausgewählt.');
@@ -2272,7 +2289,7 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     &$model, $userSlotMax, $requiresVision,
     &$endpoint, &$taskId, &$baseUrl, &$timeout, &$url, &$endpointRetries, &$responseDetails,
     &$upgradeFailoverTried, &$intelligenceUpgrade, &$forwardPayload, &$payload, $detectedCategory,
-    &$reasoningEnabled
+    &$reasoningEnabled, $clientToken
 ): bool {
     if ($endpointRetries <= 0) {
         return false;
@@ -2344,6 +2361,9 @@ $switchEndpoint = function (bool $allowUpgradeFallback = false) use (
     $baseUrl  = rtrim($endpoint['base_url'], '/');
     $timeout  = max(1, (int) $endpoint['timeout']);
     $responseDetails = buildResponseDetails($endpoint);
+    if ($clientToken !== '') {
+        recordClientRoute($clientToken, 'llm', $model, (int) ($endpoint['id'] ?? 0));
+    }
     $url      = $baseUrl . '/chat/completions';
     // The endpoint just picked may be an equivalence-pool match for $model
     // rather than an exact `default_model` match (see

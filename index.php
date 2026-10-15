@@ -4487,6 +4487,9 @@ $csrfToken = $_SESSION['csrf_token'];
             session_id: sessionId,
             stream: true,
             temperature: 0.7,
+            // Presence token of this tab so the server can mark the endpoint it
+            // picks as the target of the running session (admin topology).
+            client_token: (window.llmintClientRoute && window.llmintClientRoute.token) || '',
         };
 
         // Only transmit the group when it changed – otherwise the server keeps
@@ -4502,6 +4505,11 @@ $csrfToken = $_SESSION['csrf_token'];
         if (reasoningForThisPrompt) payload.reasoning = true;
         reasoningActive = false;
         renderReasoningPill();
+
+        // Announce the running request before the first byte leaves, so the
+        // admin topology highlights the path of this session (see
+        // window.llmintClientRoute).
+        if (window.llmintClientRoute) window.llmintClientRoute.start('llm', model);
 
         try {
             let result = await executeStreamingRequest(payload, bubble);
@@ -4558,6 +4566,7 @@ $csrfToken = $_SESSION['csrf_token'];
             history.pop();
             setStatus('Fehler: ' + err.message, 'error');
         } finally {
+            if (window.llmintClientRoute) window.llmintClientRoute.clear('llm');
             isStreaming       = false;
             sendBtn.disabled  = false;
             userInput.focus();
@@ -4965,17 +4974,57 @@ $csrfToken = $_SESSION['csrf_token'];
         sessionStorage.setItem('hb_token', token);
     }
 
+    // The request this tab is waiting for right now – null while idle. The
+    // admin topology highlights exactly this path, so a change is reported
+    // immediately instead of waiting for the next presence heartbeat.
+    let route = null;
+
     function sendHeartbeat() {
         fetch('api/heartbeat.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token }),
+            // route is always sent (null when idle) – the tab is the only
+            // source that knows whether a request is still running.
+            body: JSON.stringify({ token, route }),
             keepalive: true,
         }).catch(() => {}); // fire-and-forget
     }
 
     sendHeartbeat();
     setInterval(sendHeartbeat, 30000);
+
+    /**
+     * Announce the request this tab is now waiting for (`kind` is one of
+     * llm/image/speech/search, see CLIENT_ROUTE_KINDS in db.php).
+     */
+    function startRoute(kind, model, endpointId) {
+        route = {
+            kind: String(kind || ''),
+            model: String(model || ''),
+            endpoint_id: Number(endpointId) || 0,
+        };
+        sendHeartbeat();
+    }
+
+    /**
+     * Drop the route once the request is over. `kind` only clears the route
+     * it belongs to, so a slower request cannot wipe a newer one.
+     */
+    function clearRoute(kind) {
+        if (route === null) return;
+        if (kind && route.kind !== kind) return;
+        route = null;
+        sendHeartbeat();
+    }
+
+    // A reload or a closed tab ends whatever was running.
+    window.addEventListener('pagehide', () => clearRoute());
+
+    window.llmintClientRoute = {
+        token: token,
+        start: startRoute,
+        clear: clearRoute,
+    };
 })();
 </script>
 

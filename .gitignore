@@ -1,0 +1,5 @@
+# Local environment configuration – holds credentials, never commit it.
+# Start from .env.example and keep the template up to date instead.
+.env
+.env.*
+!.env.example
