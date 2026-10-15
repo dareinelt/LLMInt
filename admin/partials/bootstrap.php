@@ -184,7 +184,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
 $flashOk    = '';
 $flashError = '';
-$editEp     = null; // endpoint being edited (populated after POST redirect)
+$editEp     = null; // endpoint being edited (populated by data.php from the ?edit=<id> deeplink)
 $newApiKey  = '';   // plaintext of a freshly created API key (shown only once)
 $apiKeysPostHandled = false;
 

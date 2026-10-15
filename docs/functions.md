@@ -721,7 +721,7 @@ Inline-JavaScript.
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
-| `modelIntelligenceLabel` | `modelIntelligenceLabel(string $model): string` | Liefert das menschenlesbare Intelligenz-Label eines Modells (`basic`/`standard`/`advanced`/`expert`). |
+| `modelIntelligenceLabel` | `modelIntelligenceLabel(string $model): string` | Extrahiert die Modellgröße aus dem Modellnamen (z. B. `7b`, `27b`, `397b`); MoE-Marker für aktive Parameter (A17B, A3B, …) werden ignoriert, `–` wenn keine Größe erkannt wird. |
 
 **Verarbeitete `action`-Werte (POST + CSRF, `admin/partials/actions.php`):**
 `add_endpoint`, `update_endpoint`,
