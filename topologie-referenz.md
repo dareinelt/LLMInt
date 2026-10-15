@@ -482,7 +482,7 @@ bleiben nutzbar.
 |---|---|---|
 | 90 s Präsenz eines API-Schlüssels | `TOPOLOGY_API_KEY_PRESENCE_SECONDS` | „gerade aktiv" in der API-Wolke |
 | 90 s Präsenz eines Clients | `listActiveClients()` (`db.php`) | Clients-Wolke; bewusst derselbe Wert |
-| 4 Parallel-Slots je Endpunkt | Option `slot_limit` von `topology_build()` | Auslastungsbalken und `warn`-Zustand |
+| `balancer_max_concurrent` Parallel-Slots je Endpunkt (Standard 4) | Option `slot_limit` von `topology_build()`; im Admin über `getBalancerMaxConcurrent()` | Auslastungsbalken und `warn`-Zustand |
 | 5 s Mindest-, 15 s Standardintervall | `MIN_REFRESH_INTERVAL`, `data-refresh-interval` | Poll-Frequenz |
 | 4 s Ruhe vor automatischer Drehung | `IDLE_BEFORE_ROTATE` | Kameraverhalten |
 
