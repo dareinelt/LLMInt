@@ -33,7 +33,7 @@ auf Deutsch. Kommentare sind auf Englisch verfasst.
 | Persistenz | MySQL/MariaDB über PDO (`utf8mb4`) |
 | Frontend | serverseitig gerendertes HTML mit inline CSS/Vanilla-JS |
 | Einstiegspunkte | `index.php`, `admin/index.php`, `api/*.php`, `login.php`, `register.php`, `logout.php`, `setup.php` |
-| Tests/Linting | keine automatisierten Tests; `php -l <datei>` zur Syntaxprüfung |
+| Tests/Linting | abhängigkeitsfreie PHP- und `node:test`-Tests für die Topologie (`./tests/run.sh`), `php -l <datei>` zur Syntaxprüfung |
 
 ---
 
@@ -43,8 +43,8 @@ auf Deutsch. Kommentare sind auf Englisch verfasst.
 |---|---|---|
 | **Web** | `index.php`, `login.php`, `register.php`, `logout.php` | Chat-Oberfläche, Anmeldung, Selbstregistrierung |
 | **API** | `api/chat.php`, `api/balancer.php`, `api/embedding.php`, `api/upload_document.php`, `api/openai*/**`, weitere `api/*.php` | Chat-Pipeline, Routing, RAG, Uploads, Bildgenerierung, OpenAI-kompatible Fassade |
-| **Administration** | `admin/index.php`, `admin/prompt_security.php`, `admin/load_stats.php`, `admin/refresh_sys_stats.php`, `admin/api_keys.php`, `admin/endpoint_tech.php`, `admin/quickinfo_stats.php` | Endpunkte, Benutzer, Einstellungen, Monitoring, API-Keys, quickinfo-Pairing |
-| **Bibliotheken** | `lib/balancer_engine.php`, `lib/prompt_security.php`, `lib/openai_api.php`, `lib/ldap_auth.php`, `lib/mailer.php`, `lib/healthcheck.php` | Wiederverwendbare Kernlogik, von mehreren Einstiegspunkten eingebunden |
+| **Administration** | `admin/index.php`, `admin/prompt_security.php`, `admin/load_stats.php`, `admin/topology.php`, `admin/refresh_sys_stats.php`, `admin/api_keys.php`, `admin/endpoint_tech.php`, `admin/quickinfo_stats.php` | Endpunkte, Benutzer, Einstellungen, Monitoring, API-Keys, quickinfo-Pairing, Nachrichtenflow-Topologie |
+| **Bibliotheken** | `lib/balancer_engine.php`, `lib/prompt_security.php`, `lib/openai_api.php`, `lib/ldap_auth.php`, `lib/mailer.php`, `lib/healthcheck.php`, `lib/topology.php` | Wiederverwendbare Kernlogik, von mehreren Einstiegspunkten eingebunden |
 | **Persistenz** | MySQL/MariaDB, Schema aus `setup.php` + `db.php` | Einstellungen, Benutzer, Endpunkte, Tasks, Chunks, Logs |
 | **Externe Dienste** | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP/AD, SMTP, SpeechInt, ImageInt | Modellinferenz, Suche, Verzeichnisdienst, Mailversand, Diktat, Bildgenerierung |
 
@@ -386,7 +386,7 @@ flowchart LR
     MV --> MY
     VS --> CTX[buildVectorContextSystemPrompt\n+ Tool query_documents]
     VS --> LOG[(vector_query_logs)]
-    ST[vectorStoreStatus\n20-s-Cache] --> DB[Admin-Dashboard-Kachel\nadmin/load_stats.php]
+    ST[vectorStoreStatus\n20-s-Cache] --> DB[Topologie-Knoten Wissensdatenbank\nadmin/load_stats.php]
 ```
 
 - **remote**: `docvecLogin()` meldet sich mit `docvec_api_username`/`docvec_api_password`
@@ -407,8 +407,8 @@ flowchart LR
   `vector_min_score`); Treffer werden als Kontext-Systemnachricht vorangestellt und
   zusätzlich vom Tool `query_documents` zurückgegeben (zusammen mit privaten Uploads).
 - **Dashboard**: `vectorStoreStatus()` (Cache 20 s in `vector_store_status_cache`) und
-  `vectorQueryStats()` fließen über `admin/load_stats.php` (`vector_store`) in die
-  Kachel der Lastverteilungs-Grafik (online/offline, Basis-URL, Dokumente/Vektoren,
+  `vectorQueryStats()` fließen über `admin/load_stats.php` (`vector_store`) in den
+  Knoten der Nachrichtenflow-Topologie (online/offline, Basis-URL, Dokumente/Vektoren,
   Abfragen heute, Ø Antwortzeit).
 
 Relevante Einstellungen: `vector_store_mode`, `vector_top_k`, `vector_min_score`,
@@ -621,9 +621,9 @@ Browser (MediaRecorder)
   `speechDictationLogText()` protokolliert nur eine Längenangabe. Tokens werden
   maskiert angezeigt und nie geloggt.
 - **Dashboard**: `admin/load_stats.php` liefert `speech_endpoints` und
-  `speech_status` (aus `speechDictationDashboardStatus()`) an `renderLoadTree()` in
-  `admin/index.php`. Der aktive Endpunkt erscheint als eigene Kachel mit
-  Zustandsfarbe; zusätzliche Endpunkte werden als „nicht geprüft" dargestellt, weil
+  `speech_status` (aus `speechDictationDashboardStatus()`) an `topology_build()` in
+  `lib/topology.php`. Der aktive Endpunkt erscheint als Knoten unter der Gruppe
+  SpeechInt; zusätzliche Endpunkte werden als „nicht geprüft" dargestellt, weil
   pro Anfrage nur ein Endpunkt abgefragt wird.
 
 ### 13.2 Bildgenerierungs-Pipeline

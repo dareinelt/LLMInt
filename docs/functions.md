@@ -22,6 +22,7 @@ kompakte Navigationshilfe siehe [`agent_index.md`](agent_index.md).
 - [lib/prompt_security.php](#libprompt_securityphp)
 - [lib/reverse_proxy.php](#libreverse_proxyphp)
 - [lib/speech_dictation.php](#libspeech_dictationphp)
+- [lib/topology.php](#libtopologyphp)
 - [api/chat.php](#apichatphp)
 - [api/balancer.php](#apibalancerphp)
 - [api/embedding.php](#apiembeddingphp)
@@ -402,6 +403,48 @@ Eingabefeld stehenden Textes, der dem Diktat-Modell als Kontext mitgegeben wird.
 
 ---
 
+## lib/topology.php
+
+Übersetzungsschicht zwischen den Livedaten des Dashboards (JSON-Vertrag von
+`admin/load_stats.php`) und dem Knoten-/Kanten-Payload der Nachrichtenflow-Topologie
+(`assets/js/flow-topology.js`). Genutzt von der Dashboard-Karte in `admin/index.php`
+und von der Vollbildansicht in `admin/topology.php`.
+
+Die Bibliothek ist eine reine Sicht: **kein** Datenbankzugriff, **keine** eigenen
+HTTP-Aufrufe, damit derselbe Payload aus einem Cache-Schnappschuss wie aus einer
+frischen Abfrage entstehen kann. Der Payload-Vertrag (`generated`, `overall`, `nodes`,
+`edges`, `incidents`) ist im Dateikopf von `lib/topology.php` dokumentiert; die
+Hierarchie lautet LLMInt (`hub`) → `llm` → `model` → `endpoint`, daneben `speech`,
+`image`, `search` (SearXNG), `vector` (Wissensdatenbank) und `clients` → `client`.
+
+### Zustände und Hilfswerte
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `topology_kinds` | `topology_kinds(): array` | Alle Knotenarten, die das Frontend kennt (`clients`, `client`, `hub`, `llm`, `model`, `endpoint`, `search`, `vector`, `image`, `speech`). |
+| `topology_state_labels` | `topology_state_labels(): array` | Zustand → deutsches Label (`ok`, `warn`, `error`, `off`); spiegelt `STATE_LABELS` in `flow-topology.js`. |
+| `topology_state_label` | `topology_state_label(string $state): string` | Label eines Zustands, bei unbekanntem Wert das Label für `off`. |
+| `topology_state_rank` | `topology_state_rank(string $state): int` | Schweregrad für die Aggregation; `off` (1) rangiert bewusst unter `warn` (2), damit ein deaktivierter Endpunkt die Topologie nicht gelb färbt. |
+| `topology_aggregate_state` | `topology_aggregate_state(array $states): string` | Schlechtester Zustand einer Menge; `off` wird ignoriert, sofern nicht alle Elemente `off` sind. |
+| `topology_activity` | `topology_activity(int $value, int $max = 12): int` | Begrenzt die Flussintensität auf den Bereich, den der Partikel-Renderer erwartet. |
+| `topology_format_num` | `topology_format_num($value): string` | Kompaktzähler für die Detailkarten wie in der alten Dashboard-Grafik: `3512` → `3.5K`, `1250000` → `1.2M`. |
+| `topology_fact` | `topology_fact(string $icon, string $label, string $value, string $tone = 'plain'): array` | Eine Zeile einer Detailkarte (`{icon, label, value, tone}`); das Frontend rendert „icon label: value" in der Farbe von `tone` (siehe `FACT_TONES`). |
+| `topology_temp_tone` | `topology_temp_tone($temp): string` | Farbton einer CPU-Temperatur: `muted` ohne Wert, `error` ab 80 °C, `warn` ab 65 °C, sonst `temp`. |
+| `topology_short_url` | `topology_short_url(string $url): string` | `https://host:8000/v1` → `host:8000` für kompakte Knotentitel. |
+| `topology_param_size_label` | `topology_param_size_label(string $model): string` | Parameterangabe aus dem Modellnamen (`gemma-3-27b-it` → `27b`); MoE-Marker (`qwen3-a3b` → `3b`) dienen nur als Rückfall. Beschriftet die Intelligenzgruppen der Topologie. |
+| `topology_client_label` | `topology_client_label(array $client, int $unknownNo): string` | Beschriftung eines Clients: Hostname, sonst IP, sonst nummerierter Platzhalter (`unbekannt 2`). |
+| `topology_node` | `topology_node(array $node): array` | Füllt die gemeinsamen Knotenvorgaben (`key`, `kind`, `title`, `subtitle`, `state`, `badge`, `message`, `activity`, `counters`, `facts`, `slots`, `cloud`, `members`, `neighbours`, `url`, `synthetic`) auf. |
+| `topology_endpoint_state` | `topology_endpoint_state(bool $active, int $running, int $slotLimit): array` | Zustand eines LLM-Endpunkts als `[state, message]`: `off` bei deaktiviertem Endpunkt, `warn` bei belegten Parallel-Slots, sonst `ok`. |
+
+### Payload-Erzeugung
+
+| Funktion | Signatur | Beschreibung |
+|---|---|---|
+| `topology_build` | `topology_build(array $stats, array $options = []): array` | Baut den vollständigen Payload aus einer `load_stats.php`-Antwort. Optionen: `base_url` (Präfix für interne Links, `''` für `admin/`), `slot_limit` (Parallel-Slots je LLM-Endpunkt, Standard 4), `include_off` (deaktivierte Endpunkte als Knoten behalten, Standard `true`). Gruppenknoten (`llm`, `model`, `image`, `speech`) tragen `'group' => true` und bleiben aus `incidents` heraus, damit Störungen am konkreten Endpunkt gemeldet werden. |
+| `topology_initial_script` | `topology_initial_script(array $topology): string` | Bettet den Payload als `<script type="application/json" data-flow-initial>` ein, damit die Topologie ohne zusätzlichen Abruf aufgebaut wird; leerer String, wenn es keine Knoten gibt. |
+
+---
+
 ## api/chat.php
 
 Zentrale Chat-Pipeline (~3.300 Zeilen). Funktionen sind thematisch gruppiert.
@@ -648,8 +691,10 @@ Diese Dateien enthalten ausschließlich prozeduralen Code (kein top-level `funct
 
 ## admin/index.php
 
-Überwiegend prozeduraler UI-Code (~7.000 Zeilen) mit `action`-basierten POST-Handlern.
-Nur eine top-level Funktion:
+Überwiegend prozeduraler UI-Code (~8.400 Zeilen) mit `action`-basierten POST-Handlern.
+Die Dashboard-Karte `#dashboard-card` enthält die Nachrichtenflow-Topologie
+(`assets/js/flow-topology.js`), deren Knoten- und Kantenpayload `topology_build()` aus
+`lib/topology.php` über `admin/load_stats.php` liefert. Nur eine top-level Funktion:
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
@@ -695,7 +740,8 @@ erhalten.
 | `admin/api_keys.php` | Weiterleitung auf die Karte `#api-keys-card` in `admin/index.php` (CRUD für OpenAI-kompatible API-Keys, Modellwahl je Key, kopierbare API-Basis-URLs) |
 | `admin/endpoint_tech.php` | quickinfo-Pairing je Endpunkt (`pair_quickinfo`, `test_quickinfo`, `unpair_quickinfo`) und Live-Übersicht |
 | `admin/quickinfo_stats.php` | JSON: Modell, Ø Token/s (heute) und quickinfo-Metriken je Endpunkt |
-| `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients); liefert zusätzlich die Altbestandszahlen aus `sd_*`/`comfy_*`. Die ImageInt-Karte holt ihren Status über `api/image_health.php`. |
+| `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients); liefert zusätzlich die Altbestandszahlen aus `sd_*`/`comfy_*` und, über `topology_build()` aus `lib/topology.php`, den Payload der Nachrichtenflow-Topologie. Die ImageInt-Karte holt ihren Status über `api/image_health.php`. |
+| `admin/topology.php` | Vollbildansicht der Nachrichtenflow-Topologie (`assets/js/flow-topology.js`), gespeist aus `lib/topology.php` |
 | `admin/login.php` | Anmeldung (LDAP/SSO/lokal) mit Sitzungsverwaltung; bei Proxy-SSO einmal je Sitzung Umleitung auf `../sso.php` |
 | `admin/logout.php` | Beendet die Sitzung (setzt `sso_attempted` in der neuen Sitzung) und leitet zum Login um |
 | `admin/prompt_security.php` | Verwaltung der Prompt-Security-Regeln, -Logs und -Einstellungen (4 Tabs) |

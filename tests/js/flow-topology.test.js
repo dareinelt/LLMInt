@@ -1,0 +1,522 @@
+/**
+ * tests/js/flow-topology.test.js
+ *
+ * Behaviour tests for the admin message-flow renderer
+ * (assets/js/flow-topology.js). Run with:
+ *
+ *   node --test tests/js/*.test.js
+ *
+ * The renderer runs in a VM sandbox with a DOM/canvas double
+ * (tests/js/support/sandbox.js), so the tests need no browser and no
+ * dependency. They cover the contract the server relies on: what `apply()`
+ * ingests, what it drops, how selection switches between the in-canvas detail
+ * card and the HTML panel, and that a full frame can be drawn without error.
+ */
+
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { createEnvironment, FakeElement } = require('./support/sandbox');
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
+
+function node(key, kind, extra) {
+    return Object.assign({ key: key, kind: kind, title: key, state: 'ok', neighbours: [] }, extra || {});
+}
+
+/**
+ * A small but complete message-flow payload: LLMInt with the LLM branch (group →
+ * endpoint), the client cloud with one session, and one incident.
+ */
+function basePayload() {
+    const nodes = {};
+    const add = (entry) => { nodes[entry.key] = entry; };
+
+    add(node('hub', 'hub', {
+        title: 'LLMInt',
+        subtitle: 'Zentrale',
+        facts: [{ label: 'Modelle', value: '3' }],
+        neighbours: ['llm', 'clients'],
+    }));
+    add(node('llm', 'llm', {
+        title: 'LLM',
+        members: { title: 'Intelligenzgruppen', items: [{ title: 'gemma-3-27b', state: 'ok', badge: '3' }] },
+        neighbours: ['hub', 'model:gemma-3-27b'],
+    }));
+    add(node('model:gemma-3-27b', 'model', {
+        title: 'gemma-3-27b',
+        members: { title: 'Endpunkte', items: [] },
+        neighbours: ['llm', 'ep:1'],
+    }));
+    add(node('ep:1', 'endpoint', {
+        title: 'ep:1',
+        facts: [{ label: 'Status', value: 'bereit' }],
+        slots: { used: 1, max: 4 },
+        activity: 3,
+        neighbours: ['model:gemma-3-27b'],
+    }));
+    add(node('clients', 'clients', {
+        title: 'Clients',
+        cloud: {
+            title: 'Aktive Clients',
+            items: [{ title: 'pc-1', subtitle: '10.0.0.1' }],
+            empty: 'Keine aktiven Clients.',
+        },
+        neighbours: ['hub'],
+    }));
+    add(node('client:1', 'client', { title: 'pc-1', neighbours: ['clients'] }));
+
+    return {
+        generated: '12:00:00',
+        overall: { state: 'warn', label: 'Eingeschränkt', message: '1 Einschränkung erkannt.', errors: 0, warnings: 1, nodes: 6 },
+        nodes: nodes,
+        edges: [
+            { from: 'hub', to: 'llm', state: 'ok' },
+            { from: 'llm', to: 'model:gemma-3-27b', state: 'ok' },
+            { from: 'model:gemma-3-27b', to: 'ep:1', state: 'ok' },
+            { from: 'hub', to: 'clients', state: 'ok' },
+            { from: 'clients', to: 'client:1', state: 'ok' },
+        ],
+        incidents: [{ key: 'ep:1', title: 'ep:1', state: 'warn', message: 'Alle Slots belegt.', url: '' }],
+    };
+}
+
+/** All texts the canvas painted in the last frame. */
+function paintedTexts(env) {
+    return env.ctx.calls
+        .filter((call) => call.name === 'fillText')
+        .map((call) => String(call.args[0]));
+}
+
+/**
+ * Compares values the renderer returned with a literal. The renderer runs in
+ * its own VM realm, so its arrays and objects carry a foreign prototype that
+ * `deepStrictEqual` rejects; cloning first brings them into this realm.
+ */
+function same(actual, expected, message) {
+    assert.deepStrictEqual(structuredClone(actual), expected, message);
+}
+
+function mountWith(options) {
+    const env = createEnvironment(options);
+    const api = env.api.mount(env.root, {});
+    return { env: env, api: api };
+}
+
+// ── Exports ──────────────────────────────────────────────────────────────────
+
+test('exportiert Version, Farben und Beschriftungen für alle Bausteine', () => {
+    const env = createEnvironment();
+    assert.equal(typeof env.api.mount, 'function');
+    assert.equal(env.api.version, '1.0.0');
+    assert.deepEqual(Object.keys(env.api.labels.states).sort(), ['error', 'off', 'ok', 'warn']);
+
+    const kinds = Object.keys(env.api.labels.kinds);
+    assert.ok(kinds.length >= 10);
+    for (const kind of kinds) {
+        assert.ok(env.api.colors.kinds[kind], kind + ' hat keine Farbe');
+        assert.ok(env.api.labels.kinds[kind], kind + ' hat keine Beschriftung');
+    }
+    for (const state of Object.keys(env.api.labels.states)) {
+        assert.ok(env.api.colors.states[state], state + ' hat keine Farbe');
+    }
+});
+
+test('mount() lehnt fehlende oder unbrauchbare Wurzeln ab', () => {
+    const env = createEnvironment();
+    assert.equal(env.api.mount(null), null);
+    assert.equal(env.api.mount(new FakeElement('div')), null);
+});
+
+test('mount() liefert die Steuer-API und baut die Legende', () => {
+    const { env, api } = mountWith();
+    assert.ok(api);
+    for (const name of ['apply', 'load', 'resize', 'fit', 'resetView', 'select', 'state']) {
+        assert.equal(typeof api[name], 'function', name + ' fehlt');
+    }
+    same(api.state(), {
+        nodes: [],
+        edges: [],
+        overall: { state: 'ok', label: '', message: '', errors: 0, warnings: 0, nodes: 0 },
+    });
+    const legend = env.hook('[data-topo-kinds]');
+    assert.equal(legend.children.length, Object.keys(env.api.labels.kinds).length + 1);
+    assert.equal(legend.children[0].textContent, 'Bausteine');
+});
+
+// ── Ingest ───────────────────────────────────────────────────────────────────
+
+test('apply() übernimmt Knoten, Kanten und Gesamtzustand', () => {
+    const { api } = mountWith();
+    const payload = basePayload();
+    api.apply(payload);
+
+    const state = api.state();
+    assert.equal(state.nodes.length, Object.keys(payload.nodes).length);
+    assert.equal(state.edges.length, payload.edges.length);
+    assert.equal(state.overall.state, 'warn');
+    assert.equal(state.overall.label, 'Eingeschränkt');
+    assert.equal(state.overall.message, '1 Einschränkung erkannt.');
+    assert.equal(state.overall.warnings, 1);
+    assert.equal(state.overall.errors, 0);
+    assert.equal(state.overall.nodes, 6);
+});
+
+test('jeder Knoten bekommt die Felder, die der Renderer erwartet', () => {
+    const { api } = mountWith();
+    const payload = basePayload();
+    api.apply(payload);
+
+    const byKey = new Map(api.state().nodes.map((entry) => [entry.key, entry]));
+    const hub = byKey.get('hub');
+    assert.equal(hub.kind, 'hub');
+    assert.equal(hub.subtitle, 'Zentrale');
+    assert.deepEqual(hub.facts, payload.nodes.hub.facts);
+    assert.deepEqual(hub.neighbours, ['llm', 'clients']);
+
+    const endpoint = byKey.get('ep:1');
+    assert.deepEqual(endpoint.slots, { used: 1, max: 4 });
+    assert.equal(endpoint.activity, 3);
+
+    const llm = byKey.get('llm');
+    assert.equal(llm.members.title, 'Intelligenzgruppen');
+    assert.equal(llm.members.items.length, 1);
+
+    const clients = byKey.get('clients');
+    assert.equal(clients.cloud.empty, 'Keine aktiven Clients.');
+
+    // List payloads stay separate from the key/value payload of the card.
+    assert.equal(hub.members, null);
+    assert.equal(hub.cloud, null);
+    assert.equal(llm.cloud, null);
+});
+
+test('apply() füllt fehlende Angaben mit den Vorgabewerten', () => {
+    const { api } = mountWith();
+    api.apply({ nodes: { a: { key: 'a' } }, edges: [], overall: { state: 'quatsch' } });
+
+    const state = api.state();
+    assert.equal(state.overall.state, 'off');
+    assert.equal(state.overall.label, 'Nicht aktiv');
+
+    const only = state.nodes[0];
+    assert.equal(only.key, 'a');
+    assert.equal(only.kind, 'endpoint');
+    assert.equal(only.title, 'a');
+    assert.equal(only.state, 'off');
+    assert.equal(only.activity, 0);
+    assert.equal(only.synthetic, false);
+    same(only.facts, []);
+    same(only.neighbours, []);
+    assert.equal(only.slots, null);
+    assert.equal(only.cloud, null);
+    assert.equal(only.members, null);
+});
+
+test('apply() ersetzt die Knotenliste vollständig', () => {
+    const { api } = mountWith();
+    api.apply(basePayload());
+    api.apply({ nodes: { only: { key: 'only', kind: 'hub' } }, edges: [], overall: { state: 'ok' } });
+
+    same(api.state().nodes.map((entry) => entry.key), ['only']);
+    assert.equal(api.state().edges.length, 0);
+});
+
+test('apply() verträgt leere, fehlende und unbrauchbare Nutzlasten', () => {
+    const { api } = mountWith();
+    api.apply(null);
+    api.apply(undefined);
+    api.apply('kaputt');
+    api.apply({});
+    same(api.state().nodes, []);
+    assert.equal(api.state().edges.length, 0);
+});
+
+test('Kanten mit unbekannten Enden und doppelte Kanten entfallen', () => {
+    const { api } = mountWith();
+    const payload = basePayload();
+    payload.edges.push({ from: 'hub', to: 'gibt-es-nicht' });
+    payload.edges.push({ from: 'nicht-da', to: 'hub' });
+    payload.edges.push({ from: 'hub', to: 'llm' });
+    payload.edges.push(null);
+    payload.edges.push('kaputt');
+    api.apply(payload);
+
+    const state = api.state();
+    assert.equal(state.edges.length, payload.edges.length - 5);
+    same(state.edges.map((edge) => edge.id).sort(), [
+        'clients>client:1',
+        'hub>clients',
+        'hub>llm',
+        'llm>model:gemma-3-27b',
+        'model:gemma-3-27b>ep:1',
+    ]);
+    for (const edge of state.edges) {
+        assert.ok(edge.a && edge.b, edge.id + ' hat kein Ziel');
+        assert.equal(edge.id, edge.from + '>' + edge.to);
+    }
+});
+
+test('Kanten behalten ihre Krümmung über Aktualisierungen', () => {
+    const { api } = mountWith();
+    api.apply(basePayload());
+    const before = api.state().edges.map((edge) => [edge.id, edge.bend, edge.lift]);
+
+    api.apply(basePayload());
+    const after = api.state().edges.map((edge) => [edge.id, edge.bend, edge.lift]);
+    assert.deepEqual(after, before);
+});
+
+test('Störungen werden in die Liste übernommen', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+
+    const list = env.hook('[data-topo-incidents-list]');
+    assert.equal(list.children.length, 1);
+    assert.equal(list.children[0].children[1].textContent, 'ep:1');
+    assert.equal(env.hook('[data-topo-incidents-empty]').hidden, true);
+
+    api.apply({ nodes: { a: { key: 'a', kind: 'hub' } }, edges: [], overall: {}, incidents: [] });
+    assert.equal(list.children.length, 0);
+    assert.equal(env.hook('[data-topo-incidents-empty]').hidden, false);
+});
+
+// ── Selection: detail card vs. HTML panel ────────────────────────────────────
+
+test('Klick auf einen Endpunkt zeigt die Detailkarte statt des HTML-Panels', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+    env.pump();
+
+    api.select('ep:1');
+    assert.equal(env.hook('[data-topo-panel]').hidden, true, 'Panel muss verborgen bleiben');
+
+    env.ctx.calls.length = 0;
+    env.pump();
+    const texts = paintedTexts(env);
+    assert.ok(texts.indexOf('Status: bereit') >= 0, 'Wert der Detailkarte fehlt');
+    assert.ok(texts.indexOf('Endpunkte') < 0, 'die Karte darf nur Werte zeigen');
+});
+
+test('Klick auf eine Gruppe zeigt das HTML-Panel statt der Detailkarte', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+    env.pump();
+
+    api.select('llm');
+    const panel = env.hook('[data-topo-panel]');
+    assert.equal(panel.hidden, false, 'Panel muss sichtbar sein');
+    assert.equal(env.field('panel-kind').textContent, 'LLM');
+    assert.equal(env.field('panel-title').textContent, 'LLM');
+
+    const members = env.field('panel-members-list');
+    assert.equal(members.children.length, 1);
+    assert.equal(members.children[0].children[0].children[0].textContent, 'gemma-3-27b');
+
+    env.ctx.calls.length = 0;
+    env.pump();
+    assert.ok(paintedTexts(env).indexOf('Status: bereit') < 0, 'Karte darf nicht zusätzlich erscheinen');
+});
+
+test('Klick auf die Clients-Wolke zeigt ihre Liste im HTML-Panel', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+    env.pump();
+
+    api.select('clients');
+    assert.equal(env.hook('[data-topo-panel]').hidden, false);
+    assert.equal(env.field('panel-cloud-title').textContent, 'Aktive Clients');
+
+    const cloud = env.field('panel-cloud-list');
+    assert.equal(cloud.children.length, 1);
+    assert.equal(cloud.children[0].children[0].children[0].textContent, 'pc-1');
+    assert.equal(cloud.children[0].children[1].textContent, '10.0.0.1');
+
+    // The cloud block disappears again for a node without a cloud.
+    api.select('ep:1');
+    assert.equal(env.hook('[data-topo-panel]').hidden, true);
+});
+
+test('select() ignoriert unbekannte Schlüssel und schließt das Panel', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+    api.select('llm');
+    assert.equal(env.hook('[data-topo-panel]').hidden, false);
+
+    api.select('gibt-es-nicht');
+    assert.equal(env.hook('[data-topo-panel]').hidden, true);
+
+    api.select(null);
+    assert.equal(env.hook('[data-topo-panel]').hidden, true);
+});
+
+test('eine Auswahl, die aus den Daten verschwindet, wird zurückgesetzt', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+    api.select('llm');
+    assert.equal(env.hook('[data-topo-panel]').hidden, false);
+
+    api.apply({ nodes: { hub: { key: 'hub', kind: 'hub' } }, edges: [], overall: { state: 'ok' } });
+    assert.equal(env.hook('[data-topo-panel]').hidden, true);
+});
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+
+test('ein vollständiger Frame läuft ohne Zeichenfehler durch', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+    api.select('hub');
+    env.pump(3);
+
+    assert.equal(env.ctx.calls.length > 0, true, 'es wurde nichts gezeichnet');
+    for (const call of env.ctx.calls) {
+        assert.equal(typeof call.name, 'string');
+    }
+    // Canvas paths must be balanced and the state must be restored.
+    const saves = env.ctx.calls.filter((call) => call.name === 'save').length;
+    const restores = env.ctx.calls.filter((call) => call.name === 'restore').length;
+    assert.equal(saves, restores, 'save() und restore() sind unausgeglichen');
+    assert.deepEqual(env.consoleErrors, [], 'der Renderer hat Zeichenfehler gemeldet');
+});
+
+test('Klick auf einen Knoten wählt ihn aus', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+    env.pump();
+
+    const hub = api.state().nodes.find((entry) => entry.key === 'hub');
+    assert.equal(hub.screen.visible, true);
+    env.click({ x: hub.screen.x, y: hub.screen.y });
+
+    // The hub carries facts, so the click opens the card and closes the panel.
+    assert.equal(env.hook('[data-topo-panel]').hidden, true);
+    env.ctx.calls.length = 0;
+    env.pump();
+    assert.ok(paintedTexts(env).indexOf('Modelle: 3') >= 0, 'Detailkarte des Hubs fehlt');
+
+    // A click into the empty canvas clears the selection again.
+    env.click({ x: 1, y: 1 });
+    env.ctx.calls.length = 0;
+    env.pump();
+    assert.ok(paintedTexts(env).indexOf('Modelle: 3') < 0, 'Detailkarte blieb offen');
+});
+
+test('resize(), fit() und resetView() arbeiten ohne Fehler', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+    env.pump();
+
+    api.resize();
+    api.fit();
+    api.resetView();
+    env.pump();
+    assert.equal(env.canvas.width, 800);
+    assert.equal(env.canvas.height, 480);
+
+    env.emit('window', 'resize');
+    env.emit('document', 'visibilitychange');
+    env.pump();
+    assert.ok(env.ctx.calls.length > 0);
+});
+
+test('reduzierte Bewegung deaktiviert Drehung und Partikel', () => {
+    const { env, api } = mountWith({ reducedMotion: true });
+    api.apply(basePayload());
+
+    const logList = env.hook('[data-topo-log-list]');
+    assert.equal(logList.children.length, 1);
+    assert.match(logList.children[0].children[1].textContent, /Reduzierte Bewegung aktiv/);
+
+    env.pump(2);
+    assert.ok(env.ctx.calls.length > 0, 'auch ohne Bewegung muss gezeichnet werden');
+});
+
+test('ResizeObserver wird verwendet, wenn der Browser ihn anbietet', () => {
+    const { env, api } = mountWith({ resizeObserver: true });
+    api.apply(basePayload());
+    env.pump();
+    assert.ok(api.state().nodes.length > 0);
+});
+
+// ── Data flow ────────────────────────────────────────────────────────────────
+
+test('die eingebettete JSON-Insel ersetzt den ersten Abruf', () => {
+    const { env, api } = mountWith({ initialPayload: JSON.stringify(basePayload()) });
+
+    assert.equal(env.fetches.length, 0, 'mit Insel darf nichts abgerufen werden');
+    assert.equal(api.state().nodes.length, 6);
+    assert.equal(env.field('overall-label').textContent, 'Eingeschränkt');
+    assert.match(env.field('generated').textContent, /^\d{2}:\d{2}:\d{2}$/);
+});
+
+test('eine kaputte JSON-Insel wird ignoriert', () => {
+    const { env, api } = mountWith({ initialPayload: '{ kaputt' });
+    same(api.state().nodes, []);
+});
+
+test('load() holt die Topologie und reicht sie an die Rückrufe weiter', async () => {
+    const seen = [];
+    const env = createEnvironment({
+        refreshUrl: '/admin/load_stats.php',
+        refreshInterval: '3',
+        fetchImpl: (url) => {
+            env.fetches.push(String(url));
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ ok: true, topology: basePayload() }),
+            });
+        },
+    });
+    const api = env.api.mount(env.root, {
+        onData: (payload) => seen.push(payload.topology.overall.state),
+    });
+
+    assert.equal(await api.load(true), true);
+    assert.deepEqual(env.fetches, ['/admin/load_stats.php']);
+    assert.deepEqual(seen, ['warn']);
+    assert.equal(api.state().nodes.length, 6);
+
+    // data-refresh-interval="3" is clamped to the module minimum of 5 s.
+    const intervals = Array.from(env.timers.values()).filter((timer) => timer.repeat);
+    assert.equal(intervals.length, 1);
+    assert.equal(intervals[0].delay, 5000);
+});
+
+test('load() meldet Fehler über onError und liefert false', async () => {
+    const errors = [];
+    const env = createEnvironment({
+        refreshUrl: '/admin/load_stats.php',
+        fetchImpl: () => Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ ok: false }),
+        }),
+    });
+    const api = env.api.mount(env.root, { onError: (message) => errors.push(message) });
+
+    assert.equal(await api.load(true), false);
+    assert.deepEqual(errors, ['Netzwerkfehler']);
+    same(api.state().nodes, []);
+});
+
+test('load() ohne Abrufadresse tut nichts', async () => {
+    const { api, env } = mountWith();
+    assert.equal(await api.load(true), false);
+    assert.equal(env.fetches.length, 0);
+});
+
+test('apply() schreibt die Kennzahlen in die Kopfzeile', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+
+    assert.equal(env.field('overall-label').textContent, 'Eingeschränkt');
+    assert.equal(env.field('overall-message').textContent, '1 Einschränkung erkannt.');
+    assert.equal(env.field('overall-errors').textContent, '0');
+    assert.equal(env.field('overall-warnings').textContent, '1');
+    assert.equal(env.field('node-count').textContent, '6');
+    assert.equal(env.field('overall-badge').textContent, 'Eingeschränkt');
+    assert.equal(env.root.getAttribute('data-overall-state'), 'warn');
+});

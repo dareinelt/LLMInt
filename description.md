@@ -16,9 +16,9 @@ auf Deutsch. Kommentare sind auf Englisch verfasst.
 | Sprache/Laufzeit | PHP 8.2 (Docker-Image `php:8.2-apache`), mindestens PHP 8.0 |
 | Framework | keines – reine PHP-Dateien, kein Composer, keine Autoloader, keine Build-Kette |
 | Persistenz | MySQL/MariaDB über PDO (`utf8mb4`) |
-| Frontend | serverseitig gerendertes HTML mit inline CSS und inline Vanilla-JS in `index.php` bzw. `admin/index.php`; keine JS-Abhängigkeiten, kein npm |
-| Einstiegspunkte | `index.php` (Chat), `admin/index.php` (Administration), `api/*.php` (JSON/SSE) |
-| Tests/Linting | im Repository nicht vorhanden; Prüfung erfolgt über `php -l` und manuelles Testen |
+| Frontend | serverseitig gerendertes HTML mit inline CSS und inline Vanilla-JS in `index.php` bzw. `admin/index.php`; keine JS-Abhängigkeiten, kein npm. Einzige ausgelagerte Frontend-Dateien sind der Canvas-Renderer `assets/js/flow-topology.js` und `assets/css/flow-topology.css` für die Dashboard-Topologie |
+| Einstiegspunkte | `index.php` (Chat), `admin/index.php` (Administration), `admin/topology.php` (Topologie-Vollbild), `api/*.php` (JSON/SSE) |
+| Tests/Linting | `./tests/run.sh` (abhängigkeitsfreie PHP- und `node:test`-Suites für die Topologie), dazu `php -l` und manuelles Testen |
 | Abhängigkeiten laden | ausschließlich `require_once __DIR__ . '/...'` |
 
 **Wichtig für Änderungen:** Es gibt keinen Router. Jede URL entspricht direkt einer Datei.
@@ -41,9 +41,10 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `api/embedding.php` | 541 | Embeddings erzeugen, Cache, Cosine-Similarity, Reranking, Chunk-Embeddings |
 | `api/upload_document.php` | 488 | Datei-Upload, Textextraktion, Chunking, Vision-Analyse |
 | `api/openai*/**` | – | OpenAI-kompatible Fassade (`v1/models`, `v1/chat/completions`) |
-| `admin/index.php` | 8.406 | Administration: Dashboard, Endpunkte, Routing, Balancer, RAG, LDAP/SMTP, Benutzer, Logs, OpenAI-API-Keys |
+| `admin/index.php` | 8.150 | Administration: Dashboard, Endpunkte, Routing, Balancer, RAG, LDAP/SMTP, Benutzer, Logs, OpenAI-API-Keys |
 | `admin/prompt_security.php` | 878 | Prompt-Security-Regeln, Logs und Einstellungen |
-| `admin/load_stats.php` | 317 | JSON-Livedaten für das Dashboard |
+| `admin/load_stats.php` | 314 | JSON-Livedaten für das Dashboard; enthält über `topology_build()` auch den Payload der Nachrichtenflow-Topologie |
+| `admin/topology.php` | 221 | Vollbildansicht der Nachrichtenflow-Topologie (eigene Hülle ohne Admin-Sidebar, gleicher Payload) |
 | `admin/refresh_sys_stats.php` | 211 | SSH-Abfrage von RAM/CPU/Temperatur je Endpunkt |
 | `admin/api_keys.php` | 25 | Weiterleitung auf die Karte `api-keys-card` in `admin/index.php` (API-Keys mit optionalem, fest am Key hinterlegtem Modell und kopierbaren Basis-URLs der OpenAI-kompatiblen API) |
 | `admin/endpoint_tech.php` | – | Endpunkte technische Verwaltung: quickinfo-Pairing je Endpunkt und Live-Übersicht (CPU/GPU/RAM/VRAM, Temperaturen) |
@@ -55,6 +56,10 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `lib/ldap_auth.php` | 320 | LDAP-Bind, Benutzerabgleich, Kerberos-SSO (direkt oder über Reverse-Proxy) |
 | `lib/reverse_proxy.php` | – | Betrieb hinter Reverse-Proxy (lanpa): `TRUSTED_PROXIES`, Client-IP, HTTPS, `X-Forwarded-Prefix`, Proxy-SSO-Header, `appPublicBaseUrl()` |
 | `lib/mailer.php` | 334 | Eigener SMTP-Client (kein PHPMailer) |
+| `lib/topology.php` | 1.050 | Übersetzungsschicht von den Dashboard-Livedaten auf den Knoten-/Kanten-Payload der Nachrichtenflow-Topologie (`topology_build()`, `topology_initial_script()`); ohne DB-Zugriff und ohne eigene HTTP-Aufrufe |
+| `assets/js/flow-topology.js` | 2.105 | Canvas-Renderer der Topologie: radiale 3D-Anordnung um LLMInt, animierte Kanten mit Partikeln, Detailkarten im Canvas, Vollbildmodus |
+| `assets/css/flow-topology.css` | – | Stile für Canvas, Detailkarten, Statusleiste und Vollbild-Overlay |
+| `tests/` | – | Abhängigkeitsfreie Tests: PHP für `lib/topology.php`, `node:test` für `assets/js/flow-topology.js`, Runner `tests/run.sh`, CI-Workflow |
 | `lib/prompt.txt` | – | Fallback-Kategorien/Prompt für das Routing, importierbar in die DB |
 | `doc_uploads/`, `image_output/`, `sd_output/` | – | Laufzeitdaten (per `.htaccess` geschützt), Docker-Volumes; `sd_output/` ist Bestand aus der früheren AUTOMATIC1111-Integration |
 | `docker/`, `Dockerfile`, `docker-compose.yml` | – | Container-Setup inklusive phpMyAdmin mit Basic Auth |
@@ -268,8 +273,8 @@ Abschluss über `completeTask()`. Die früheren Bildpfade (`pickSdEndpoint()`/
   `generateEmbeddingAuto()` + `milvusSearch()`). `vectorStoreSearch()` wird in `api/chat.php` bei
   jeder Anfrage aufgerufen; Treffer landen als Kontext-Systemnachricht
   (`buildVectorContextSystemPrompt()`) und im Tool `query_documents`. `vectorStoreStatus()`
-  und `vectorQueryStats()` speisen die Dashboard-Kachel (`admin/load_stats.php`,
-  Schlüssel `vector_store`). Verbindungstest: `api/test_vector_store.php`.
+  und `vectorQueryStats()` speisen den Knoten „Wissensdatenbank" der Dashboard-Topologie
+  (`admin/load_stats.php`, Schlüssel `vector_store`). Verbindungstest: `api/test_vector_store.php`.
 
 Einstellungen: `embedding_enabled`, `embedding_model`, `embedding_timeout`,
 `embedding_cache_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`,
@@ -348,11 +353,19 @@ Die Oberfläche ist in Karten mit stabilen IDs gegliedert, unter anderem `dashbo
 `config-smtp-card`, `config-ldap-card`, `config-searxng-card`, `log-config-card`,
 `log-viewer-card`, `users-card`, `openai-api-card`, `api-keys-card`, `password-card`.
 
-Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
+Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard, inklusive
+Topologie-Payload), `admin/topology.php` (Vollbildansicht der Topologie),
 `admin/refresh_sys_stats.php` (SSH-Metriken),
 `admin/api_keys.php` (Weiterleitung auf die Karte `api-keys-card` im Dashboard),
 `admin/endpoint_tech.php` + `admin/quickinfo_stats.php` (quickinfo-Pairing und technische Endpunktübersicht),
 `admin/prompt_security.php` (Sicherheitsmodul).
+
+Die Dashboard-Karte `dashboard-card` zeigt die Betriebsdaten als
+Nachrichtenflow-Topologie (`lib/topology.php` erzeugt den Payload,
+`assets/js/flow-topology.js` zeichnet ihn auf ein Canvas). Der Payload wird beim
+Seitenaufbau als `<script type="application/json" data-flow-initial>` eingebettet
+(`topology_initial_script()`) und danach alle 15 s über
+`admin/load_stats.php?topology=1` erneuert.
 
 ---
 
