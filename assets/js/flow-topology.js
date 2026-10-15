@@ -776,8 +776,8 @@
         // A session is different: while it waits for an answer it reports the
         // endpoint it asked (node.route, filled by topology_build()), so its way
         // is known exactly and only that one branch lights up. Without a running
-        // request its way is unknown and every branch that ends in an endpoint
-        // joins in – as it does for an endpoint click.
+        // request its way is unknown; guessing one would draw a route the message
+        // never took, so the click selects the session alone.
 
         function parentEdges() {
             const parents = new Map();
@@ -810,6 +810,15 @@
             const next = { nodes: new Set(), edges: new Set(), active: false, busy: false };
             if (!key || !nodes.has(key)) return next;
 
+            const node = nodes.get(key);
+            const running = node.kind === 'client' && node.route && Array.isArray(node.route.nodes)
+                ? node.route.nodes.filter(function (target) { return nodes.has(String(target)); })
+                : [];
+
+            // Only a waiting session knows which way its message takes. An idle
+            // one is selected without a way, so nothing is highlighted.
+            if (node.kind === 'client' && !running.length) return next;
+
             const parents = parentEdges();
             const climbed = new Set();
 
@@ -828,18 +837,13 @@
 
             climb(key);
 
-            const node = nodes.get(key);
-            const running = node.kind === 'client' && node.route && Array.isArray(node.route.nodes)
-                ? node.route.nodes.filter(function (target) { return nodes.has(String(target)); })
-                : [];
-
             if (running.length) {
                 next.busy = true;
                 for (const target of running) climb(String(target));
             } else {
                 // A single caller lights up the way across to the endpoints it
                 // talks to; a caller cloud only lights up its own branch.
-                const fromCaller = node.kind === 'client' || node.kind === 'api-key';
+                const fromCaller = node.kind === 'api-key';
                 const ownBranch = node.kind === 'clients' || node.kind === 'api';
                 for (const other of nodes.values()) {
                     if (next.nodes.has(other.key)) continue;

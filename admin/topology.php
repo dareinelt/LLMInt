@@ -124,7 +124,7 @@ $version = static function (string $file): string {
                     aria-label="Nachrichtenfluss der LLMInt-Bausteine: Clients, API-Aufrufe, Kern, Modellgruppen, LLM-Endpunkte und Zusatzdienste"></canvas>
 
             <div class="topo-hint" data-topo-hint>
-                Ziehen dreht die Ansicht · Mausrad zoomt · Klick öffnet die Detailkarte und hebt den Weg zwischen Endpunkt und Client bzw. API-Aufruf hervor (läuft eine Anfrage, nur deren Zweig) ·
+                Ziehen dreht die Ansicht · Mausrad zoomt · Klick öffnet die Detailkarte und hebt den Weg zwischen Endpunkt und Aufrufer hervor (eine Sitzung nur mit laufender Anfrage) ·
                 <kbd>Esc</kbd> schließt beides · <kbd>F</kbd> einpassen · <kbd>R</kbd> zurücksetzen · <kbd>Tab</kbd> nächster Baustein
             </div>
 
