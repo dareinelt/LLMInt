@@ -6,7 +6,9 @@
  * Translation layer between the live dashboard statistics (the JSON contract of
  * admin/load_stats.php) and the node/edge payload rendered by the message-flow
  * topology (assets/js/flow-topology.js). Used by the dashboard card in
- * admin/index.php and by the full-screen view in admin/topology.php.
+ * admin/index.php, by the full-screen view in admin/topology.php and by the
+ * deep links of every admin page that hosts one of the referenced cards
+ * (see topology_admin_link()).
  *
  * The topology is a pure *view*: this library performs no database access and
  * no HTTP requests of its own, so the same payload can be produced from a
@@ -394,6 +396,30 @@ function topology_endpoint_state(bool $active, int $running, int $slotLimit): ar
 }
 
 /**
+ * Admin page that hosts the card with $anchor, as a page-relative deep link.
+ *
+ * The admin one-pager was split into one page per navigation entry, so an
+ * anchor on its own no longer identifies a URL. Unknown anchors fall back to
+ * the dashboard page, which is where the topology view itself is rendered.
+ */
+function topology_admin_link(string $anchor): string
+{
+    static $pages = [
+        'dashboard-card'            => 'index.php',
+        'config-smtp-card'          => 'smtp.php',
+        'config-speech-card'        => 'speech.php',
+        'config-image-card'         => 'image.php',
+        'config-searxng-card'       => 'search.php',
+        'config-endpoints-card'     => 'endpoints.php',
+        'config-balancer-card'      => 'balancer.php',
+        'config-vector-store-card'  => 'vector_store.php',
+        'api-keys-card'             => 'api_keys.php',
+    ];
+
+    return ($pages[$anchor] ?? 'index.php') . '#' . $anchor;
+}
+
+/**
  * Build the topology payload from a load_stats.php response.
  *
  * @param array $stats   Decoded load_stats.php JSON (or an equivalent snapshot).
@@ -517,7 +543,7 @@ function topology_build(array $stats, array $options = []): array
             'message'  => '',
             'activity' => topology_activity($route !== null ? 3 : 1),
             'facts'    => $facts,
-            'url'      => $linkBase . 'index.php#dashboard-card',
+            'url'      => $linkBase . topology_admin_link('dashboard-card'),
         ]);
     }
 
@@ -556,7 +582,7 @@ function topology_build(array $stats, array $options = []): array
             'empty' => 'Keine aktiven Clients.',
             'items' => $clientItems,
         ],
-        'url'        => $linkBase . 'index.php#dashboard-card',
+        'url'        => $linkBase . topology_admin_link('dashboard-card'),
     ]);
     foreach ($clientKeys as $clientKey) {
         $addEdge($clientsKey, $clientKey, 'ok', true);
@@ -676,7 +702,7 @@ function topology_build(array $stats, array $options = []): array
             'message'  => (string) $item['message'],
             'activity' => topology_activity((int) $item['activity']),
             'facts'    => $item['facts'],
-            'url'      => $linkBase . 'index.php#api-keys-card',
+            'url'      => $linkBase . topology_admin_link('api-keys-card'),
         ]);
     }
 
@@ -712,7 +738,7 @@ function topology_build(array $stats, array $options = []): array
             'empty' => 'Keine API-Aufrufe.',
             'items' => $apiItems,
         ],
-        'url'      => $linkBase . 'index.php#api-keys-card',
+        'url'      => $linkBase . topology_admin_link('api-keys-card'),
     ]);
     foreach ($apiKeyNodes as $apiKeyNode) {
         $addEdge($apiNodeKey, $apiKeyNode, 'ok', true);
@@ -794,7 +820,7 @@ function topology_build(array $stats, array $options = []): array
             ],
             'facts'    => $facts,
             'slots'    => ['used' => $running, 'max' => $slotLimit],
-            'url'      => $linkBase . 'index.php#config-endpoints-card',
+            'url'      => $linkBase . topology_admin_link('config-endpoints-card'),
         ]);
 
         $canonical = function_exists('canonicalModelName') ? canonicalModelName($model) : strtolower($model);
@@ -838,7 +864,7 @@ function topology_build(array $stats, array $options = []): array
             topology_fact('🔌', 'Endpunkte', (string) count($epKeys), 'plain'),
         ],
         'synthetic' => true,
-        'url'       => $linkBase . 'index.php#config-balancer-card',
+        'url'       => $linkBase . topology_admin_link('config-balancer-card'),
     ]);
 
     // ── LLM group (direct child of the core, carries the intelligence groups) ─
@@ -894,7 +920,7 @@ function topology_build(array $stats, array $options = []): array
             ],
             'group'     => true,
             'synthetic' => true,
-            'url'       => $linkBase . 'index.php#config-endpoints-card',
+            'url'       => $linkBase . topology_admin_link('config-endpoints-card'),
         ]);
         $addEdge($hubKey, $llmKey, $nodes[$llmKey]['state'], true);
     }
@@ -937,7 +963,7 @@ function topology_build(array $stats, array $options = []): array
             ],
             'group'     => true,
             'synthetic' => true,
-            'url'       => $linkBase . 'index.php#config-endpoints-card',
+            'url'       => $linkBase . topology_admin_link('config-endpoints-card'),
         ]);
         $addEdge($llmKey, $key, $state, true);
         foreach ($group['keys'] as $epKey) {
@@ -975,7 +1001,7 @@ function topology_build(array $stats, array $options = []): array
                 topology_fact('⏱', 'Ø Antwortzeit', $sxAvg !== null ? number_format((float) $sxAvg, 1, ',', '.') . ' s' : '–', 'plain'),
                 topology_fact('🔗', 'URL', (string) ($searxng['base_url'] ?? '–'), 'muted'),
             ],
-            'url'      => $linkBase . 'index.php#config-searxng-card',
+            'url'      => $linkBase . topology_admin_link('config-searxng-card'),
         ]);
         $addEdge($hubKey, $key, $sxState);
     }
@@ -1017,7 +1043,7 @@ function topology_build(array $stats, array $options = []): array
                 topology_fact('🗂', 'Collection', (string) ($vectorStore['collection'] ?? '–'), 'muted'),
                 topology_fact('🔗', 'URL', (string) ($vectorStore['base_url'] ?? '–'), 'muted'),
             ],
-            'url'      => $linkBase . 'index.php#config-vector-store-card',
+            'url'      => $linkBase . topology_admin_link('config-vector-store-card'),
         ]);
         $addEdge($hubKey, $key, $vState);
     }
@@ -1098,7 +1124,7 @@ function topology_build(array $stats, array $options = []): array
             'message'  => $message,
             'activity' => topology_activity($state === 'ok' ? 2 : 0),
             'facts'    => $facts,
-            'url'      => $linkBase . 'index.php#config-image-card',
+            'url'      => $linkBase . topology_admin_link('config-image-card'),
         ]);
         $imageKeys[]   = $key;
         $imageStates[] = $state;
@@ -1130,7 +1156,7 @@ function topology_build(array $stats, array $options = []): array
             ],
             'group'     => true,
             'synthetic' => true,
-            'url'       => $linkBase . 'index.php#config-image-card',
+            'url'       => $linkBase . topology_admin_link('config-image-card'),
         ]);
         $addEdge($hubKey, $imageKey, $nodes[$imageKey]['state'], true);
         foreach ($imageKeys as $imageEpKey) {
@@ -1213,7 +1239,7 @@ function topology_build(array $stats, array $options = []): array
             'message'  => $message,
             'activity' => topology_activity($state === 'ok' ? 2 : 0),
             'facts'    => $facts,
-            'url'      => $linkBase . 'index.php#config-speech-card',
+            'url'      => $linkBase . topology_admin_link('config-speech-card'),
         ]);
         $speechKeys[]   = $key;
         $speechStates[] = $state;
@@ -1245,7 +1271,7 @@ function topology_build(array $stats, array $options = []): array
             ],
             'group'     => true,
             'synthetic' => true,
-            'url'       => $linkBase . 'index.php#config-speech-card',
+            'url'       => $linkBase . topology_admin_link('config-speech-card'),
         ]);
         $addEdge($hubKey, $speechKey, $nodes[$speechKey]['state'], true);
         foreach ($speechKeys as $speechEpKey) {

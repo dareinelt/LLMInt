@@ -36,6 +36,7 @@ kompakte Navigationshilfe siehe [`agent_index.md`](agent_index.md).
 - [api/test_searxng.php](#apitest_searxngphp)
 - [Weitere api/*.php ohne eigene Funktionen](#weitere-apiphp-ohne-eigene-funktionen)
 - [admin/index.php](#adminindexphp)
+- [admin/partials/](#adminpartials)
 - [admin/refresh_sys_stats.php](#adminrefresh_sys_statsphp)
 - [Weitere admin/*.php ohne eigene Funktionen](#weitere-adminphp-ohne-eigene-funktionen)
 
@@ -445,6 +446,7 @@ Hierarchie lautet LLMInt (`hub`) → `llm` → `model` → `endpoint`, daneben `
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
+| `topology_admin_link` | `topology_admin_link(string $anchor): string` | Bildet die Karten-ID eines Topologie-Deep-Links auf die Adminseite ab, die die Karte enthält (`api-keys-card` → `api_keys.php#api-keys-card`, `config-balancer-card` → `balancer.php#config-balancer-card`); unbekannte IDs fallen auf `index.php#<anchor>` zurück. |
 | `topology_build` | `topology_build(array $stats, array $options = []): array` | Baut den vollständigen Payload aus einer `load_stats.php`-Antwort. Optionen: `base_url` (Präfix für interne Links, `''` für `admin/`), `slot_limit` (Parallel-Slots je LLM-Endpunkt, Standard 4), `include_off` (deaktivierte Endpunkte als Knoten behalten, Standard `true`). Gruppenknoten (`llm`, `model`, `image`, `speech`) tragen `'group' => true` und bleiben aus `incidents` heraus, damit Störungen am konkreten Endpunkt gemeldet werden. |
 | `topology_initial_script` | `topology_initial_script(array $topology): string` | Bettet den Payload als `<script type="application/json" data-flow-initial>` ein, damit die Topologie ohne zusätzlichen Abruf aufgebaut wird; leerer String, wenn es keine Knoten gibt. |
 
@@ -696,16 +698,33 @@ Diese Dateien enthalten ausschließlich prozeduralen Code (kein top-level `funct
 
 ## admin/index.php
 
-Überwiegend prozeduraler UI-Code (~8.400 Zeilen) mit `action`-basierten POST-Handlern.
-Die Dashboard-Karte `#dashboard-card` enthält die Nachrichtenflow-Topologie
-(`assets/js/flow-topology.js`), deren Knoten- und Kantenpayload `topology_build()` aus
-`lib/topology.php` über `admin/load_stats.php` liefert. Nur eine top-level Funktion:
+Die Dashboard-Seite des Adminbereichs (661 Zeilen): Nachrichtenflow-Topologie
+(`assets/js/flow-topology.js`, Knoten- und Kantenpayload aus `topology_build()` in
+`lib/topology.php` über `admin/load_stats.php`), Systemstatus und Nutzung heute. Die
+übrigen Karten des früheren One-Pagers liegen auf eigenen Seiten `admin/<seite>.php`
+(siehe [admin/partials/](#adminpartials)).
+
+## admin/partials/
+
+Gemeinsame Hülle aller Adminseiten. Jede Seite bindet `bootstrap.php`, `layout_head.php`
+und `layout_foot.php` ein und rendert nur ihren eigenen Karten-Markup samt zugehörigem
+Inline-JavaScript.
+
+| Datei | Zweck |
+|---|---|
+| `admin/partials/bootstrap.php` | Sitzung, `require_once`-Kette, Rollen-/Login-Guards, Einstellungen, CSRF-Token und Einsprung in die POST-Verarbeitung |
+| `admin/partials/actions.php` | Sämtliche `action`-basierten POST-Handler (CSRF-geprüft) |
+| `admin/partials/data.php` | Livedaten-Aufbereitung; einzige top-level Funktion `modelIntelligenceLabel` |
+| `admin/partials/nav.php` | Seitenleiste (`admin_nav(string $active)`) – definiert die Liste der Adminseiten |
+| `admin/partials/layout_head.php` | `<head>` inkl. Admin-CSS, Kopfzeile und Seitenleiste |
+| `admin/partials/layout_foot.php` | Skript-Abschluss und schließende Tags |
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
 | `modelIntelligenceLabel` | `modelIntelligenceLabel(string $model): string` | Liefert das menschenlesbare Intelligenz-Label eines Modells (`basic`/`standard`/`advanced`/`expert`). |
 
-**Verarbeitete `action`-Werte (POST + CSRF):** `add_endpoint`, `update_endpoint`,
+**Verarbeitete `action`-Werte (POST + CSRF, `admin/partials/actions.php`):**
+`add_endpoint`, `update_endpoint`,
 `delete_endpoint`, `reset_circuit`, `toggle_endpoint_pause`, `save_search_settings`,
 `save_request_handling`, `save_new_user_model`, `save_balancer_settings`,
 `save_streaming_settings`, `save_intelligence_group_settings`,
@@ -722,7 +741,8 @@ Die Dashboard-Karte `#dashboard-card` enthält die Nachrichtenflow-Topologie
 `save_speech_dictation_settings`, `add_speech_endpoint`, `update_speech_endpoint`,
 `delete_speech_endpoint`, `move_speech_endpoint`.
 
-Die Bildgenerierung wird in der Karte `#config-image-card` verwaltet (Endpunktliste,
+Die Bildgenerierung wird in der Karte `#config-image-card` auf `admin/image.php`
+verwaltet (Endpunktliste,
 Aktivierung, Vorlagen für Zustimmungsfrage und Mail inkl. Platzhalterhilfe,
 Verbindungstest). Der Test fragt `api/image_health.php` ab.
 
@@ -742,7 +762,8 @@ erhalten.
 
 | Datei | Zweck |
 |---|---|
-| `admin/api_keys.php` | Weiterleitung auf die Karte `#api-keys-card` in `admin/index.php` (CRUD für OpenAI-kompatible API-Keys, Modellwahl je Key, kopierbare API-Basis-URLs) |
+| `admin/api_keys.php` | Eigene Seite *Verwaltung > API-Keys* (`#api-keys-card`): CRUD für OpenAI-kompatible API-Keys, Modellwahl je Key, kopierbare API-Basis-URLs |
+| `admin/usage.php`, `admin/smtp.php`, `admin/ldap.php`, `admin/speech.php`, `admin/image.php`, `admin/search.php`, `admin/endpoints.php`, `admin/request_handling.php`, `admin/system_prompt.php`, `admin/balancer.php`, `admin/routing.php`, `admin/decision.php`, `admin/vector_store.php`, `admin/embedding.php`, `admin/hybrid_search.php`, `admin/reranker.php`, `admin/rag_stats.php`, `admin/system_messages.php`, `admin/log_config.php`, `admin/log_viewer.php`, `admin/users.php`, `admin/openai_api.php`, `admin/password.php` | Je eine Adminseite pro Eintrag der Seitenleiste; Markup der jeweiligen Karte plus karten-eigenes Inline-JavaScript, Hülle aus `admin/partials/` |
 | `admin/endpoint_tech.php` | quickinfo-Pairing je Endpunkt (`pair_quickinfo`, `test_quickinfo`, `unpair_quickinfo`) und Live-Übersicht |
 | `admin/quickinfo_stats.php` | JSON: Modell, Ø Token/s (heute) und quickinfo-Metriken je Endpunkt |
 | `admin/load_stats.php` | JSON-Livedaten für das Dashboard (Endpunktlast, Tokenverbrauch, aktive Clients); liefert zusätzlich die Altbestandszahlen aus `sd_*`/`comfy_*` und, über `topology_build()` aus `lib/topology.php`, den Payload der Nachrichtenflow-Topologie. Die ImageInt-Karte holt ihren Status über `api/image_health.php`. |

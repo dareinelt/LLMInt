@@ -16,7 +16,7 @@ auf Deutsch. Kommentare sind auf Englisch verfasst.
   Endpunkte sind neue Dateien unter `api/`, die `../db.php` einbinden.
 - **Kein Composer, kein Build-Schritt.** Abhängigkeiten werden ausschließlich über
   `require_once __DIR__ . '/...'` geladen; Frontend-CSS/JS liegt inline in `index.php`
-  bzw. `admin/index.php`.
+  bzw. den Adminseiten `admin/*.php` (gemeinsame Hülle `admin/partials/`).
 - **Idempotentes Schema.** `ensureRuntimeSchema(PDO $pdo)` in `db.php` legt beim ersten
   `getDb()`-Aufruf pro Prozess alle Laufzeittabellen an und ergänzt fehlende Spalten via
   `ALTER TABLE ... ADD COLUMN` in `try/catch`. Bestehende Installationen migrieren so
@@ -32,7 +32,7 @@ auf Deutsch. Kommentare sind auf Englisch verfasst.
 | Framework | keines |
 | Persistenz | MySQL/MariaDB über PDO (`utf8mb4`) |
 | Frontend | serverseitig gerendertes HTML mit inline CSS/Vanilla-JS |
-| Einstiegspunkte | `index.php`, `admin/index.php`, `api/*.php`, `login.php`, `register.php`, `logout.php`, `setup.php` |
+| Einstiegspunkte | `index.php`, `admin/index.php` (Dashboard) und die übrigen Adminseiten `admin/*.php`, `api/*.php`, `login.php`, `register.php`, `logout.php`, `setup.php` |
 | Tests/Linting | abhängigkeitsfreie PHP- und `node:test`-Tests für die Topologie (`./tests/run.sh`), `php -l <datei>` zur Syntaxprüfung |
 
 ---
@@ -43,7 +43,7 @@ auf Deutsch. Kommentare sind auf Englisch verfasst.
 |---|---|---|
 | **Web** | `index.php`, `login.php`, `register.php`, `logout.php` | Chat-Oberfläche, Anmeldung, Selbstregistrierung |
 | **API** | `api/chat.php`, `api/balancer.php`, `api/embedding.php`, `api/upload_document.php`, `api/openai*/**`, weitere `api/*.php` | Chat-Pipeline, Routing, RAG, Uploads, Bildgenerierung, OpenAI-kompatible Fassade |
-| **Administration** | `admin/index.php`, `admin/prompt_security.php`, `admin/load_stats.php`, `admin/topology.php`, `admin/refresh_sys_stats.php`, `admin/api_keys.php`, `admin/endpoint_tech.php`, `admin/quickinfo_stats.php` | Endpunkte, Benutzer, Einstellungen, Monitoring, API-Keys, quickinfo-Pairing, Nachrichtenflow-Topologie |
+| **Administration** | `admin/index.php` (Dashboard) und je Navigationseintrag eine eigene Seite `admin/<seite>.php` (`usage.php`, `smtp.php`, `ldap.php`, `speech.php`, `image.php`, `search.php`, `endpoints.php`, `request_handling.php`, `system_prompt.php`, `balancer.php`, `routing.php`, `decision.php`, `vector_store.php`, `embedding.php`, `hybrid_search.php`, `reranker.php`, `rag_stats.php`, `system_messages.php`, `log_config.php`, `log_viewer.php`, `users.php`, `openai_api.php`, `api_keys.php`, `password.php`), gemeinsame Hülle `admin/partials/` (`bootstrap.php`, `actions.php`, `data.php`, `nav.php`, `layout_head.php`, `layout_foot.php`), `admin/prompt_security.php`, `admin/load_stats.php`, `admin/topology.php`, `admin/refresh_sys_stats.php`, `admin/endpoint_tech.php`, `admin/quickinfo_stats.php` | Endpunkte, Benutzer, Einstellungen, Monitoring, API-Keys, quickinfo-Pairing, Nachrichtenflow-Topologie |
 | **Bibliotheken** | `lib/balancer_engine.php`, `lib/prompt_security.php`, `lib/openai_api.php`, `lib/ldap_auth.php`, `lib/mailer.php`, `lib/healthcheck.php`, `lib/topology.php` | Wiederverwendbare Kernlogik, von mehreren Einstiegspunkten eingebunden |
 | **Persistenz** | MySQL/MariaDB, Schema aus `setup.php` + `db.php` | Einstellungen, Benutzer, Endpunkte, Tasks, Chunks, Logs |
 | **Externe Dienste** | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP/AD, SMTP, SpeechInt, ImageInt | Modellinferenz, Suche, Verzeichnisdienst, Mailversand, Diktat, Bildgenerierung |
@@ -72,7 +72,7 @@ flowchart LR
         Health[lib/healthcheck.php]
     end
     subgraph Admin[Administration]
-        AdminIdx[admin/index.php]
+        AdminIdx["admin/*.php"]
     end
     subgraph DB[Persistenz]
         MySQL[(MySQL/MariaDB)]
@@ -178,7 +178,7 @@ Details zu Feldnamen und Funktionen, die diese Tabellen lesen/schreiben, siehe
   Benutzer. `$_SESSION['requires_password_change']` erzwingt einen Passwortwechsel.
 - Rollenprüfung ausschließlich über `currentUserRole()`, `isCurrentUserAdmin()` sowie die
   Guards `requireAdminOrRedirect()` (HTML) bzw. `requireAdminOrJson403()` (JSON-APIs).
-- CSRF-Schutz: `$_SESSION['csrf_token']` wird in `index.php`/`admin/index.php` erzeugt;
+- CSRF-Schutz: `$_SESSION['csrf_token']` wird in `index.php`/`admin/partials/bootstrap.php` erzeugt;
   alle Formulare sowie Admin- und Upload-APIs prüfen das Feld `csrf_token`. `login.php`
   verwendet zusätzlich `$_SESSION['login_csrf']`.
 - Anmeldereihenfolge (`login.php`, `admin/login.php`): Kerberos-SSO
@@ -475,9 +475,11 @@ psLoadRules() → psNormalise() → psMatchRules() → psComputeScore()
 
 ---
 
-## 11. Administration (`admin/index.php`)
+## 11. Administration (`admin/*.php`)
 
-`admin/index.php` verarbeitet alle Änderungen als POST mit `action`-Feld und
+Jeder Eintrag der linken Navigation ist eine eigene Seite; `admin/index.php` ist die
+Dashboard-Seite. Das Formular liegt jeweils auf der Seite, die den `action`-Wert kennt,
+verarbeitet wird der POST zentral in `admin/partials/actions.php` mit `action`-Feld und
 CSRF-Token, u. a. `add_endpoint`, `update_endpoint`, `delete_endpoint`,
 `reset_circuit`, `toggle_endpoint_pause`, `save_balancer_settings`,
 `save_routing_settings`, `add_routing_category`, `save_hybrid_search_settings`,
@@ -488,7 +490,8 @@ CSRF-Token, u. a. `add_endpoint`, `update_endpoint`, `delete_endpoint`,
 `save_speech_dictation_settings` u. v. m. (vollständige Liste in
 [`functions.md`](functions.md#adminindexphp)).
 
-Die Oberfläche ist in Karten mit stabilen IDs gegliedert (`dashboard-card`,
+Die Seiten gliedern ihre Inhalte in Karten mit stabilen IDs (eine Karte je Seite,
+beziehungsweise mehrere Karten auf Dashboard und Protokollierung; `dashboard-card`,
 `config-endpoints-card`, `config-balancer-card`, `config-routing-card`,
 `config-image-card` (`config-sd-card` und `config-comfy-card` sind als
 Altbestand per `hidden` ausgeblendet), `config-vector-store-card`,
@@ -500,7 +503,7 @@ Altbestand per `hidden` ausgeblendet), `config-vector-store-card`,
 Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard, inklusive
 Topologie-Payload), `admin/topology.php` (Vollbildansicht der Topologie),
 `admin/refresh_sys_stats.php` (SSH-Metriken),
-`admin/api_keys.php` (Weiterleitung auf die Karte `api-keys-card` im Dashboard),
+`admin/api_keys.php` (eigene Seite *Verwaltung > API-Keys*, Karte `api-keys-card`),
 `admin/endpoint_tech.php` + `admin/quickinfo_stats.php` (quickinfo-Pairing, technische Endpunktübersicht),
 `admin/prompt_security.php` (Sicherheitsmodul).
 

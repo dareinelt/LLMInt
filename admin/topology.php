@@ -59,7 +59,7 @@ $version = static function (string $file): string {
 
 <header class="topo-page-head">
     <h1>🛰 Nachrichtenfluss-Topologie</h1>
-    <a class="topo-page-back" href="index.php#dashboard-card">← Zurück zum Dashboard</a>
+    <a class="topo-page-back" href="index.php">← Zurück zum Dashboard</a>
 </header>
 
 <main class="topo-page-main">
@@ -198,7 +198,7 @@ $version = static function (string $file): string {
 <noscript>
     <div class="topo-noscript">
         Die Nachrichtenfluss-Topologie benötigt JavaScript. Die Zahlenwerte des
-        Dashboards stehen auch ohne Skript in <a href="index.php#dashboard-card">admin/index.php</a> bereit.
+        Dashboards stehen auch ohne Skript in <a href="index.php">admin/index.php</a> bereit.
     </div>
 </noscript>
 

@@ -327,7 +327,7 @@ function qiShortUrl(string $url): string
         </p>
 
         <?php if (empty($endpoints)): ?>
-            <div class="ep-empty">Noch keine Endpunkte angelegt. Endpunkte werden im <a href="index.php#config-endpoints-card" style="color:var(--accent)">Admin-Bereich</a> verwaltet.</div>
+            <div class="ep-empty">Noch keine Endpunkte angelegt. Endpunkte werden im <a href="endpoints.php" style="color:var(--accent)">Admin-Bereich</a> verwaltet.</div>
         <?php else: ?>
         <table class="pair-table">
             <thead>
