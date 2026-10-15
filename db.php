@@ -544,6 +544,10 @@ function ensureRuntimeSchema(PDO $pdo): void
             last_used_at TIMESTAMP       NULL,
             expires_at   TIMESTAMP       NULL,
             is_active    TINYINT(1)      NOT NULL DEFAULT 1,
+            call_count   BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            calls_today  INT UNSIGNED    NOT NULL DEFAULT 0,
+            counter_date DATE            NULL,
+            last_model   VARCHAR(255)    NOT NULL DEFAULT '',
             PRIMARY KEY (id),
             UNIQUE KEY uq_api_key_hash (api_key_hash),
             KEY idx_api_user (user_id, is_active),
@@ -556,6 +560,34 @@ function ensureRuntimeSchema(PDO $pdo): void
     try {
         $pdo->exec("ALTER TABLE api_keys ADD COLUMN model VARCHAR(255) NOT NULL DEFAULT '' AFTER description");
     } catch (Throwable $_e) { /* column already exists */ }
+
+    // Usage counters of an API key, shown in the admin topology's API cloud:
+    // how often the key was used in total and today, plus the model it last
+    // asked for. Written by recordApiCallUsage() on every API request.
+    foreach ([
+        "ALTER TABLE api_keys ADD COLUMN last_model   VARCHAR(255)    NOT NULL DEFAULT '' AFTER model",
+        "ALTER TABLE api_keys ADD COLUMN call_count   BIGINT UNSIGNED NOT NULL DEFAULT 0  AFTER is_active",
+        "ALTER TABLE api_keys ADD COLUMN calls_today  INT UNSIGNED    NOT NULL DEFAULT 0  AFTER call_count",
+        "ALTER TABLE api_keys ADD COLUMN counter_date DATE            NULL                AFTER calls_today",
+    ] as $apiKeyColumn) {
+        try {
+            $pdo->exec($apiKeyColumn);
+        } catch (Throwable $_e) { /* column already exists */ }
+    }
+
+    // Calls without a usable API key have no row in api_keys, so their
+    // counters live in this single row (id = 1) instead.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS api_anonymous_usage (
+            id           TINYINT UNSIGNED NOT NULL DEFAULT 1,
+            call_count   BIGINT UNSIGNED  NOT NULL DEFAULT 0,
+            calls_today  INT UNSIGNED     NOT NULL DEFAULT 0,
+            counter_date DATE             NULL,
+            last_used_at TIMESTAMP        NULL,
+            last_model   VARCHAR(255)     NOT NULL DEFAULT '',
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
 
     // Document uploads: one row per uploaded file, including vision-model analysis result.
     $pdo->exec("
@@ -2120,6 +2152,148 @@ function recordClientRoute(string $token, string $kind, string $model = '', int 
         // Best-effort: the topology simply shows no running request.
         return false;
     }
+}
+
+/**
+ * Count one call that came in through the OpenAI-compatible API.
+ *
+ * `$keyId === null` counts a call without a usable key (unknown, inactive or
+ * expired): those have no row in api_keys and are collected in
+ * api_anonymous_usage instead.
+ *
+ * The daily counter is reset implicitly by comparing `counter_date` with the
+ * current date, so no cron job is needed and the total keeps growing.
+ * `last_model` is the model the caller asked for.
+ *
+ * Best-effort: a failed write must never break the API request.
+ */
+function recordApiCallUsage(?int $keyId, string $model = ''): void
+{
+    $model = mb_substr(trim($model), 0, 255);
+
+    try {
+        $db = getDb();
+
+        if ($keyId !== null && $keyId > 0) {
+            $db->prepare(
+                'UPDATE api_keys
+                    SET last_used_at = NOW(),
+                        last_model   = ?,
+                        call_count   = call_count + 1,
+                        calls_today  = IF(counter_date = CURDATE(), calls_today + 1, 1),
+                        counter_date = CURDATE()
+                  WHERE id = ?'
+            )->execute([$model, $keyId]);
+            return;
+        }
+
+        $db->prepare(
+            'INSERT INTO api_anonymous_usage
+                 (id, call_count, calls_today, counter_date, last_used_at, last_model)
+                  VALUES (1, 1, 1, CURDATE(), NOW(), ?)
+             ON DUPLICATE KEY UPDATE
+                    call_count   = call_count + 1,
+                    calls_today  = IF(counter_date = CURDATE(), calls_today + 1, 1),
+                    counter_date = CURDATE(),
+                    last_used_at = NOW(),
+                    last_model   = ?'
+        )->execute([$model, $model]);
+    } catch (Throwable $e) {
+        // Best-effort: the counters are dashboard information only.
+    }
+}
+
+/**
+ * Usage of the OpenAI-compatible API for the admin topology's API cloud: one
+ * entry per API key plus one entry for all calls without a usable key.
+ *
+ * Every entry carries `calls` (total), `calls_today`, `last_used_at`,
+ * `last_model`, the age of the last call in seconds (`last_used_age`, null
+ * when the entry was never used) and `usable` (the key is active and not
+ * expired). Keys additionally carry name, description, owner, the model pinned
+ * to the key, its prefix, creation/expiry dates and `expires_in` seconds.
+ *
+ * `total_calls`/`calls_today` sum up all entries. Returns an empty list when
+ * the tables are not available yet.
+ *
+ * @return array{keys:array<int,array<string,mixed>>,anonymous:?array<string,mixed>,
+ *               total_calls:int,calls_today:int}
+ */
+function listApiKeyUsage(?PDO $pdo = null): array
+{
+    $out = ['keys' => [], 'anonymous' => null, 'total_calls' => 0, 'calls_today' => 0];
+
+    try {
+        $db = $pdo ?? getDb();
+
+        $rows = $db->query(
+            'SELECT k.id, k.name, k.description, k.model, k.last_model, k.key_prefix,
+                    k.created_at, k.last_used_at, k.expires_at, k.is_active,
+                    k.call_count,
+                    IF(k.counter_date = CURDATE(), k.calls_today, 0) AS calls_today,
+                    TIMESTAMPDIFF(SECOND, k.last_used_at, NOW())     AS last_used_age,
+                    TIMESTAMPDIFF(SECOND, NOW(), k.expires_at)       AS expires_in,
+                    COALESCE(u.username, "")                         AS username
+               FROM api_keys k
+               LEFT JOIN users u ON u.id = k.user_id
+              ORDER BY k.name ASC, k.id ASC'
+        )->fetchAll();
+
+        foreach ($rows as $row) {
+            $expiresIn = $row['expires_in'] !== null ? (int) $row['expires_in'] : null;
+            $key = [
+                'id'            => (int) $row['id'],
+                'name'          => (string) $row['name'],
+                'description'   => (string) $row['description'],
+                'username'      => (string) $row['username'],
+                'model'         => (string) $row['model'],
+                'last_model'    => (string) $row['last_model'],
+                'key_prefix'    => (string) $row['key_prefix'],
+                'created_at'    => (string) ($row['created_at'] ?? ''),
+                'last_used_at'  => $row['last_used_at'] !== null ? (string) $row['last_used_at'] : null,
+                'last_used_age' => $row['last_used_age'] !== null ? max(0, (int) $row['last_used_age']) : null,
+                'expires_at'    => $row['expires_at'] !== null ? (string) $row['expires_at'] : null,
+                'expires_in'    => $expiresIn,
+                'is_active'     => (int) $row['is_active'] === 1,
+                'usable'        => (int) $row['is_active'] === 1 && ($expiresIn === null || $expiresIn > 0),
+                'calls'         => (int) $row['call_count'],
+                'calls_today'   => (int) $row['calls_today'],
+            ];
+            $out['keys'][]        = $key;
+            $out['total_calls']  += $key['calls'];
+            $out['calls_today']  += $key['calls_today'];
+        }
+
+        $anon = $db->query(
+            'SELECT call_count,
+                    IF(counter_date = CURDATE(), calls_today, 0) AS calls_today,
+                    last_used_at, last_model,
+                    TIMESTAMPDIFF(SECOND, last_used_at, NOW()) AS last_used_age
+               FROM api_anonymous_usage
+              WHERE id = 1'
+        )->fetch();
+
+        if ($anon) {
+            $entry = [
+                'calls'         => (int) $anon['call_count'],
+                'calls_today'   => (int) $anon['calls_today'],
+                'last_used_at'  => $anon['last_used_at'] !== null ? (string) $anon['last_used_at'] : null,
+                'last_used_age' => $anon['last_used_age'] !== null ? max(0, (int) $anon['last_used_age']) : null,
+                'last_model'    => (string) $anon['last_model'],
+            ];
+            // Only report it once something was actually counted for it.
+            if ($entry['calls'] > 0) {
+                $out['anonymous']     = $entry;
+                $out['total_calls']  += $entry['calls'];
+                $out['calls_today']  += $entry['calls_today'];
+            }
+        }
+    } catch (Throwable $e) {
+        // Tables or columns may not exist on older installations
+        return ['keys' => [], 'anonymous' => null, 'total_calls' => 0, 'calls_today' => 0];
+    }
+
+    return $out;
 }
 
 /**

@@ -45,7 +45,8 @@
  *     ├─ image    → endpoint (Bild-Endpunkt)
  *     ├─ search   (SearXNG)
  *     ├─ vector   (Wissensdatenbank)
- *     └─ clients  → client (einzelne Browser-Sitzung)
+ *     ├─ clients  → client (einzelne Browser-Sitzung)
+ *     └─ api      → api-key (Aufruf über die Reverse-Proxy-Schnittstelle)
  *
  * The three service groups (llm, speech, image) are the direct children of the
  * core; only the LLM group carries the additional intelligence groups, because
@@ -53,23 +54,39 @@
  * are excluded from the incident list so problems are reported on the concrete
  * endpoint that caused them.
  *
+ * Callers
+ * -------
+ * The two branches that *use* the system – clients and api – each carry a cloud
+ * of their concrete callers: one node per open browser session and one node per
+ * API key (plus a shared node for calls without a usable key). Their cloud items
+ * are a list for the side panel; the nodes themselves are regular children of
+ * their group and are placed as a volumetric swarm by the front end (see
+ * cloudAround() in flow-topology.js).
+ *
  * Node kinds: clients, client, hub, llm, model, endpoint, search, vector, image,
- * speech (see topology_kinds()). States: ok, warn, error, off.
+ * speech, api, api-key (see topology_kinds()). States: ok, warn, error, off.
  *
  * Detail cards
  * ------------
  * The front end turns a clicked node into an in-canvas detail card. Nodes that
- * carry a 'cloud' or 'members' list (clients, llm, model, image, speech) keep
- * the HTML side panel instead, because their payload is a list and not a set of
- * key/value rows. Every other node renders 'facts' as "icon  label: value" rows
- * in the colour named by 'tone' (see FACT_TONES in flow-topology.js) plus the
- * 'slots' bar when present.
+ * carry a 'cloud' or 'members' list (clients, api, llm, model, image, speech)
+ * keep the HTML side panel instead, because their payload is a list and not a
+ * set of key/value rows. Every other node renders 'facts' as "icon  label: value"
+ * rows in the colour named by 'tone' (see FACT_TONES in flow-topology.js) plus
+ * the 'slots' bar when present.
  */
+
+/**
+ * Seconds after its last call in which an API key still counts as active and is
+ * drawn as a "present" (green) node. Mirrors the presence window of the browser
+ * sessions (see listActiveClients() in db.php).
+ */
+const TOPOLOGY_API_KEY_PRESENCE_SECONDS = 90;
 
 /** All node kinds known to the front end. */
 function topology_kinds(): array
 {
-    return ['clients', 'client', 'hub', 'llm', 'model', 'endpoint', 'search', 'vector', 'image', 'speech'];
+    return ['clients', 'client', 'hub', 'llm', 'model', 'endpoint', 'search', 'vector', 'image', 'speech', 'api', 'api-key'];
 }
 
 /** Human-readable state labels (mirrors STATE_LABELS in flow-topology.js). */
@@ -246,6 +263,28 @@ function topology_client_label(array $client, int $unknownNo): string
         return $ip;
     }
     return $unknownNo > 1 ? 'unbekannt ' . $unknownNo : 'unbekannt';
+}
+
+/**
+ * Age of a timestamp in seconds as a short German phrase ("vor 12 s"), or "–"
+ * when the entry was never used. Also used for the remaining lifetime of an
+ * expiring API key.
+ */
+function topology_age_label(?int $seconds): string
+{
+    if ($seconds === null) {
+        return '–';
+    }
+    if ($seconds < 60) {
+        return $seconds <= 1 ? 'gerade eben' : 'vor ' . $seconds . ' s';
+    }
+    if ($seconds < 3600) {
+        return 'vor ' . (int) floor($seconds / 60) . ' min';
+    }
+    if ($seconds < 86400) {
+        return 'vor ' . (int) floor($seconds / 3600) . ' h';
+    }
+    return 'vor ' . (int) floor($seconds / 86400) . ' d';
 }
 
 /**
@@ -523,6 +562,162 @@ function topology_build(array $stats, array $options = []): array
         $addEdge($clientsKey, $clientKey, 'ok', true);
     }
 
+    // ── API cloud (Aufrufe über die Reverse-Proxy-Funktion) ───────────────────
+    // Every API key is a caller of its own: it stands for the external clients
+    // that identify themselves with that key (see recordApiCallUsage() in
+    // db.php). Calls without a usable key are collected in one shared entry.
+
+    $apiUsage = is_array($stats['api'] ?? null) ? $stats['api'] : null;
+    $apiKeys  = is_array($apiUsage['keys'] ?? null) ? $apiUsage['keys'] : [];
+    $apiAnon  = is_array($apiUsage['anonymous'] ?? null) ? $apiUsage['anonymous'] : null;
+
+    /** Counters and facts shared by a key entry and the anonymous entry. */
+    $apiCallerFacts = function (int $calls, int $today, string $lastModel, ?int $age, bool $present): array {
+        return [
+            topology_fact('✓', 'Aufrufe', topology_format_num($calls), $calls > 0 ? 'jobs' : 'muted'),
+            topology_fact('✓', 'Aufrufe heute', topology_format_num($today), $today > 0 ? 'jobs' : 'muted'),
+            topology_fact('⬡', 'Letztes Modell', $lastModel !== '' ? $lastModel : '–', 'total'),
+            topology_fact('⏱', 'Zuletzt benutzt', topology_age_label($age), $present ? 'running' : 'muted'),
+        ];
+    };
+
+    $apiItems = [];
+    foreach ($apiKeys as $entry) {
+        if (!is_array($entry)) {
+            continue;
+        }
+        $id        = (int) ($entry['id'] ?? 0);
+        $name      = trim((string) ($entry['name'] ?? ''));
+        $usable    = !empty($entry['usable']);
+        $age       = isset($entry['last_used_age']) && $entry['last_used_age'] !== null
+            ? (int) $entry['last_used_age'] : null;
+        $present   = $usable && $age !== null && $age <= TOPOLOGY_API_KEY_PRESENCE_SECONDS;
+        $calls     = (int) ($entry['calls'] ?? 0);
+        $today     = (int) ($entry['calls_today'] ?? 0);
+        $lastModel = trim((string) ($entry['last_model'] ?? ''));
+        $owner     = trim((string) ($entry['username'] ?? ''));
+        $prefix    = trim((string) ($entry['key_prefix'] ?? ''));
+        $pinned    = trim((string) ($entry['model'] ?? ''));
+
+        if (!$usable) {
+            $state   = 'off';
+            $message = !empty($entry['is_active'])
+                ? 'Der Schlüssel ist abgelaufen und wird nicht mehr angenommen.'
+                : 'Der Schlüssel ist deaktiviert.';
+        } elseif ($present) {
+            $state   = 'ok';
+            $message = 'Mit diesem Schlüssel läuft gerade ein Aufruf.';
+        } else {
+            $state   = 'off';
+            $message = 'Zurzeit keine Aufrufe mit diesem Schlüssel.';
+        }
+
+        $facts = $apiCallerFacts($calls, $today, $lastModel, $age, $present);
+        $facts[] = topology_fact('🔑', 'Präfix', $prefix !== '' ? $prefix . '…' : '–', 'plain');
+        $facts[] = topology_fact('👤', 'Besitzer', $owner !== '' ? $owner : '–', 'plain');
+        if ($pinned !== '') {
+            $facts[] = topology_fact('📌', 'Festes Modell', $pinned, 'total');
+        }
+        if (isset($entry['expires_in']) && $entry['expires_in'] !== null) {
+            $expiresIn = (int) $entry['expires_in'];
+            $facts[] = $expiresIn > 0
+                ? topology_fact('⌛', 'Gültig noch', topology_age_label($expiresIn), 'plain')
+                : topology_fact('⌛', 'Gültig noch', 'abgelaufen', 'error');
+        }
+
+        $apiItems[] = [
+            'key'      => 'api-key:' . $id,
+            'title'    => $name !== '' ? $name : 'Schlüssel #' . $id,
+            'subtitle' => ($prefix !== '' ? $prefix . '…' : 'API-Schlüssel')
+                . ($owner !== '' ? ' · ' . $owner : ''),
+            'state'    => $state,
+            'badge'    => $today > 0 ? $today . ' heute' : ($usable ? '' : 'inaktiv'),
+            'message'  => $message,
+            'activity' => $state === 'ok' ? 4 : 1,
+            'facts'    => $facts,
+        ];
+    }
+
+    if ($apiAnon !== null) {
+        $anonCalls = (int) ($apiAnon['calls'] ?? 0);
+        $anonToday = (int) ($apiAnon['calls_today'] ?? 0);
+        $anonAge   = isset($apiAnon['last_used_age']) && $apiAnon['last_used_age'] !== null
+            ? (int) $apiAnon['last_used_age'] : null;
+        $anonModel = trim((string) ($apiAnon['last_model'] ?? ''));
+        $present   = $anonAge !== null && $anonAge <= TOPOLOGY_API_KEY_PRESENCE_SECONDS;
+
+        $apiItems[] = [
+            'key'      => 'api-key:anon',
+            'title'    => 'ohne Key',
+            'subtitle' => 'Aufrufe ohne gültigen Schlüssel',
+            'state'    => $present ? 'ok' : 'off',
+            'badge'    => $anonToday > 0 ? $anonToday . ' heute' : '',
+            'message'  => $present
+                ? 'Gerade ruft jemand ohne gültigen Schlüssel auf.'
+                : 'Anonyme Aufrufe ohne gültigen Schlüssel.',
+            'activity' => $present ? 4 : 1,
+            'facts'    => $apiCallerFacts($anonCalls, $anonToday, $anonModel, $anonAge, $present),
+        ];
+    }
+
+    usort($apiItems, static fn(array $a, array $b): int => strcasecmp($a['title'], $b['title']));
+
+    $apiKeyNodes = [];
+    foreach ($apiItems as $item) {
+        $key           = (string) $item['key'];
+        $apiKeyNodes[] = $key;
+        $nodes[$key]   = topology_node([
+            'key'      => $key,
+            'kind'     => 'api-key',
+            'title'    => (string) $item['title'],
+            'subtitle' => (string) $item['subtitle'],
+            'state'    => (string) $item['state'],
+            'badge'    => (string) $item['badge'],
+            'message'  => (string) $item['message'],
+            'activity' => topology_activity((int) $item['activity']),
+            'facts'    => $item['facts'],
+            'url'      => $linkBase . 'index.php#api-keys-card',
+        ]);
+    }
+
+    $apiCalls      = (int) ($apiUsage['total_calls'] ?? 0);
+    $apiCallsToday = (int) ($apiUsage['calls_today'] ?? 0);
+    $apiPresent    = count(array_filter($apiItems, static fn(array $i): bool => $i['state'] === 'ok'));
+
+    $apiFacts = [
+        topology_fact('✓', 'Aufrufe heute', topology_format_num($apiCallsToday), $apiCallsToday > 0 ? 'jobs' : 'muted'),
+        topology_fact('✓', 'Aufrufe gesamt', topology_format_num($apiCalls), $apiCalls > 0 ? 'jobs' : 'muted'),
+        topology_fact('●', 'Gerade aktiv', (string) $apiPresent, $apiPresent > 0 ? 'running' : 'muted'),
+        topology_fact('🔑', 'Schlüssel', (string) count($apiKeys), 'plain'),
+    ];
+    if ($apiAnon !== null) {
+        $apiFacts[] = topology_fact('👤', 'Ohne Schlüssel', topology_format_num((int) ($apiAnon['calls'] ?? 0)), 'plain');
+    }
+
+    $apiNodeKey = 'api';
+    $nodes[$apiNodeKey] = topology_node([
+        'key'      => $apiNodeKey,
+        'kind'     => 'api',
+        'title'    => 'API',
+        'subtitle' => 'Reverse Proxy · ' . count($apiKeys) . ' Schlüssel',
+        'state'    => 'ok',
+        'badge'    => $apiCallsToday > 0 ? $apiCallsToday . ' heute' : '',
+        'message'  => $apiCallsToday > 0
+            ? $apiCallsToday . ' Aufruf' . ($apiCallsToday !== 1 ? 'e' : '') . ' über die API heute.'
+            : 'Zurzeit keine Aufrufe über die API.',
+        'activity' => topology_activity(max(1, $apiCallsToday)),
+        'facts'    => $apiFacts,
+        'cloud'    => [
+            'title' => 'Aufrufe über die API',
+            'empty' => 'Keine API-Aufrufe.',
+            'items' => $apiItems,
+        ],
+        'url'      => $linkBase . 'index.php#api-keys-card',
+    ]);
+    foreach ($apiKeyNodes as $apiKeyNode) {
+        $addEdge($apiNodeKey, $apiKeyNode, 'ok', true);
+    }
+
     // ── LLM endpoints, grouped by canonical model name ────────────────────────
 
     $modelGroups = [];
@@ -704,6 +899,7 @@ function topology_build(array $stats, array $options = []): array
         $addEdge($hubKey, $llmKey, $nodes[$llmKey]['state'], true);
     }
     $addEdge($hubKey, $clientsKey, 'ok', true);
+    $addEdge($hubKey, $apiNodeKey, 'ok', true);
 
     // ── Model groups ──────────────────────────────────────────────────────────
 

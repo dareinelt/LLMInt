@@ -1696,6 +1696,13 @@ try {
     // Tables may not exist on older installations
 }
 
+$apiUsage = ['keys' => [], 'anonymous' => null, 'total_calls' => 0, 'calls_today' => 0];
+try {
+    $apiUsage = listApiKeyUsage($db);
+} catch (Throwable $e) {
+    // api_keys / api_anonymous_usage may not exist yet
+}
+
 // Assign a stable colour to each distinct model name.
 $palette       = ['#6c63ff', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#f97316', '#84cc16'];
 $modelColorMap = [];
@@ -2537,6 +2544,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             }, $imageEndpoints),
             'image_status'     => $imageStatus,
             'clients'          => $clientStats,
+            'api'              => $apiUsage,
             'totals'           => $totals,
             'vector_store'     => $vectorStatus,
             'speech_endpoints' => array_map(static function ($s) {
@@ -2616,10 +2624,10 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             <!-- Graph -->
             <div class="topo-stage topo-stage--card">
                 <canvas data-topo-canvas tabindex="0" role="application"
-                        aria-label="Nachrichtenfluss der LLMInt-Bausteine: Clients, Kern, Modellgruppen, LLM-Endpunkte und Zusatzdienste"></canvas>
+                        aria-label="Nachrichtenfluss der LLMInt-Bausteine: Clients, API-Aufrufe, Kern, Modellgruppen, LLM-Endpunkte und Zusatzdienste"></canvas>
 
                 <div class="topo-hint" data-topo-hint>
-                    Ziehen dreht die Ansicht · Mausrad zoomt · Klick öffnet die Detailkarte und hebt den Weg zwischen Endpunkt und Client hervor (läuft eine Anfrage, nur deren Zweig) ·
+                    Ziehen dreht die Ansicht · Mausrad zoomt · Klick öffnet die Detailkarte und hebt den Weg zwischen Endpunkt und Client bzw. API-Aufruf hervor (läuft eine Anfrage, nur deren Zweig) ·
                     <kbd>Esc</kbd> schließt beides · <kbd>F</kbd> einpassen · <kbd>R</kbd> zurücksetzen · <kbd>Tab</kbd> nächster Baustein
                 </div>
 

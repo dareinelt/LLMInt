@@ -70,10 +70,28 @@ $db->exec("
         last_used_at TIMESTAMP       NULL,
         expires_at   TIMESTAMP       NULL,
         is_active    TINYINT(1)      NOT NULL DEFAULT 1,
+        call_count   BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        calls_today  INT UNSIGNED    NOT NULL DEFAULT 0,
+        counter_date DATE            NULL,
+        last_model   VARCHAR(255)    NOT NULL DEFAULT '',
         PRIMARY KEY (id),
         UNIQUE KEY uq_api_key_hash (api_key_hash),
         KEY idx_api_user (user_id, is_active),
         KEY idx_api_expires (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+");
+
+// Calls without a usable API key have no row in api_keys; their counters live
+// in this single row (id = 1) instead. See recordApiCallUsage() in db.php.
+$db->exec("
+    CREATE TABLE IF NOT EXISTS api_anonymous_usage (
+        id           TINYINT UNSIGNED NOT NULL DEFAULT 1,
+        call_count   BIGINT UNSIGNED  NOT NULL DEFAULT 0,
+        calls_today  INT UNSIGNED     NOT NULL DEFAULT 0,
+        counter_date DATE             NULL,
+        last_used_at TIMESTAMP        NULL,
+        last_model   VARCHAR(255)     NOT NULL DEFAULT '',
+        PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ");
 

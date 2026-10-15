@@ -142,7 +142,8 @@ migrieren.
 |---|---|
 | `settings` | Key-Value-Konfiguration (`setting_key`, `setting_value`) |
 | `users` | Konten: Anmeldedaten, Rolle (`user`/`admin`), `auth_source` (`local`/`ldap`), Dokument-Upload-Recht, Standardmodell |
-| `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer (optionales, fest am Key hinterlegtes Modell) |
+| `api_keys` | Hashes der OpenAI-kompatiblen API-Keys je Benutzer (optionales, fest am Key hinterlegtes Modell); dazu die Aufrufzähler der Topologie (`call_count`, `calls_today`, `counter_date`, `last_model`, `last_used_at`) |
+| `api_anonymous_usage` | Ein-Zeilen-Sammeltabelle für API-Aufrufe ohne gültigen Key (gleiche Zählerfelder wie `api_keys`) |
 | `endpoints` | LLM-Endpunkte: `base_url`, `default_model`, `timeout`, `is_active`, Fähigkeiten (Tool Calling, Vision), Balancer-Gesundheit (`circuit_state`, `consecutive_failures`, `cooldown_until`, `avg_latency_ms`) |
 | `tasks` | Lebenszyklus jeder LLM-Anfrage (`endpoint_id`, `status`, Tokenzähler, `tokens_per_second`) |
 | `endpoint_sys_stats` | per SSH gelesene Systemmetriken je Endpunkt |
@@ -161,7 +162,7 @@ migrieren.
 | `conversation_sessions` | Chatverläufe (`session_id`, `messages` als JSON, `model`, `upgrade_model`, `group_label`) |
 | `routing_categories`, `routing_rules` | Kategoriedefinitionen und Zuordnung Kategorie → Zielmodell |
 | `search_logs` | SearXNG-Suchhistorie |
-| `active_clients`, `client_count_log` | Heartbeat-/Präsenztracking |
+| `active_clients`, `client_count_log` | Heartbeat-/Präsenztracking (inklusive der Route der gerade laufenden Anfrage) |
 | `app_logs` | Anwendungslog (`info`/`warning`/`error`) |
 | `prompt_security_rules`, `prompt_security_logs` | Sicherheitsregeln und protokollierte Ereignisse |
 
@@ -496,11 +497,23 @@ Altbestand per `hidden` ausgeblendet), `config-vector-store-card`,
 `config-ldap-card`, `log-viewer-card`, `users-card`, `openai-api-card`,
 `api-keys-card`, `password-card` u. a.).
 
-Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard),
+Ergänzende Dateien: `admin/load_stats.php` (Livedaten für das Dashboard, inklusive
+Topologie-Payload), `admin/topology.php` (Vollbildansicht der Topologie),
 `admin/refresh_sys_stats.php` (SSH-Metriken),
 `admin/api_keys.php` (Weiterleitung auf die Karte `api-keys-card` im Dashboard),
 `admin/endpoint_tech.php` + `admin/quickinfo_stats.php` (quickinfo-Pairing, technische Endpunktübersicht),
 `admin/prompt_security.php` (Sicherheitsmodul).
+
+Das Dashboard zeigt die Betriebsdaten als Nachrichtenflow-Topologie:
+`admin/load_stats.php` sammelt die Livedaten und übergibt sie an `topology_build()`
+in `lib/topology.php`, das daraus den Knoten-/Kanten-Payload baut; den zeichnet
+`assets/js/flow-topology.js` auf ein Canvas. Die Topologie kennt zwei Aufrufer-Zweige:
+die **Clients**-Wolke (aus den Heartbeats in `active_clients`, inklusive der Route der
+gerade laufenden Anfrage) und die **API**-Wolke (aus `listApiKeyUsage()`, das die
+Zähler in `api_keys` und `api_anonymous_usage` liest, die
+`recordApiCallUsage()` in `api/openai_common/chat_completions.php` fortlaufend
+pflegt). Aufbau, Interaktion und Anpassung beschreibt
+[`../topologie-referenz.md`](../topologie-referenz.md).
 
 ---
 

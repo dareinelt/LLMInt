@@ -56,8 +56,8 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `lib/ldap_auth.php` | 320 | LDAP-Bind, Benutzerabgleich, Kerberos-SSO (direkt oder über Reverse-Proxy) |
 | `lib/reverse_proxy.php` | – | Betrieb hinter Reverse-Proxy (lanpa): `TRUSTED_PROXIES`, Client-IP, HTTPS, `X-Forwarded-Prefix`, Proxy-SSO-Header, `appPublicBaseUrl()` |
 | `lib/mailer.php` | 334 | Eigener SMTP-Client (kein PHPMailer) |
-| `lib/topology.php` | 1.170 | Übersetzungsschicht von den Dashboard-Livedaten auf den Knoten-/Kanten-Payload der Nachrichtenflow-Topologie (`topology_build()`, `topology_initial_script()`); ohne DB-Zugriff und ohne eigene HTTP-Aufrufe; markiert am Client-Knoten die gerade laufende Anfrage (`route`) |
-| `assets/js/flow-topology.js` | 2.360 | Canvas-Renderer der Topologie: radiale 3D-Anordnung um LLMInt, animierte Kanten mit Partikeln, Detailkarten im Canvas neben dem Knoten, Hervorhebung des Weges zwischen Endpunkt und Client (in beide Richtungen, bei laufender Anfrage auf deren Zweig eingegrenzt und als Lauflicht gezeichnet), Vollbildmodus |
+| `lib/topology.php` | 1.170 | Übersetzungsschicht von den Dashboard-Livedaten auf den Knoten-/Kanten-Payload der Nachrichtenflow-Topologie (`topology_build()`, `topology_initial_script()`); ohne DB-Zugriff und ohne eigene HTTP-Aufrufe; markiert am Client-Knoten die gerade laufende Anfrage (`route`) und baut die API-Wolke aus `listApiKeyUsage()` |
+| `assets/js/flow-topology.js` | 2.360 | Canvas-Renderer der Topologie: radiale 3D-Anordnung um LLMInt, animierte Kanten mit Partikeln, Detailkarten im Canvas neben dem Knoten, Hervorhebung des Weges zwischen Endpunkt und Aufrufer (Clients und API-Schlüssel, in beide Richtungen, bei laufender Anfrage auf deren Zweig eingegrenzt und als Lauflicht gezeichnet), Wolken für Clients und API-Aufrufe, Vollbildmodus |
 | `assets/css/flow-topology.css` | – | Stile für Canvas, Detailkarten, Statusleiste und Vollbild-Overlay |
 | `tests/` | – | Abhängigkeitsfreie Tests: PHP für `lib/topology.php`, `node:test` für `assets/js/flow-topology.js`, Runner `tests/run.sh`, CI-Workflow |
 | `lib/prompt.txt` | – | Fallback-Kategorien/Prompt für das Routing, importierbar in die DB |
@@ -373,9 +373,10 @@ Seitenaufbau als `<script type="application/json" data-flow-initial>` eingebette
 `admin/load_stats.php?topology=1` erneuert. Ein Klick auf einen Baustein wählt ihn
 aus, öffnet seine Detailkarte in einer freien Stelle neben dem Knoten und hebt den
 kompletten Weg durch die Zweige hervor; der Rest des Netzes tritt zurück. Bei einem
-Endpunkt verläuft der Weg bis zu den Clients, bei einem Client umgekehrt über die
-Clients-Wolke und LLMInt hinunter in die Endpunkt-Zweige – ohne dass sich dabei die
-Detailkarte eines Endpunkts öffnet. Läuft auf dem angeklickten Client gerade eine
+Endpunkt verläuft der Weg bis zu den Aufrufern (Clients und API-Schlüssel), bei einem
+Client oder API-Schlüssel umgekehrt über die jeweilige Wolke und LLMInt hinunter in die
+Endpunkt-Zweige – ohne dass sich dabei die Detailkarte eines Endpunkts öffnet. Läuft auf
+dem angeklickten Client gerade eine
 Anfrage, ist der hervorgehobene Weg auf deren Zweig eingegrenzt und wird mit einem
 hellen, wandernden Strichmuster als laufender Weg gezeichnet; ein untätiger Client
 zeigt weiterhin alle Zweige. Quelle dafür ist der Browser selbst: `index.php` meldet
@@ -384,6 +385,15 @@ Endpunkt, auf den die Sitzung gerade wartet – beim Start der Anfrage und nach 
 Antwort wieder als `route: null`. `api/chat.php` verfeinert die Meldung mit dem
 tatsächlich gewählten Endpunkt (`recordClientRoute()`, Tabelle `active_clients`), und
 `lib/topology.php` hängt sie als `route` an den Client-Knoten.
+
+Der Knoten **API** ist ein direktes Kind von LLMInt und sammelt die Aufrufe über die
+OpenAI-kompatible API. Jeder Aufruf von `chat/completions` erhöht per
+`recordApiCallUsage()` den Zähler des zugehörigen `api_keys`-Eintrags (`call_count`,
+`calls_today` mit Tagesdatum in `counter_date`, `last_model`); Aufrufe ohne gültigen
+Schlüssel landen in der Ein-Zeilen-Tabelle `api_anonymous_usage`. `listApiKeyUsage()`
+liest daraus die Wolke, `topology_build()` macht je Schlüssel einen Knoten daraus und
+hängt einen Sammeleintrag „ohne Key" an. Die Zähler werden nur bei
+`chat/completions` gepflegt, nicht beim Auflisten der Modelle.
 
 ---
 

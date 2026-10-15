@@ -200,6 +200,15 @@ try {
         // Tables may not exist on older installations
     }
 
+    // ── API usage (calls through the OpenAI-compatible reverse proxy) ─────────
+
+    $apiUsage = ['keys' => [], 'anonymous' => null, 'total_calls' => 0, 'calls_today' => 0];
+    try {
+        $apiUsage = listApiKeyUsage(getDb());
+    } catch (Throwable $e) {
+        // api_keys / api_anonymous_usage may not exist yet
+    }
+
     // ── LLM aggregate totals ──────────────────────────────────────────────────
 
     $totals = [
@@ -291,6 +300,7 @@ try {
         'endpoints'        => $rows,
         'searxng'          => $searxng,
         'clients'          => $clientStats,
+        'api'              => $apiUsage,
         'totals'           => $totals,
         'image_endpoints'  => $imageRows,
         'image_status'     => $imageStatus,

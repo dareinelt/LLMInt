@@ -54,8 +54,8 @@
 
     // Node kinds mirror the hierarchy built in lib/topology.php: LLMInt at the
     // centre, the three service groups (LLM, SpeechInt, ImageInt) plus SearXNG,
-    // knowledge base and clients as its children, and the concrete endpoints /
-    // chat sessions one level below those.
+    // knowledge base, clients and API as its children, and the concrete
+    // endpoints / chat sessions / API keys one level below those.
     const KIND_COLORS = {
         hub:      '#8b7dff',
         llm:      '#a78bfa',
@@ -67,6 +67,8 @@
         vector:   '#34d399',
         clients:  '#4ade80',
         client:   '#86efac',
+        api:      '#f472b6',
+        'api-key': '#f9a8d4',
     };
 
     const KIND_LABELS = {
@@ -80,6 +82,8 @@
         vector:   'Wissensdatenbank',
         clients:  'Clients',
         client:   'Chat-Sitzungen',
+        api:      'API',
+        'api-key': 'API-Aufrufe',
     };
 
     const KIND_RADIUS = {
@@ -93,6 +97,8 @@
         vector:   15,
         clients:  24,
         client:   10,
+        api:      20,
+        'api-key': 11,
     };
 
     const DEFAULT_KIND_RADIUS = 14;
@@ -552,19 +558,26 @@
         /** Ring radius per tree level; the outer rings grow slowly. */
         const DEPTH_RADIUS = [0, 330, 520, 680, 820];
 
-        /** Extent of the volumetric swarm of browser sessions around "Clients". */
-        const CLIENT_CLOUD_RADIUS = 150;
+        /**
+         * Extent of the volumetric swarms around the caller groups. Both
+         * "Clients" and "API" are not a single bubble but a swarm of concrete
+         * callers, so they are laid out on a sphere around their group node.
+         */
+        const CLOUD_RADIUS = { clients: 150, api: 115 };
+
+        /** Radius of a caller swarm, with a fallback for unknown group kinds. */
+        const CLOUD_RADIUS_DEFAULT = 120;
 
         /** Largest radius factor `cloudAround()` may use, relative to the cloud radius. */
-        const CLIENT_CLOUD_SPREAD = 1.28;
+        const CLOUD_SPREAD = 1.28;
 
-        /** Free space kept between the client swarm and the next branch. */
-        const CLIENT_CLOUD_MARGIN = 48;
+        /** Free space kept between a caller swarm and the next branch. */
+        const CLOUD_MARGIN = 48;
 
         /**
          * Extra ring radius for the point-like service branches that share the
-         * hub with the client swarm. They lose nothing by sitting further out,
-         * while the volumetric swarm gains the room its spheres need.
+         * hub with the caller swarms. They lose nothing by sitting further out,
+         * while the volumetric swarms gain the room their spheres need.
          */
         const SERVICE_RING_OFFSET = { search: 190, speech: 190, image: 190 };
 
@@ -573,24 +586,33 @@
             return SERVICE_RING_OFFSET[node.kind] || 0;
         }
 
+        /** Is this node a group that carries a swarm of concrete callers? */
+        function isCloudNode(node) {
+            return !!node && (node.kind === 'clients' || node.kind === 'api');
+        }
+
+        function cloudRadius(node) {
+            return CLOUD_RADIUS[node.kind] || CLOUD_RADIUS_DEFAULT;
+        }
+
         /**
          * Extra angular slice a branch claims on top of its proportional share, so
          * that branches with wide content keep clear of their neighbours. Only the
-         * client swarm is wider than a point, and it is the reason the service
-         * groups next to it are pushed further away from it.
+         * caller swarms are wider than a point, and they are the reason the service
+         * groups next to them are pushed further away.
          */
         function branchPadding(node, ringRadius) {
-            if (node.kind !== 'clients') return 0;
-            const reach = CLIENT_CLOUD_RADIUS * CLIENT_CLOUD_SPREAD + CLIENT_CLOUD_MARGIN;
+            if (!isCloudNode(node)) return 0;
+            const reach = cloudRadius(node) * CLOUD_SPREAD + CLOUD_MARGIN;
             const ratio = clamp(reach / Math.max(ringRadius, reach + 1), 0, 1);
             return 2 * Math.asin(ratio);
         }
 
         /** Number of leaves below `node`, used to size its angular slice. */
         function subtreeWeight(node, childrenOf) {
-            // The client swarm is a fixed-size cloud, so it claims a normal slice
-            // instead of one proportional to the number of open sessions.
-            if (node.kind === 'clients') return 1;
+            // A caller swarm is a fixed-size cloud, so it claims a normal slice
+            // instead of one proportional to the number of open sessions / keys.
+            if (isCloudNode(node)) return 1;
             const kids = childrenOf.get(node.key) || [];
             if (!kids.length) return 1;
             let total = 0;
@@ -614,7 +636,7 @@
             list.forEach(function (node, index) {
                 const phi = Math.acos(clamp(1 - 2 * ((index + 0.5) / n), -1, 1));
                 const theta = golden * index + (rand() - 0.5) * 0.4;
-                const r = radius * (CLIENT_CLOUD_SPREAD - 0.5 + rand() * 0.5);
+                const r = radius * (CLOUD_SPREAD - 0.5 + rand() * 0.5);
                 placeAt(
                     node,
                     parent.p3.x + Math.sin(phi) * Math.cos(theta) * r,
@@ -645,9 +667,10 @@
                 if (!kids.length) return;
 
                 // The browser sessions are not part of the disc: they gather as a
-                // volumetric cloud around the "Clients" node.
-                if (parent.kind === 'clients') {
-                    cloudAround(kids, parent, CLIENT_CLOUD_RADIUS, 'clients|' + parent.key);
+                // volumetric cloud around the "Clients" node. The API keys do the
+                // same around the "API" node.
+                if (isCloudNode(parent)) {
+                    cloudAround(kids, parent, cloudRadius(parent), parent.kind + '|' + parent.key);
                     for (const kid of kids) {
                         placed.add(kid.key);
                         walk(kid, depth + 1, offset);
@@ -742,12 +765,13 @@
             return { X: s.X, Y: s.Y, s: p.s, behind: p.behind };
         }
 
-        // ── Weg zwischen Endpunkt und Client ──────────────────────────────────
+        // ── Weg zwischen Endpunkt und Aufrufer ────────────────────────────────
         // The network is a tree with LLMInt at its root, so the way of a message
         // can be walked: from the clicked node up its branch to the core and from
-        // there across into the opposite side. The clients are siblings of the
-        // endpoint branches, not their descendants, so both halves belong to it:
-        // a click on an endpoint lights up every session.
+        // there across into the opposite side. The callers (browser sessions and
+        // API keys) are siblings of the endpoint branches, not their descendants,
+        // so both halves belong to it: a click on an endpoint lights up every
+        // caller.
         //
         // A session is different: while it waits for an answer it reports the
         // endpoint it asked (node.route, filled by topology_build()), so its way
@@ -764,9 +788,22 @@
             return parents;
         }
 
-        /** Does this node belong to the session side of the core? */
-        function isSessionSide(node) {
-            return !!node && (node.kind === 'client' || node.kind === 'clients');
+        /** Does this node belong to the caller side of the core? */
+        function isCallerSide(node) {
+            return !!node && (node.kind === 'client' || node.kind === 'clients'
+                || node.kind === 'api' || node.kind === 'api-key');
+        }
+
+        /** Does `key` hang below `ancestor` in the tree? */
+        function isBelow(ancestor, key, parents) {
+            let cursor = key;
+            while (cursor) {
+                const up = parents.get(cursor);
+                if (!up) return false;
+                if (up.from === ancestor) return true;
+                cursor = up.from;
+            }
+            return false;
         }
 
         function buildRoute(key) {
@@ -800,10 +837,16 @@
                 next.busy = true;
                 for (const target of running) climb(String(target));
             } else {
-                const fromSession = node.kind === 'client';
+                // A single caller lights up the way across to the endpoints it
+                // talks to; a caller cloud only lights up its own branch.
+                const fromCaller = node.kind === 'client' || node.kind === 'api-key';
+                const ownBranch = node.kind === 'clients' || node.kind === 'api';
                 for (const other of nodes.values()) {
                     if (next.nodes.has(other.key)) continue;
-                    const wanted = fromSession ? !isSessionSide(other) : isSessionSide(other);
+                    let wanted;
+                    if (fromCaller) wanted = !isCallerSide(other);
+                    else if (ownBranch) wanted = isBelow(node.key, other.key, parents);
+                    else wanted = isCallerSide(other);
                     if (wanted) next.nodes.add(other.key);
                 }
             }
@@ -1198,6 +1241,33 @@
                     ctx.lineTo(x, y + u * 0.44);
                     ctx.moveTo(x - u * 0.2, y + u * 0.44);
                     ctx.lineTo(x + u * 0.2, y + u * 0.44);
+                    ctx.stroke();
+                    break;
+                case 'api':
+                    // Braces: the OpenAI-compatible programming interface.
+                    ctx.beginPath();
+                    ctx.moveTo(x - u * 0.18, y - u * 0.46);
+                    ctx.lineTo(x - u * 0.42, y - u * 0.46);
+                    ctx.lineTo(x - u * 0.42, y + u * 0.46);
+                    ctx.lineTo(x - u * 0.18, y + u * 0.46);
+                    ctx.moveTo(x + u * 0.18, y - u * 0.46);
+                    ctx.lineTo(x + u * 0.42, y - u * 0.46);
+                    ctx.lineTo(x + u * 0.42, y + u * 0.46);
+                    ctx.lineTo(x + u * 0.18, y + u * 0.46);
+                    ctx.stroke();
+                    break;
+                case 'api-key':
+                    // Key: the caller identifies itself with an API key.
+                    ctx.beginPath();
+                    ctx.arc(x - u * 0.22, y - u * 0.16, u * 0.2, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(x - u * 0.08, y - u * 0.02);
+                    ctx.lineTo(x + u * 0.42, y + u * 0.4);
+                    ctx.moveTo(x + u * 0.16, y + u * 0.14);
+                    ctx.lineTo(x + u * 0.3, y + u * 0.02);
+                    ctx.moveTo(x + u * 0.3, y + u * 0.28);
+                    ctx.lineTo(x + u * 0.44, y + u * 0.16);
                     ctx.stroke();
                     break;
                 default:

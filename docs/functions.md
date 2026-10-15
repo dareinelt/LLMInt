@@ -84,7 +84,10 @@ Intelligenzgruppen.
 | `setSessionUpgradeModel` | `setSessionUpgradeModel(string $sessionId, string $upgradeModel): void` | Speichert ein ausstehendes Modell-Upgrade für eine Sitzung. |
 | `getActiveSessionUpgradeModel` | `getActiveSessionUpgradeModel(string $sessionId): ?string` | Liefert das ausstehende Upgrade, sofern noch aktiv (nicht angenommen). |
 | `purgeExpiredConversationSessions` | `purgeExpiredConversationSessions(): void` | Löscht anonyme Sitzungen, die älter als 30 Minuten sind. |
-| `listActiveClients` | `listActiveClients(?PDO $pdo = null): array` | Liefert die Liste aktuell aktiver Clients (innerhalb der letzten 90 Sekunden gesehen). |
+| `listActiveClients` | `listActiveClients(?PDO $pdo = null): array` | Liefert die Liste aktuell aktiver Clients (innerhalb der letzten 90 Sekunden gesehen), inklusive der Route der gerade laufenden Anfrage. |
+| `recordClientRoute` | `recordClientRoute(string $token, ?string $kind, ?string $model, ?int $endpointId): void` | Merkt am Client-Eintrag in `active_clients`, auf welchen Endpunkt die Sitzung gerade wartet (oder löscht die Route bei `null`); Grundlage der Wege-Hervorhebung in der Topologie. |
+| `recordApiCallUsage` | `recordApiCallUsage(?int $keyId, string $model = ''): void` | Zählt einen Aufruf der OpenAI-kompatiblen API auf den Schlüssel (`api_keys`) bzw. ohne gültigen Schlüssel auf `api_anonymous_usage`; pflegt Aufrufe gesamt, Aufrufe heute (Tageswechsel über `counter_date`) und das zuletzt genutzte Modell. Best-effort, wirft keine Fehler. |
+| `listApiKeyUsage` | `listApiKeyUsage(?PDO $pdo = null): array` | Liefert die API-Aufrufe je Schlüssel für die Topologie (`keys`, `anonymous`, `total_calls`, `calls_today`); Alter und Restlaufzeit kommen per `TIMESTAMPDIFF` aus der Datenbank. |
 | `listUserConversations` | `listUserConversations(int $userId): array` | Liefert gespeicherte Chat-Sitzungen eines Benutzers. |
 | `canonicalModelName` | `canonicalModelName(string $model): string` | Liefert die kanonische Form eines Modellnamens (entfernt Intelligenzgruppen-Präfix). |
 | `equivalentActiveModelNames` | `equivalentActiveModelNames(string $model): array` | Liefert äquivalente Modellnamen (mit/ohne Intelligenzgruppen-Präfix). |
@@ -415,13 +418,14 @@ HTTP-Aufrufe, damit derselbe Payload aus einem Cache-Schnappschuss wie aus einer
 frischen Abfrage entstehen kann. Der Payload-Vertrag (`generated`, `overall`, `nodes`,
 `edges`, `incidents`) ist im Dateikopf von `lib/topology.php` dokumentiert; die
 Hierarchie lautet LLMInt (`hub`) → `llm` → `model` → `endpoint`, daneben `speech`,
-`image`, `search` (SearXNG), `vector` (Wissensdatenbank) und `clients` → `client`.
+`image`, `search` (SearXNG), `vector` (Wissensdatenbank), `clients` → `client` und
+`api` → `api-key` (Aufrufe über die OpenAI-kompatible API).
 
 ### Zustände und Hilfswerte
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
-| `topology_kinds` | `topology_kinds(): array` | Alle Knotenarten, die das Frontend kennt (`clients`, `client`, `hub`, `llm`, `model`, `endpoint`, `search`, `vector`, `image`, `speech`). |
+| `topology_kinds` | `topology_kinds(): array` | Alle Knotenarten, die das Frontend kennt (`clients`, `client`, `api`, `api-key`, `hub`, `llm`, `model`, `endpoint`, `search`, `vector`, `image`, `speech`). |
 | `topology_state_labels` | `topology_state_labels(): array` | Zustand → deutsches Label (`ok`, `warn`, `error`, `off`); spiegelt `STATE_LABELS` in `flow-topology.js`. |
 | `topology_state_label` | `topology_state_label(string $state): string` | Label eines Zustands, bei unbekanntem Wert das Label für `off`. |
 | `topology_state_rank` | `topology_state_rank(string $state): int` | Schweregrad für die Aggregation; `off` (1) rangiert bewusst unter `warn` (2), damit ein deaktivierter Endpunkt die Topologie nicht gelb färbt. |
@@ -433,6 +437,7 @@ Hierarchie lautet LLMInt (`hub`) → `llm` → `model` → `endpoint`, daneben `
 | `topology_short_url` | `topology_short_url(string $url): string` | `https://host:8000/v1` → `host:8000` für kompakte Knotentitel. |
 | `topology_param_size_label` | `topology_param_size_label(string $model): string` | Parameterangabe aus dem Modellnamen (`gemma-3-27b-it` → `27b`); MoE-Marker (`qwen3-a3b` → `3b`) dienen nur als Rückfall. Beschriftet die Intelligenzgruppen der Topologie. |
 | `topology_client_label` | `topology_client_label(array $client, int $unknownNo): string` | Beschriftung eines Clients: Hostname, sonst IP, sonst nummerierter Platzhalter (`unbekannt 2`). |
+| `topology_age_label` | `topology_age_label(?int $seconds): string` | Alter in Sekunden als deutsche Kurzform (`gerade eben`, `vor 12 s`, `vor 5 min`, `vor 1 h`, `vor 3 d`); `null` → `–`, negative Werte → `gerade eben`. Beschriftet die API-Schlüssel-Knoten. |
 | `topology_node` | `topology_node(array $node): array` | Füllt die gemeinsamen Knotenvorgaben (`key`, `kind`, `title`, `subtitle`, `state`, `badge`, `message`, `activity`, `counters`, `facts`, `slots`, `cloud`, `members`, `neighbours`, `url`, `synthetic`) auf. |
 | `topology_endpoint_state` | `topology_endpoint_state(bool $active, int $running, int $slotLimit): array` | Zustand eines LLM-Endpunkts als `[state, message]`: `off` bei deaktiviertem Endpunkt, `warn` bei belegten Parallel-Slots, sonst `ok`. |
 
