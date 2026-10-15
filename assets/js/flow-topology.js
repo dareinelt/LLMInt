@@ -739,11 +739,13 @@
             return { X: s.X, Y: s.Y, s: p.s, behind: p.behind };
         }
 
-        // ── Weg vom Endpunkt bis zum Client ───────────────────────────────────
+        // ── Weg zwischen Endpunkt und Client ──────────────────────────────────
         // The network is a tree with LLMInt at its root, so the way of a message
         // can be walked: from the clicked node up its branch to the core and from
-        // there across into the clients branch. The clients are siblings of the
-        // endpoint branches, not their descendants, so both halves belong to it.
+        // there across into the opposite side. The clients are siblings of the
+        // endpoint branches, not their descendants, so both halves belong to it:
+        // a click on an endpoint lights up every session, a click on a session
+        // every branch that ends in an endpoint.
 
         function parentEdges() {
             const parents = new Map();
@@ -752,6 +754,11 @@
                 parents.set(edge.to, edge);
             }
             return parents;
+        }
+
+        /** Does this node belong to the session side of the core? */
+        function isSessionSide(node) {
+            return !!node && (node.kind === 'client' || node.kind === 'clients');
         }
 
         function buildRoute(key) {
@@ -770,18 +777,20 @@
                 cursor = up.from;
             }
 
-            const cloud = Array.from(nodes.values())
-                .find(function (node) { return node.kind === 'clients'; });
-            if (cloud && !next.nodes.has(cloud.key)) {
-                next.nodes.add(cloud.key);
-                const cloudUp = parents.get(cloud.key);
-                if (cloudUp) next.edges.add(cloudUp.id);
-                for (const node of nodes.values()) {
-                    if (node.kind !== 'client') continue;
-                    next.nodes.add(node.key);
-                    const clientUp = parents.get(node.key);
-                    if (clientUp) next.edges.add(clientUp.id);
-                }
+            // The opposite side joins in full: from a session the way runs
+            // through every branch that ends in an endpoint (the other sessions
+            // are not part of it), from an endpoint through every session.
+            const fromSession = nodes.get(key).kind === 'client';
+            for (const node of nodes.values()) {
+                if (next.nodes.has(node.key)) continue;
+                const wanted = fromSession ? !isSessionSide(node) : isSessionSide(node);
+                if (wanted) next.nodes.add(node.key);
+            }
+
+            // The network is a tree, so a line belongs to the way when both of
+            // its ends do.
+            for (const edge of edges) {
+                if (next.nodes.has(edge.from) && next.nodes.has(edge.to)) next.edges.add(edge.id);
             }
 
             next.active = next.nodes.size > 0;

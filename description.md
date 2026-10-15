@@ -57,7 +57,7 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `lib/reverse_proxy.php` | – | Betrieb hinter Reverse-Proxy (lanpa): `TRUSTED_PROXIES`, Client-IP, HTTPS, `X-Forwarded-Prefix`, Proxy-SSO-Header, `appPublicBaseUrl()` |
 | `lib/mailer.php` | 334 | Eigener SMTP-Client (kein PHPMailer) |
 | `lib/topology.php` | 1.050 | Übersetzungsschicht von den Dashboard-Livedaten auf den Knoten-/Kanten-Payload der Nachrichtenflow-Topologie (`topology_build()`, `topology_initial_script()`); ohne DB-Zugriff und ohne eigene HTTP-Aufrufe |
-| `assets/js/flow-topology.js` | 2.311 | Canvas-Renderer der Topologie: radiale 3D-Anordnung um LLMInt, animierte Kanten mit Partikeln, Detailkarten im Canvas neben dem Knoten, Hervorhebung des Weges bis zum Client, Vollbildmodus |
+| `assets/js/flow-topology.js` | 2.320 | Canvas-Renderer der Topologie: radiale 3D-Anordnung um LLMInt, animierte Kanten mit Partikeln, Detailkarten im Canvas neben dem Knoten, Hervorhebung des Weges zwischen Endpunkt und Client (in beide Richtungen), Vollbildmodus |
 | `assets/css/flow-topology.css` | – | Stile für Canvas, Detailkarten, Statusleiste und Vollbild-Overlay |
 | `tests/` | – | Abhängigkeitsfreie Tests: PHP für `lib/topology.php`, `node:test` für `assets/js/flow-topology.js`, Runner `tests/run.sh`, CI-Workflow |
 | `lib/prompt.txt` | – | Fallback-Kategorien/Prompt für das Routing, importierbar in die DB |
@@ -367,8 +367,10 @@ Seitenaufbau als `<script type="application/json" data-flow-initial>` eingebette
 (`topology_initial_script()`) und danach alle 15 s über
 `admin/load_stats.php?topology=1` erneuert. Ein Klick auf einen Baustein wählt ihn
 aus, öffnet seine Detailkarte in einer freien Stelle neben dem Knoten und hebt den
-kompletten Weg von dort über die Zweige bis zu den Clients hervor; der Rest des
-Netzes tritt zurück.
+kompletten Weg durch die Zweige hervor; der Rest des Netzes tritt zurück. Bei einem
+Endpunkt verläuft der Weg bis zu den Clients, bei einem Client umgekehrt über die
+Clients-Wolke und LLMInt hinunter in alle Endpunkt-Zweige – ohne dass sich dabei die
+Detailkarte eines Endpunkts öffnet.
 
 ---
 

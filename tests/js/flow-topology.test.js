@@ -362,7 +362,7 @@ test('eine Auswahl, die aus den Daten verschwindet, wird zurückgesetzt', () => 
     assert.equal(env.hook('[data-topo-panel]').hidden, true);
 });
 
-// ── Weg vom Endpunkt bis zum Client ──────────────────────────────────────────
+// ── Weg zwischen Endpunkt und Client ─────────────────────────────────────────
 
 /**
  * basePayload() plus a second model group, a second endpoint, SearXNG and a
@@ -425,9 +425,63 @@ test('der Weg führt nicht in fremde Zweige', () => {
     }
 });
 
-test('der Weg einer Sitzung endet am Kern', () => {
+test('Klick auf eine Sitzung hebt den Weg bis zu den Endpunkten hervor', () => {
     const { api } = mountWith();
     api.apply(branchyPayload());
+    api.select('client:1');
+
+    const route = api.route();
+    assert.equal(route.active, true, 'der Weg muss aktiv sein');
+    same(route.nodes.slice().sort(), [
+        'client:1', 'clients', 'ep:1', 'ep:2', 'hub', 'llm',
+        'model:gemma-3-27b', 'model:qwen', 'search',
+    ]);
+    same(route.edges.slice().sort(), [
+        'clients>client:1',
+        'hub>clients',
+        'hub>llm',
+        'hub>search',
+        'llm>model:gemma-3-27b',
+        'llm>model:qwen',
+        'model:gemma-3-27b>ep:1',
+        'model:qwen>ep:2',
+    ]);
+});
+
+test('die übrigen Sitzungen liegen nicht auf dem Weg einer Sitzung', () => {
+    const { api } = mountWith();
+    api.apply(branchyPayload());
+    api.select('client:1');
+
+    const route = api.route();
+    assert.equal(route.nodes.indexOf('client:2'), -1, 'die zweite Sitzung liegt nicht auf dem Weg');
+    assert.equal(route.edges.indexOf('clients>client:2'), -1, 'ihre Linie ebenso wenig');
+});
+
+test('Klick auf die Clients-Wolke hebt alle Sitzungen hervor', () => {
+    const { api } = mountWith();
+    api.apply(branchyPayload());
+    api.select('clients');
+
+    const route = api.route();
+    same(route.nodes.slice().sort(), ['client:1', 'client:2', 'clients', 'hub']);
+    same(route.edges.slice().sort(), ['clients>client:1', 'clients>client:2', 'hub>clients']);
+});
+
+test('ohne Gegenstück endet der Weg einer Sitzung am Kern', () => {
+    const { api } = mountWith();
+    api.apply({
+        nodes: {
+            hub: node('hub', 'hub', { neighbours: ['clients'] }),
+            clients: node('clients', 'clients', { neighbours: ['hub', 'client:1'] }),
+            'client:1': node('client:1', 'client', { neighbours: ['clients'] }),
+        },
+        edges: [
+            { from: 'hub', to: 'clients', state: 'ok' },
+            { from: 'clients', to: 'client:1', state: 'ok' },
+        ],
+        overall: { state: 'ok' },
+    });
     api.select('client:1');
 
     const route = api.route();
@@ -504,6 +558,46 @@ test('der Weg wird kräftig gezeichnet, der Rest tritt zurück', () => {
     for (const call of way) {
         same(call.dash, [], 'der Weg darf nicht gestrichelt sein');
     }
+});
+
+test('auch der Weg einer Sitzung wird kräftig gezeichnet', () => {
+    const { env, api } = mountWith();
+    api.apply(branchyPayload());
+    env.pump(40);
+
+    const faintHalos = () => env.ctx.calls
+        .filter((call) => call.name === 'stroke' && call.lineWidth >= 8 && call.alpha <= 0.05)
+        .length;
+
+    api.select('client:1');
+    env.ctx.calls.length = 0;
+    env.pump();
+
+    // Only the line to the second session lies beside the way.
+    assert.equal(faintHalos(), 1, 'nur die Linie zur zweiten Sitzung tritt zurück');
+
+    const way = env.ctx.calls.filter((call) => call.name === 'stroke'
+        && call.alpha >= 0.99 && call.lineWidth >= 4);
+    assert.equal(way.length, api.route().edges.length,
+        'jede Kante des Weges wird kräftig und durchgezogen gezeichnet');
+});
+
+test('Klick auf eine Sitzung öffnet nicht die Detailkarte eines Endpunkts', () => {
+    const { env, api } = mountWith();
+    const payload = branchyPayload();
+    payload.nodes['client:1'].facts = [{ label: 'Tabs', value: '2' }];
+    api.apply(payload);
+    env.pump();
+
+    api.select('client:1');
+    env.ctx.calls.length = 0;
+    env.pump();
+
+    const texts = paintedTexts(env);
+    assert.ok(texts.indexOf('Status: bereit') < 0,
+        'die Detailkarte des Endpunkts darf sich nicht öffnen');
+    assert.ok(texts.indexOf('Tabs: 2') >= 0, 'die angeklickte Sitzung behält ihre eigene Karte');
+    assert.equal(env.hook('[data-topo-panel]').hidden, true, 'das Panel bleibt zu');
 });
 
 // ── Platzierung der Detailkarte ──────────────────────────────────────────────
