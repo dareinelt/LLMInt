@@ -21,6 +21,7 @@ test_case('topology_kinds() kennt alle Knotenarten des Renderers', function (): 
     $kinds = topology_kinds();
     assert_same([
         'clients', 'client', 'hub', 'llm', 'model', 'endpoint', 'search', 'vector', 'image', 'speech',
+        'api', 'api-key',
     ], $kinds);
     assert_same($kinds, array_values(array_unique($kinds)), 'Knotenarten sind eindeutig');
 });
@@ -182,6 +183,25 @@ test_case('topology_client_label() fällt auf IP und Platzhalter zurück', funct
 });
 
 // ── Laufende Anfrage ──────────────────────────────────────────────────────────
+
+test_case('topology_age_label() staffelt Sekunden, Minuten, Stunden und Tage', function (): void {
+    assert_same('gerade eben', topology_age_label(0));
+    assert_same('gerade eben', topology_age_label(1));
+    assert_same('vor 2 s', topology_age_label(2));
+    assert_same('vor 59 s', topology_age_label(59));
+    assert_same('vor 1 min', topology_age_label(60));
+    assert_same('vor 59 min', topology_age_label(3599));
+    assert_same('vor 1 h', topology_age_label(3600));
+    assert_same('vor 1 h', topology_age_label(5400), '90 Minuten werden zu Stunden gerundet');
+    assert_same('vor 23 h', topology_age_label(86399));
+    assert_same('vor 1 d', topology_age_label(86400));
+    assert_same('vor 10 d', topology_age_label(900000));
+});
+
+test_case('topology_age_label() verträgt fehlende und negative Angaben', function (): void {
+    assert_same('–', topology_age_label(null));
+    assert_same('gerade eben', topology_age_label(-5), 'ein Wert in der Zukunft wirkt wie gerade eben');
+});
 
 test_case('topology_route_label() benennt jede Art von Anfrage', function (): void {
     assert_same('Laufende Anfrage', topology_route_label('llm'));

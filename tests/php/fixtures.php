@@ -159,6 +159,55 @@ function topology_stats_fixture(array $overrides = []): array
             ],
         ],
 
+        // Mirrors listApiKeyUsage() in db.php: one entry per API key plus the
+        // shared entry for calls without a usable key. The four entries cover
+        // every state the API cloud can show: an active key that is calling
+        // right now, a quiet key, a deactivated key, an expired key and the
+        // anonymous rest.
+        'api' => [
+            'keys' => [
+                [
+                    'id' => 1, 'name' => 'Doku-Crawler', 'description' => 'Indexiert die Handbücher',
+                    'username' => 'admin', 'model' => 'gemma-3-27b-it-Q4_K_M',
+                    'last_model' => 'gemma-3-27b-it-Q4_K_M', 'key_prefix' => 'llmint_ab12cd34',
+                    'created_at' => '2026-01-04 09:12:00', 'last_used_at' => '2026-02-11 10:41:00',
+                    'last_used_age' => 12, 'expires_at' => '2026-12-31 23:59:59', 'expires_in' => 27648000,
+                    'is_active' => true, 'usable' => true, 'calls' => 1840, 'calls_today' => 37,
+                ],
+                [
+                    'id' => 2, 'name' => 'CI-Pipeline', 'description' => '',
+                    'username' => 'admin', 'model' => '',
+                    'last_model' => 'llama-3-8b-instruct', 'key_prefix' => 'llmint_ff99aa11',
+                    'created_at' => '2025-11-19 14:02:00', 'last_used_at' => '2026-02-10 09:11:00',
+                    'last_used_age' => 5400, 'expires_at' => null, 'expires_in' => null,
+                    'is_active' => true, 'usable' => true, 'calls' => 96, 'calls_today' => 0,
+                ],
+                [
+                    'id' => 3, 'name' => 'Alter Import', 'description' => '',
+                    'username' => '', 'model' => '',
+                    'last_model' => '', 'key_prefix' => 'llmint_0011ffee',
+                    'created_at' => '2025-06-01 08:00:00', 'last_used_at' => '2025-07-02 08:00:00',
+                    'last_used_age' => 19000000, 'expires_at' => null, 'expires_in' => null,
+                    'is_active' => false, 'usable' => false, 'calls' => 12, 'calls_today' => 0,
+                ],
+                [
+                    'id' => 4, 'name' => 'Gastzugang Test', 'description' => '',
+                    'username' => 'admin', 'model' => '',
+                    'last_model' => 'qwen2.5-32b-instruct', 'key_prefix' => 'llmint_deadbeef',
+                    'created_at' => '2025-12-01 08:00:00', 'last_used_at' => '2025-12-20 08:00:00',
+                    'last_used_age' => 4600000, 'expires_at' => '2026-01-31 23:59:59', 'expires_in' => -900000,
+                    'is_active' => true, 'usable' => false, 'calls' => 58, 'calls_today' => 0,
+                ],
+            ],
+            'anonymous' => [
+                'calls' => 210, 'calls_today' => 4,
+                'last_used_at' => '2026-02-11 10:40:00', 'last_used_age' => 25,
+                'last_model' => 'gemma-3-27b-it-Q4_K_M',
+            ],
+            'total_calls' => 2216,
+            'calls_today' => 41,
+        ],
+
         'totals' => [
             'total_running'            => 4,
             'total_done_24h'           => 972,
@@ -192,6 +241,14 @@ function topology_stats_with_running_requests(): array
     $stats['clients']['list'][2]['route_endpoint_id'] = 0;
     $stats['clients']['list'][2]['route_seconds']     = 2;
 
+    return $stats;
+}
+
+/** Fixture without any API usage (feature never used yet). */
+function topology_stats_without_api(): array
+{
+    $stats = topology_stats_fixture();
+    $stats['api'] = ['keys' => [], 'anonymous' => null, 'total_calls' => 0, 'calls_today' => 0];
     return $stats;
 }
 

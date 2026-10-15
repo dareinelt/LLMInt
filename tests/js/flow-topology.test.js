@@ -28,7 +28,8 @@ function node(key, kind, extra) {
 
 /**
  * A small but complete message-flow payload: LLMInt with the LLM branch (group →
- * endpoint), the client cloud with one session, and one incident.
+ * endpoint), the client cloud with one session, the API branch (reverse proxy →
+ * one key) and one incident.
  */
 function basePayload() {
     const nodes = {};
@@ -38,7 +39,7 @@ function basePayload() {
         title: 'LLMInt',
         subtitle: 'Zentrale',
         facts: [{ label: 'Modelle', value: '3' }],
-        neighbours: ['llm', 'clients'],
+        neighbours: ['llm', 'clients', 'api'],
     }));
     add(node('llm', 'llm', {
         title: 'LLM',
@@ -67,10 +68,25 @@ function basePayload() {
         neighbours: ['hub'],
     }));
     add(node('client:1', 'client', { title: 'pc-1', neighbours: ['clients'] }));
+    add(node('api', 'api', {
+        title: 'API',
+        subtitle: 'Reverse Proxy · 1 Schlüssel',
+        cloud: {
+            title: 'Aufrufe über die API',
+            items: [{ title: 'crawler', subtitle: 'sk-…a1b2', state: 'ok' }],
+            empty: 'Keine API-Aufrufe.',
+        },
+        neighbours: ['hub', 'api-key:1'],
+    }));
+    add(node('api-key:1', 'api-key', {
+        title: 'crawler',
+        facts: [{ label: 'Aufrufe', value: '128' }],
+        neighbours: ['api'],
+    }));
 
     return {
         generated: '12:00:00',
-        overall: { state: 'warn', label: 'Eingeschränkt', message: '1 Einschränkung erkannt.', errors: 0, warnings: 1, nodes: 6 },
+        overall: { state: 'warn', label: 'Eingeschränkt', message: '1 Einschränkung erkannt.', errors: 0, warnings: 1, nodes: 8 },
         nodes: nodes,
         edges: [
             { from: 'hub', to: 'llm', state: 'ok' },
@@ -78,6 +94,8 @@ function basePayload() {
             { from: 'model:gemma-3-27b', to: 'ep:1', state: 'ok' },
             { from: 'hub', to: 'clients', state: 'ok' },
             { from: 'clients', to: 'client:1', state: 'ok' },
+            { from: 'hub', to: 'api', state: 'ok' },
+            { from: 'api', to: 'api-key:1', state: 'ok' },
         ],
         incidents: [{ key: 'ep:1', title: 'ep:1', state: 'warn', message: 'Alle Slots belegt.', url: '' }],
     };
@@ -161,7 +179,7 @@ test('apply() übernimmt Knoten, Kanten und Gesamtzustand', () => {
     assert.equal(state.overall.message, '1 Einschränkung erkannt.');
     assert.equal(state.overall.warnings, 1);
     assert.equal(state.overall.errors, 0);
-    assert.equal(state.overall.nodes, 6);
+    assert.equal(state.overall.nodes, 8);
 });
 
 test('jeder Knoten bekommt die Felder, die der Renderer erwartet', () => {
@@ -174,7 +192,7 @@ test('jeder Knoten bekommt die Felder, die der Renderer erwartet', () => {
     assert.equal(hub.kind, 'hub');
     assert.equal(hub.subtitle, 'Zentrale');
     assert.deepEqual(hub.facts, payload.nodes.hub.facts);
-    assert.deepEqual(hub.neighbours, ['llm', 'clients']);
+    assert.deepEqual(hub.neighbours, ['llm', 'clients', 'api']);
 
     const endpoint = byKey.get('ep:1');
     assert.deepEqual(endpoint.slots, { used: 1, max: 4 });
@@ -247,7 +265,9 @@ test('Kanten mit unbekannten Enden und doppelte Kanten entfallen', () => {
     const state = api.state();
     assert.equal(state.edges.length, payload.edges.length - 5);
     same(state.edges.map((edge) => edge.id).sort(), [
+        'api>api-key:1',
         'clients>client:1',
+        'hub>api',
         'hub>clients',
         'hub>llm',
         'llm>model:gemma-3-27b',
@@ -339,6 +359,29 @@ test('Klick auf die Clients-Wolke zeigt ihre Liste im HTML-Panel', () => {
     assert.equal(env.hook('[data-topo-panel]').hidden, true);
 });
 
+test('Klick auf die API-Wolke zeigt ihre Liste im HTML-Panel', () => {
+    const { env, api } = mountWith();
+    api.apply(basePayload());
+    env.pump();
+
+    api.select('api');
+    assert.equal(env.hook('[data-topo-panel]').hidden, false);
+    assert.equal(env.field('panel-kind').textContent, 'API');
+    assert.equal(env.field('panel-cloud-title').textContent, 'Aufrufe über die API');
+
+    const cloud = env.field('panel-cloud-list');
+    assert.equal(cloud.children.length, 1);
+    assert.equal(cloud.children[0].children[0].children[0].textContent, 'crawler');
+    assert.equal(cloud.children[0].children[1].textContent, 'sk-…a1b2');
+
+    // A single key carries facts and therefore opens the detail card.
+    api.select('api-key:1');
+    assert.equal(env.hook('[data-topo-panel]').hidden, true);
+    env.ctx.calls.length = 0;
+    env.pump();
+    assert.ok(paintedTexts(env).indexOf('Aufrufe: 128') >= 0, 'Detailkarte des Schlüssels fehlt');
+});
+
 test('select() ignoriert unbekannte Schlüssel und schließt das Panel', () => {
     const { env, api } = mountWith();
     api.apply(basePayload());
@@ -399,16 +442,50 @@ test('Klick auf einen Endpunkt hebt den Weg bis zum Client hervor', () => {
     const route = api.route();
     assert.equal(route.active, true, 'der Weg muss aktiv sein');
     same(route.nodes.slice().sort(), [
-        'client:1', 'client:2', 'clients', 'ep:1', 'hub', 'llm', 'model:gemma-3-27b',
+        'api', 'api-key:1', 'client:1', 'client:2', 'clients', 'ep:1', 'hub', 'llm', 'model:gemma-3-27b',
     ]);
     same(route.edges.slice().sort(), [
+        'api>api-key:1',
         'clients>client:1',
         'clients>client:2',
+        'hub>api',
         'hub>clients',
         'hub>llm',
         'llm>model:gemma-3-27b',
         'model:gemma-3-27b>ep:1',
     ]);
+});
+
+test('Klick auf einen API-Schlüssel hebt den Weg über alle Endpunkt-Zweige hervor', () => {
+    const { api } = mountWith();
+    api.apply(branchyPayload());
+    api.select('api-key:1');
+
+    const route = api.route();
+    assert.equal(route.active, true, 'der Weg muss aktiv sein');
+    same(route.nodes.slice().sort(), [
+        'api', 'api-key:1', 'ep:1', 'ep:2', 'hub', 'llm', 'model:gemma-3-27b', 'model:qwen', 'search',
+    ]);
+    same(route.edges.slice().sort(), [
+        'api>api-key:1',
+        'hub>api',
+        'hub>llm',
+        'hub>search',
+        'llm>model:gemma-3-27b',
+        'llm>model:qwen',
+        'model:gemma-3-27b>ep:1',
+        'model:qwen>ep:2',
+    ]);
+});
+
+test('Klick auf die API-Wolke hebt die Schlüssel hervor, nicht die Sitzungen', () => {
+    const { api } = mountWith();
+    api.apply(branchyPayload());
+    api.select('api');
+
+    const route = api.route();
+    same(route.nodes.slice().sort(), ['api', 'api-key:1', 'hub']);
+    same(route.edges.slice().sort(), ['api>api-key:1', 'hub>api']);
 });
 
 test('der Weg führt nicht in fremde Zweige', () => {
@@ -447,6 +524,9 @@ test('Klick auf eine Sitzung ohne laufende Anfrage hebt alle Endpunkt-Zweige her
         'model:gemma-3-27b>ep:1',
         'model:qwen>ep:2',
     ]);
+    for (const key of ['api', 'api-key:1']) {
+        assert.equal(route.nodes.indexOf(key), -1, 'API-Aufrufe zählen zur Aufruferseite');
+    }
 });
 
 test('die übrigen Sitzungen liegen nicht auf dem Weg einer Sitzung', () => {
@@ -494,6 +574,9 @@ test('Klick auf eine Sitzung mit laufender Anfrage hebt nur deren Zweig hervor',
         'llm>model:gemma-3-27b',
         'model:gemma-3-27b>ep:1',
     ]);
+    for (const key of ['api', 'api-key:1']) {
+        assert.equal(route.nodes.indexOf(key), -1, 'ein laufender Browser-Aufruf führt nicht über die API');
+    }
 });
 
 test('die übrigen Zweige bleiben bei einer laufenden Anfrage dunkel', () => {
@@ -603,13 +686,13 @@ test('eine neue Nutzlast rechnet den Weg neu', () => {
     const { api } = mountWith();
     api.apply(basePayload());
     api.select('ep:1');
-    assert.equal(api.route().nodes.length, 6);
+    assert.equal(api.route().nodes.length, 8);
 
     // A second session turns up: it joins the way without a new click.
     api.apply(branchyPayload());
     assert.equal(api.route().nodes.indexOf('ep:1') >= 0, true, 'die Auswahl bleibt erhalten');
     assert.equal(api.route().nodes.indexOf('client:2') >= 0, true, 'die neue Sitzung gehört zum Weg');
-    assert.equal(api.route().nodes.length, 7);
+    assert.equal(api.route().nodes.length, 9);
 
     // The endpoint disappears: the selection and with it the way are dropped.
     api.apply({
@@ -666,8 +749,9 @@ test('auch der Weg einer Sitzung wird kräftig gezeichnet', () => {
     env.ctx.calls.length = 0;
     env.pump();
 
-    // Only the line to the second session lies beside the way.
-    assert.equal(faintHalos(), 1, 'nur die Linie zur zweiten Sitzung tritt zurück');
+    // Only the lines outside the way step back: to the second session and to
+    // the API branch, which no browser request walks through.
+    assert.equal(faintHalos(), 3, 'die Linien neben dem Weg treten zurück');
 
     const way = env.ctx.calls.filter((call) => call.name === 'stroke'
         && call.alpha >= 0.99 && call.lineWidth >= 4);
@@ -885,7 +969,7 @@ test('die eingebettete JSON-Insel ersetzt den ersten Abruf', () => {
     const { env, api } = mountWith({ initialPayload: JSON.stringify(basePayload()) });
 
     assert.equal(env.fetches.length, 0, 'mit Insel darf nichts abgerufen werden');
-    assert.equal(api.state().nodes.length, 6);
+    assert.equal(api.state().nodes.length, 8);
     assert.equal(env.field('overall-label').textContent, 'Eingeschränkt');
     assert.match(env.field('generated').textContent, /^\d{2}:\d{2}:\d{2}$/);
 });
@@ -916,7 +1000,7 @@ test('load() holt die Topologie und reicht sie an die Rückrufe weiter', async (
     assert.equal(await api.load(true), true);
     assert.deepEqual(env.fetches, ['/admin/load_stats.php']);
     assert.deepEqual(seen, ['warn']);
-    assert.equal(api.state().nodes.length, 6);
+    assert.equal(api.state().nodes.length, 8);
 
     // data-refresh-interval="3" is clamped to the module minimum of 5 s.
     const intervals = Array.from(env.timers.values()).filter((timer) => timer.repeat);
@@ -955,7 +1039,7 @@ test('apply() schreibt die Kennzahlen in die Kopfzeile', () => {
     assert.equal(env.field('overall-message').textContent, '1 Einschränkung erkannt.');
     assert.equal(env.field('overall-errors').textContent, '0');
     assert.equal(env.field('overall-warnings').textContent, '1');
-    assert.equal(env.field('node-count').textContent, '6');
+    assert.equal(env.field('node-count').textContent, '8');
     assert.equal(env.field('overall-badge').textContent, 'Eingeschränkt');
     assert.equal(env.root.getAttribute('data-overall-state'), 'warn');
 });

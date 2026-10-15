@@ -84,8 +84,8 @@ test_case('topology_build() liefert den vollständigen Payload', function (): vo
     assert_keys(['generated', 'overall', 'nodes', 'edges', 'incidents'], $topology);
     assert_same(1750000000, $topology['generated'], 'der Zeitstempel wird durchgereicht');
     assert_keys(['state', 'label', 'message', 'errors', 'warnings', 'nodes'], $topology['overall']);
-    assert_count(19, $topology['nodes']);
-    assert_count(18, $topology['edges']);
+    assert_count(25, $topology['nodes']);
+    assert_count(24, $topology['edges']);
     assert_same(count($topology['nodes']), $topology['overall']['nodes']);
 });
 
@@ -149,7 +149,7 @@ test_case('LLMInt ist der Wurzelknoten und hängt an nichts', function (): void 
 test_case('LLMInt verbindet sich mit allen Zweigen erster Ebene', function (): void {
     $topology = topo();
     assert_same(
-        ['clients', 'image', 'llm', 'search', 'speech', 'vector'],
+        ['api', 'clients', 'image', 'llm', 'search', 'speech', 'vector'],
         topo_children($topology, 'hub')
     );
 });
@@ -238,7 +238,7 @@ test_case('ImageInt- und SpeechInt-Gruppen erscheinen nur mit Endpunkten', funct
     assert_false(isset($withoutImage['nodes']['image']), 'ohne ImageInt-Endpunkte entfällt der Gruppenknoten');
     assert_false(isset($withoutImage['nodes']['image-ep:1']));
     assert_false(topo_has_edge($withoutImage, 'hub', 'image'));
-    assert_same(16, count($withoutImage['edges']));
+    assert_same(22, count($withoutImage['edges']));
 
     $withoutSpeech = topology_build(topology_stats_without_speech(), ['base_url' => '']);
     assert_false(isset($withoutSpeech['nodes']['speech']));
@@ -254,7 +254,7 @@ test_case('ohne LLM-Endpunkte entfällt der LLM-Zweig', function (): void {
     assert_true(isset($topology['nodes']['hub']), 'LLMInt bleibt immer erhalten');
     assert_true(isset($topology['nodes']['clients']));
     assert_same('ok', $topology['overall']['state']);
-    assert_same('Alle 11 Bausteine melden einen unauffälligen Zustand.', $topology['overall']['message']);
+    assert_same('Alle 17 Bausteine melden einen unauffälligen Zustand.', $topology['overall']['message']);
 });
 
 // ── States and aggregation ────────────────────────────────────────────────────
@@ -462,6 +462,120 @@ test_case('die Sitzungen sind alphabetisch sortiert', function (): void {
     assert_same(['Alpha', 'mitte', 'zeta'], $titles);
 });
 
+// ── API ───────────────────────────────────────────────────────────────────────
+
+test_case('der API-Zweig hängt direkt an LLMInt', function (): void {
+    $topology = topo();
+    $api = topo_node($topology, 'api');
+
+    assert_same('api', $api['kind']);
+    assert_same('API', $api['title']);
+    assert_same('Reverse Proxy · 4 Schlüssel', $api['subtitle']);
+    assert_same('41 heute', $api['badge']);
+    assert_true(topo_has_edge($topology, 'hub', 'api'));
+    assert_same('index.php#api-keys-card', $api['url']);
+});
+
+test_case('jede API-Nutzung wird ein eigener Knoten in der API-Wolke', function (): void {
+    $topology = topo();
+    $api = topo_node($topology, 'api');
+
+    assert_keys(['title', 'empty', 'items'], $api['cloud']);
+    assert_same('Aufrufe über die API', $api['cloud']['title']);
+    assert_same('Keine API-Aufrufe.', $api['cloud']['empty']);
+
+    $keys = array_map(static fn(array $item): string => $item['key'], $api['cloud']['items']);
+    sort($keys);
+    assert_same(['api-key:1', 'api-key:2', 'api-key:3', 'api-key:4', 'api-key:anon'], $keys);
+    assert_same(topo_children($topology, 'api'), $keys, 'Kanten und Wolkeneinträge stimmen überein');
+
+    assert_all($keys, static function (string $key) use ($topology) {
+        $node = topo_node($topology, $key);
+        return $node['kind'] === 'api-key'
+            && $node['title'] !== ''
+            && $node['facts'] !== []
+            && $node['cloud'] === null;
+    }, 'api-key-Knoten fehlen oder sind unvollständig');
+});
+
+test_case('die API-Wolke zeigt Aufrufe, Tageszähler und letztes Modell', function (): void {
+    $topology = topo();
+    $api = topo_node($topology, 'api');
+
+    assert_same('41', topo_fact($api, 'Aufrufe heute')['value']);
+    assert_same('jobs', topo_fact($api, 'Aufrufe heute')['tone']);
+    assert_same('2.2K', topo_fact($api, 'Aufrufe gesamt')['value']);
+    assert_same('2', topo_fact($api, 'Gerade aktiv')['value'], 'ein aktiver Schlüssel und die anonymen Aufrufe');
+    assert_same('4', topo_fact($api, 'Schlüssel')['value']);
+    assert_same('210', topo_fact($api, 'Ohne Schlüssel')['value']);
+
+    $crawler = topo_node($topology, 'api-key:1');
+    assert_same('1.8K', topo_fact($crawler, 'Aufrufe')['value']);
+    assert_same('37', topo_fact($crawler, 'Aufrufe heute')['value']);
+    assert_same('gemma-3-27b-it-Q4_K_M', topo_fact($crawler, 'Letztes Modell')['value']);
+    assert_same('vor 12 s', topo_fact($crawler, 'Zuletzt benutzt')['value']);
+});
+
+test_case('ein laufender Aufruf markiert seinen Schlüssel, ruhende bleiben gedämpft', function (): void {
+    $topology = topo();
+
+    $calling = topo_node($topology, 'api-key:1');
+    assert_same('ok', $calling['state']);
+    assert_same('Mit diesem Schlüssel läuft gerade ein Aufruf.', $calling['message']);
+    assert_same('running', topo_fact($calling, 'Zuletzt benutzt')['tone']);
+
+    $quiet = topo_node($topology, 'api-key:2');
+    assert_same('off', $quiet['state'], 'ein Schlüssel ohne frische Aufrufe wird gedämpft');
+    assert_same('Zurzeit keine Aufrufe mit diesem Schlüssel.', $quiet['message']);
+    assert_same('', $quiet['badge'], 'ohne Tagesaufrufe kein Zähler-Badge');
+});
+
+test_case('deaktivierte und abgelaufene Schlüssel erklären sich', function (): void {
+    $topology = topo();
+
+    $inactive = topo_node($topology, 'api-key:3');
+    assert_same('off', $inactive['state']);
+    assert_same('Der Schlüssel ist deaktiviert.', $inactive['message']);
+    assert_same('inaktiv', $inactive['badge']);
+
+    $expired = topo_node($topology, 'api-key:4');
+    assert_same('off', $expired['state']);
+    assert_same('Der Schlüssel ist abgelaufen und wird nicht mehr angenommen.', $expired['message']);
+    assert_same('abgelaufen', topo_fact($expired, 'Gültig noch')['value']);
+    assert_same('error', topo_fact($expired, 'Gültig noch')['tone']);
+});
+
+test_case('Aufrufe ohne gültigen Schlüssel sammeln sich in einem Eintrag', function (): void {
+    $topology = topo();
+    $anon = topo_node($topology, 'api-key:anon');
+
+    assert_same('ohne Key', $anon['title']);
+    assert_same('Aufrufe ohne gültigen Schlüssel', $anon['subtitle']);
+    assert_same('ok', $anon['state'], 'die anonymen Aufrufe sind frisch');
+    assert_same('4 heute', $anon['badge']);
+    assert_same('210', topo_fact($anon, 'Aufrufe')['value']);
+    assert_same('gemma-3-27b-it-Q4_K_M', topo_fact($anon, 'Letztes Modell')['value']);
+});
+
+test_case('ohne API-Nutzung bleibt nur der Gruppenknoten', function (): void {
+    $topology = topology_build(topology_stats_without_api(), ['base_url' => '', 'slot_limit' => 4]);
+    $api = topo_node($topology, 'api');
+
+    assert_same('Reverse Proxy · 0 Schlüssel', $api['subtitle']);
+    assert_same('', $api['badge']);
+    assert_same([], $api['cloud']['items']);
+    assert_same([], topo_children($topology, 'api'));
+    assert_true(topo_has_edge($topology, 'hub', 'api'), 'der API-Zweig bleibt sichtbar');
+    assert_same('0', topo_fact($api, 'Aufrufe gesamt')['value']);
+    assert_same('Zurzeit keine Aufrufe über die API.', $api['message']);
+});
+
+test_case('fehlende API-Daten werden toleriert', function (): void {
+    $topology = topo(['api' => null]);
+    assert_true(isset($topology['nodes']['api']));
+    assert_same([], topo_node($topology, 'api')['cloud']['items']);
+});
+
 // ── Laufende Anfrage ──────────────────────────────────────────────────────────
 
 /** Key of a session node, matching the hashing in topology_build(). */
@@ -588,7 +702,7 @@ test_case('die Sitzung ohne Route-Felder gilt als untätig', function (): void {
 test_case('Nachbarlisten sind beidseitig und ohne Doppelte', function (): void {
     $topology = topo();
     $hub = topo_node($topology, 'hub');
-    assert_same(['llm', 'clients', 'search', 'vector', 'image', 'speech'], $hub['neighbours']);
+    assert_same(['llm', 'clients', 'api', 'search', 'vector', 'image', 'speech'], $hub['neighbours']);
     assert_same($hub['neighbours'], array_values(array_unique($hub['neighbours'])));
 
     assert_same(['llm', 'ep:1', 'ep:2'], topo_node($topology, topo_model_key('gemma-3-27b-it-Q4_K_M'))['neighbours']);
@@ -616,7 +730,7 @@ test_case('include_off=false lässt deaktivierte Endpunkte weg', function (): vo
     assert_false(isset($topology['nodes']['ep:4']));
     assert_false(topo_has_edge($topology, 'model:llama-3-8b', 'ep:4'));
     assert_false(isset($topology['nodes']['model:llama-3-8b']), 'leere Gruppen verschwinden mit');
-    assert_same(17, count($topology['nodes']));
+    assert_same(23, count($topology['nodes']));
     assert_true(isset($topology['nodes']['ep:3']), 'aktive Endpunkte bleiben');
 });
 
@@ -647,11 +761,14 @@ test_case('base_url wird allen internen Verweisen vorangestellt', function (): v
 test_case('ein leerer Zustand ergibt eine gültige, minimale Topologie', function (): void {
     $topology = topology_build([], ['base_url' => '']);
     assert_keys(['generated', 'overall', 'nodes', 'edges', 'incidents'], $topology);
-    assert_same(['clients', 'hub'], array_keys($topology['nodes']), 'ohne Daten bleiben LLMInt und die Clients-Wolke');
-    assert_same([['from' => 'hub', 'to' => 'clients', 'state' => 'ok', 'synthetic' => true, 'label' => '']], $topology['edges']);
+    assert_same(['clients', 'api', 'hub'], array_keys($topology['nodes']), 'ohne Daten bleiben LLMInt, die Clients-Wolke und der API-Zweig');
+    assert_same([
+        ['from' => 'hub', 'to' => 'clients', 'state' => 'ok', 'synthetic' => true, 'label' => ''],
+        ['from' => 'hub', 'to' => 'api', 'state' => 'ok', 'synthetic' => true, 'label' => ''],
+    ], $topology['edges']);
     assert_same([], $topology['incidents']);
     assert_same('ok', $topology['overall']['state']);
-    assert_same('Alle 2 Bausteine melden einen unauffälligen Zustand.', $topology['overall']['message']);
+    assert_same('Alle 3 Bausteine melden einen unauffälligen Zustand.', $topology['overall']['message']);
 
     $clients = topo_node($topology, 'clients');
     assert_same('0 verbunden', $clients['subtitle']);
@@ -699,13 +816,17 @@ test_case('die Detailkarte und das HTML-Panel schließen sich aus', function ():
     // every other node with facts renders the in-canvas detail card.
     sort($panelNodes);
     assert_same([
-        'clients', 'image', 'llm',
+        'api', 'clients', 'image', 'llm',
         'model:gemma-3-27b', 'model:llama-3-8b', 'model:qwen2.5-32b-instruct',
         'speech',
     ], $panelNodes, 'Panel-Knoten');
     assert_same([], array_intersect($panelNodes, $cardNodes), 'Karten- und Panel-Knoten überschneiden sich');
 
-    foreach (['hub', 'ep:1', 'ep:4', 'search', 'vector', 'image-ep:1', 'speech-ep:1', 'client:cbc8647ad6186b9d6b8a01e36c32adb8'] as $key) {
+    foreach ([
+        'hub', 'ep:1', 'ep:4', 'search', 'vector', 'image-ep:1', 'speech-ep:1',
+        'client:cbc8647ad6186b9d6b8a01e36c32adb8',
+        'api-key:1', 'api-key:2', 'api-key:3', 'api-key:4', 'api-key:anon',
+    ] as $key) {
         assert_true(in_array($key, $cardNodes, true), $key . ' muss eine Detailkarte rendern');
     }
     assert_all($topology['nodes'], static function (array $node) {
