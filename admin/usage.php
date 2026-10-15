@@ -16,13 +16,22 @@ $adminPageTitle = 'Nutzungsstatistik';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('usage-stats-intro', 'Nutzungsstatistik',
+    'Zeigt pro Tag die Spitzenanzahl gleichzeitig verbundener Clients, die Anzahl angemeldeter '
+    . 'Nutzer, die durchgeführten Tasks und Websuchen sowie die fehlgeschlagenen Tasks. Auf die '
+    . 'Legende klicken, um einzelne Reihen ein- oder auszublenden.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Nutzungsstatistik
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="usage-stats-card">
         <details class="config-panel" id="usage-stats" open>
-            <summary>📈 Nutzungsstatistik</summary>
+            <summary>📈 Nutzungsstatistik <?php admin_help_button('usage-stats-intro'); ?></summary>
 
             <div class="usage-range" id="usage-range" role="group" aria-label="Zeitraum">
                 <button type="button" data-days="3">3 Tage</button>
@@ -41,13 +50,6 @@ require __DIR__ . '/partials/layout_head.php';
             </div>
 
             <div class="usage-legend" id="usage-legend"></div>
-
-            <p class="hint" id="usage-hint">
-                Zeigt pro Tag die Spitzenanzahl gleichzeitig verbundener Clients, die Anzahl
-                angemeldeter Nutzer, die durchgeführten Tasks und Websuchen sowie die
-                fehlgeschlagenen Tasks. Auf die Legende klicken, um einzelne Reihen ein- oder
-                auszublenden.
-            </p>
         </details>
     </div>
 

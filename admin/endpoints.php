@@ -18,6 +18,68 @@ $adminPageTitle = 'Endpunkte';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions of the fields and sections of the add/edit form. The "?" next
+ * to a label or a section title opens the entry of its id only; the popup
+ * itself comes from admin/partials/help.php.
+ */
+admin_help_text('ep-alias', 'Alias (optional)',
+    'Kurzname für den Endpunkt, wird später in Antwortdetails angezeigt.');
+
+admin_help_text('ep-url', 'API-Endpunkt (Base URL)',
+    'Vollständige Base URL der LM Studio REST API.');
+
+admin_help_text('ep-timeout', 'Timeout (Sekunden)',
+    '1 – 600 s');
+
+admin_help_text('ep-max-context', 'Maximaler Kontext (Token)',
+    'Kontextgröße (n_ctx) des Endpunkts in Token. 0 = kein Limit hinterlegt.');
+
+admin_help_text('ep-context-limit-per-slot', 'Kontextlimit je Userslot (Token)',
+    'Maximaler Kontext, den eine einzelne Chat-Session belegen darf. '
+    . '0 = kein separates Limit (nur der Endpunkt-Kontext gilt).');
+
+admin_help_text('ep-model-input', 'Standard-Modell',
+    'Endpunkte mit identischem Standard-Modell bilden automatisch eine Load-Balancing-Gruppe.');
+
+admin_help_text('ep-specialized-for', 'Spezialisierung (Routing-Kategorie)',
+    'Ist hier eine Kategorie gewählt, wird dieses Modell beim <strong>Intelligence-Upgrade</strong> '
+    . 'nur dann als Vorschlag angezeigt, wenn die aktuelle Anfrage genau dieser Kategorie zugeordnet wurde. '
+    . 'So werden spezialisierte Modelle (z.&thinsp;B. Coding) nicht für allgemeine Anfragen empfohlen.');
+
+admin_help_text('ep-supports-tool-calling', 'Tool-Calling unterstützt',
+    'Aktivieren, wenn das Modell die OpenAI-kompatible Tool-Calling-API unterstützt. '
+    . 'Ist diese Option aktiviert und SearXNG konfiguriert, stehen <code>search_web</code> '
+    . 'und <code>web_fetch</code> als Tools zur Verfügung: <code>search_web</code> liefert '
+    . 'Treffer mit URLs, <code>web_fetch</code> lädt dazu den Textinhalt einzelner Seiten '
+    . 'nach. Das Modell entscheidet selbst, ob es aufgerufen wird – '
+    . 'nur wenn es keine ausreichend aktuellen Informationen zu einem Thema hat.');
+
+admin_help_text('ep-is-llamacpp', 'Direkte llama.cpp-Instanz (bare metal)',
+    'Aktivieren, wenn dieser Endpunkt ein direkt (bare metal) betriebener '
+    . 'llama.cpp-Server ist. Die JSON-Anfrage wird dann llama.cpp-kompatibel '
+    . 'aufgebaut (keine LM-Studio-Platzhalter wie <code>"max_tokens":-1</code>) und es wird '
+    . 'kein Tool-Calling verwendet – ohne <code>--jinja</code> lehnt llama.cpp Anfragen '
+    . 'mit <code>tools</code> ab. Beispiel-Startbefehl: '
+    . '<code>./llama-server -m /pfad/zum/modell.gguf --host 0.0.0.0 --port 8080 --jinja</code>');
+
+admin_help_text('ep-reasoning-effort', 'Reasoning-Effort',
+    'Wert, der als <code>"reasoning_effort"</code> an diesen Endpunkt übergeben '
+    . 'wird – unabhängig davon, ob es sich um eine direkte llama.cpp-Instanz oder '
+    . 'einen anderen OpenAI-kompatiblen Endpunkt (LM Studio, vLLM, Ollama …) '
+    . 'handelt. Mit "Nicht senden" wird das Feld weggelassen, z. B. für Backends, '
+    . 'die unbekannte Felder ablehnen.');
+
+admin_help_text('ep-supports-vision', 'Vision-fähig',
+    'Aktivieren, wenn das von diesem Endpunkt bediente Modell Bild-Eingaben '
+    . '(OpenAI-kompatible <code>image_url</code>-Inhalte) versteht. Nutzer können dann '
+    . 'im Chat Bilder anhängen, die als Base64 an dieses Modell übergeben werden.');
+
+admin_help_text('ep-ssh-host', 'SSH-Zugangsdaten (optional, für Systemmetriken)',
+    'Wenn hinterlegt, werden RAM-Auslastung, CPU-Last und CPU-Temperatur '
+    . '(lm-sensors) live im Dashboard angezeigt. Erfordert <code>php-ssh2</code> '
+    . 'auf dem Webserver sowie <code>lm-sensors</code> auf dem Zielrechner.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Endpoint Management
@@ -134,7 +196,7 @@ require __DIR__ . '/partials/layout_head.php';
                 <input type="hidden" name="ep_id"      id="ep-id"     value="">
 
                 <div class="form-group">
-                    <label for="ep-alias">Alias (optional) <button type="button" class="ep-help" data-help="ep-alias" title="Beschreibung anzeigen" aria-label="Beschreibung zu Alias anzeigen">?</button></label>
+                    <label for="ep-alias">Alias (optional) <?php admin_help_button('ep-alias'); ?></label>
                     <input type="text" id="ep-alias" name="ep_alias" maxlength="120"
                            placeholder="z. B. GPU-Server 1"
                            value="">
@@ -142,13 +204,13 @@ require __DIR__ . '/partials/layout_head.php';
 
                 <div class="form-row">
                     <div class="form-group" style="flex:4">
-                        <label for="ep-url">API-Endpunkt (Base URL) * <button type="button" class="ep-help" data-help="ep-url" title="Beschreibung anzeigen" aria-label="Beschreibung zum API-Endpunkt anzeigen">?</button></label>
+                        <label for="ep-url">API-Endpunkt (Base URL) * <?php admin_help_button('ep-url'); ?></label>
                         <input type="url" id="ep-url" name="ep_base_url"
                                placeholder="http://192.168.1.10:1234/v1" required
                                value="">
                     </div>
                     <div class="form-group" style="flex:1;min-width:160px">
-                        <label for="ep-timeout">Timeout (Sekunden) * <button type="button" class="ep-help" data-help="ep-timeout" title="Beschreibung anzeigen" aria-label="Beschreibung zum Timeout anzeigen">?</button></label>
+                        <label for="ep-timeout">Timeout (Sekunden) * <?php admin_help_button('ep-timeout'); ?></label>
                         <input type="number" id="ep-timeout" name="ep_timeout"
                                min="1" max="600" required
                                value="120">
@@ -157,13 +219,13 @@ require __DIR__ . '/partials/layout_head.php';
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="ep-max-context">Maximaler Kontext (Token) <button type="button" class="ep-help" data-help="ep-max-context" title="Beschreibung anzeigen" aria-label="Beschreibung zum maximalen Kontext anzeigen">?</button></label>
+                        <label for="ep-max-context">Maximaler Kontext (Token) <?php admin_help_button('ep-max-context'); ?></label>
                         <input type="number" id="ep-max-context" name="ep_max_context"
                                min="0" max="10000000" step="1"
                                value="0">
                     </div>
                     <div class="form-group">
-                        <label for="ep-context-limit-per-slot">Kontextlimit je Userslot (Token) <button type="button" class="ep-help" data-help="ep-context-limit-per-slot" title="Beschreibung anzeigen" aria-label="Beschreibung zum Kontextlimit je Userslot anzeigen">?</button></label>
+                        <label for="ep-context-limit-per-slot">Kontextlimit je Userslot (Token) <?php admin_help_button('ep-context-limit-per-slot'); ?></label>
                         <input type="number" id="ep-context-limit-per-slot" name="ep_context_limit_per_slot"
                                min="0" max="10000000" step="1"
                                value="0">
@@ -171,7 +233,7 @@ require __DIR__ . '/partials/layout_head.php';
                 </div>
 
                 <div class="form-group">
-                    <label for="ep-model-input">Standard-Modell <button type="button" class="ep-help" data-help="ep-model-input" title="Beschreibung anzeigen" aria-label="Beschreibung zum Standard-Modell anzeigen">?</button></label>
+                    <label for="ep-model-input">Standard-Modell <?php admin_help_button('ep-model-input'); ?></label>
                     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                         <input type="text" list="ep-model-list" id="ep-model-input"
                                name="ep_default_model"
@@ -186,7 +248,7 @@ require __DIR__ . '/partials/layout_head.php';
                 </div>
 
                 <div class="form-group">
-                    <label for="ep-specialized-for">Spezialisierung (Routing-Kategorie) <button type="button" class="ep-help" data-help="ep-specialized-for" title="Beschreibung anzeigen" aria-label="Beschreibung zur Spezialisierung anzeigen">?</button></label>
+                    <label for="ep-specialized-for">Spezialisierung (Routing-Kategorie) <?php admin_help_button('ep-specialized-for'); ?></label>
                     <select id="ep-specialized-for" name="ep_specialized_for_category">
                         <option value="" selected>
                             Allgemein (keine Einschränkung)
@@ -210,7 +272,7 @@ require __DIR__ . '/partials/layout_head.php';
                     <label class="inline">
                         <input type="checkbox" id="ep-supports-tool-calling" name="ep_supports_tool_calling" checked>
                         Tool-Calling unterstützt (search_web und web_fetch bei Bedarf verfügbar)
-                        <button type="button" class="ep-help" data-help="ep-supports-tool-calling" title="Beschreibung anzeigen" aria-label="Beschreibung zu Tool-Calling anzeigen">?</button>
+                        <?php admin_help_button('ep-supports-tool-calling'); ?>
                     </label>
                 </div>
 
@@ -218,12 +280,12 @@ require __DIR__ . '/partials/layout_head.php';
                     <label class="inline">
                         <input type="checkbox" id="ep-is-llamacpp" name="ep_is_llamacpp">
                         Direkte llama.cpp-Instanz (bare metal)
-                        <button type="button" class="ep-help" data-help="ep-is-llamacpp" title="Beschreibung anzeigen" aria-label="Beschreibung zur llama.cpp-Instanz anzeigen">?</button>
+                        <?php admin_help_button('ep-is-llamacpp'); ?>
                     </label>
                 </div>
 
                 <div class="form-group">
-                    <label for="ep-reasoning-effort">Reasoning-Effort <button type="button" class="ep-help" data-help="ep-reasoning-effort" title="Beschreibung anzeigen" aria-label="Beschreibung zum Reasoning-Effort anzeigen">?</button></label>
+                    <label for="ep-reasoning-effort">Reasoning-Effort <?php admin_help_button('ep-reasoning-effort'); ?></label>
                     <select id="ep-reasoning-effort" name="ep_reasoning_effort">
                         <option value="none">Nicht senden</option>
                         <option value="low">Low</option>
@@ -236,7 +298,7 @@ require __DIR__ . '/partials/layout_head.php';
                     <label class="inline">
                         <input type="checkbox" id="ep-supports-vision" name="ep_supports_vision">
                         Vision-fähig (Bilder als Eingabe akzeptieren)
-                        <button type="button" class="ep-help" data-help="ep-supports-vision" title="Beschreibung anzeigen" aria-label="Beschreibung zu Vision anzeigen">?</button>
+                        <?php admin_help_button('ep-supports-vision'); ?>
                     </label>
                 </div>
 
@@ -244,7 +306,7 @@ require __DIR__ . '/partials/layout_head.php';
                 <details id="ep-ssh-details">
                     <summary style="cursor:pointer;font-weight:600;margin:12px 0 8px;color:var(--text-muted)">
                         🔑 SSH-Zugangsdaten (optional, für Systemmetriken)
-                        <button type="button" class="ep-help" data-help="ep-ssh-host" title="Beschreibung anzeigen" aria-label="Beschreibung zu den SSH-Zugangsdaten anzeigen">?</button>
+                        <?php admin_help_button('ep-ssh-host'); ?>
                     </summary>
                     <div class="form-row">
                         <div class="form-group" style="flex:3">
@@ -287,28 +349,12 @@ require __DIR__ . '/partials/layout_head.php';
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-         Field description popup ("?")
+         Add / edit overlay and the "?" descriptions of its fields
 
-         Every field that used to carry a description below its input now has a
-         "?" next to its label. The popup shows only that field's text and is
-         rendered above the add/edit overlay.
+         The "?" buttons in the form are rendered by admin_help_button(); the
+         popup they open comes from admin/partials/help.php (layout_foot.php).
+         The descriptions themselves stand in the PHP head of this page.
     ═══════════════════════════════════════════════════════════════════════ -->
-    <div id="endpoint-help-overlay" style="display:none;position:fixed;inset:0;z-index:1100;
-         background:rgba(0,0,0,.55);backdrop-filter:blur(4px);
-         align-items:center;justify-content:center;overflow:auto;padding:24px">
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-                    padding:22px 26px;max-width:440px;width:calc(100% - 32px);
-                    max-height:calc(100vh - 48px);overflow:auto;
-                    box-shadow:0 24px 60px rgba(0,0,0,.6);position:relative;margin:auto">
-            <button id="endpoint-help-overlay-close"
-                    style="position:absolute;top:12px;right:14px;background:none;border:none;
-                           color:var(--text-muted);font-size:1.1rem;cursor:pointer;line-height:1"
-                    aria-label="Schließen">✕</button>
-            <h4 id="endpoint-help-title" style="font-size:.9rem;margin:0 0 8px;padding-right:26px"></h4>
-            <div id="endpoint-help-text" style="font-size:.82rem;line-height:1.55;color:var(--text-muted)"></div>
-        </div>
-    </div>
-
 <script>
 (function () {
     'use strict';
@@ -339,88 +385,7 @@ require __DIR__ . '/partials/layout_head.php';
 
     const endpointEditOverlay      = document.getElementById('endpoint-edit-overlay');
     const endpointEditOverlayClose = document.getElementById('endpoint-edit-overlay-close');
-    const endpointHelpOverlay      = document.getElementById('endpoint-help-overlay');
-    const endpointHelpOverlayClose = document.getElementById('endpoint-help-overlay-close');
-    const endpointHelpTitle        = document.getElementById('endpoint-help-title');
-    const endpointHelpText         = document.getElementById('endpoint-help-text');
     const sshPasswordHint = document.getElementById('ep-ssh-password-hint');
-
-    /**
-     * Descriptions of the add/edit form fields, keyed by the id of the field
-     * they belong to. Each "?" button in the form opens the popup with the
-     * matching entry only.
-     */
-    const HELP_TEXTS = {
-        'ep-alias': {
-            title: 'Alias (optional)',
-            body: 'Kurzname für den Endpunkt, wird später in Antwortdetails angezeigt.'
-        },
-        'ep-url': {
-            title: 'API-Endpunkt (Base URL)',
-            body: 'Vollständige Base URL der LM Studio REST API.'
-        },
-        'ep-timeout': {
-            title: 'Timeout (Sekunden)',
-            body: '1 – 600 s'
-        },
-        'ep-max-context': {
-            title: 'Maximaler Kontext (Token)',
-            body: 'Kontextgröße (n_ctx) des Endpunkts in Token. 0 = kein Limit hinterlegt.'
-        },
-        'ep-context-limit-per-slot': {
-            title: 'Kontextlimit je Userslot (Token)',
-            body: 'Maximaler Kontext, den eine einzelne Chat-Session belegen darf. '
-                + '0 = kein separates Limit (nur der Endpunkt-Kontext gilt).'
-        },
-        'ep-model-input': {
-            title: 'Standard-Modell',
-            body: 'Endpunkte mit identischem Standard-Modell bilden automatisch eine Load-Balancing-Gruppe.'
-        },
-        'ep-specialized-for': {
-            title: 'Spezialisierung (Routing-Kategorie)',
-            body: 'Ist hier eine Kategorie gewählt, wird dieses Modell beim <strong>Intelligence-Upgrade</strong> '
-                + 'nur dann als Vorschlag angezeigt, wenn die aktuelle Anfrage genau dieser Kategorie zugeordnet wurde. '
-                + 'So werden spezialisierte Modelle (z.&thinsp;B. Coding) nicht für allgemeine Anfragen empfohlen.'
-        },
-        'ep-supports-tool-calling': {
-            title: 'Tool-Calling unterstützt',
-            body: 'Aktivieren, wenn das Modell die OpenAI-kompatible Tool-Calling-API unterstützt. '
-                + 'Ist diese Option aktiviert und SearXNG konfiguriert, stehen <code>search_web</code> '
-                + 'und <code>web_fetch</code> als Tools zur Verfügung: <code>search_web</code> liefert '
-                + 'Treffer mit URLs, <code>web_fetch</code> lädt dazu den Textinhalt einzelner Seiten '
-                + 'nach. Das Modell entscheidet selbst, ob es aufgerufen wird – '
-                + 'nur wenn es keine ausreichend aktuellen Informationen zu einem Thema hat.'
-        },
-        'ep-is-llamacpp': {
-            title: 'Direkte llama.cpp-Instanz (bare metal)',
-            body: 'Aktivieren, wenn dieser Endpunkt ein direkt (bare metal) betriebener '
-                + 'llama.cpp-Server ist. Die JSON-Anfrage wird dann llama.cpp-kompatibel '
-                + 'aufgebaut (keine LM-Studio-Platzhalter wie <code>"max_tokens":-1</code>) und es wird '
-                + 'kein Tool-Calling verwendet – ohne <code>--jinja</code> lehnt llama.cpp Anfragen '
-                + 'mit <code>tools</code> ab. Beispiel-Startbefehl: '
-                + '<code>./llama-server -m /pfad/zum/modell.gguf --host 0.0.0.0 --port 8080 --jinja</code>'
-        },
-        'ep-reasoning-effort': {
-            title: 'Reasoning-Effort',
-            body: 'Wert, der als <code>"reasoning_effort"</code> an diesen Endpunkt übergeben '
-                + 'wird – unabhängig davon, ob es sich um eine direkte llama.cpp-Instanz oder '
-                + 'einen anderen OpenAI-kompatiblen Endpunkt (LM Studio, vLLM, Ollama …) '
-                + 'handelt. Mit "Nicht senden" wird das Feld weggelassen, z. B. für Backends, '
-                + 'die unbekannte Felder ablehnen.'
-        },
-        'ep-supports-vision': {
-            title: 'Vision-fähig',
-            body: 'Aktivieren, wenn das von diesem Endpunkt bediente Modell Bild-Eingaben '
-                + '(OpenAI-kompatible <code>image_url</code>-Inhalte) versteht. Nutzer können dann '
-                + 'im Chat Bilder anhängen, die als Base64 an dieses Modell übergeben werden.'
-        },
-        'ep-ssh-host': {
-            title: 'SSH-Zugangsdaten (optional, für Systemmetriken)',
-            body: 'Wenn hinterlegt, werden RAM-Auslastung, CPU-Last und CPU-Temperatur '
-                + '(lm-sensors) live im Dashboard angezeigt. Erfordert <code>php-ssh2</code> '
-                + 'auf dem Webserver sowie <code>lm-sensors</code> auf dem Zielrechner.'
-        }
-    };
 
     function openOverlay() {
         if (!endpointEditOverlay) return;
@@ -431,24 +396,10 @@ require __DIR__ . '/partials/layout_head.php';
     /** Close the overlay and return the form to its empty "add" state. */
     function closeEndpointOverlay() {
         if (!endpointEditOverlay) return;
-        closeHelpOverlay();
+        if (typeof window.closeFieldHelp === 'function') window.closeFieldHelp();
         endpointEditOverlay.style.display = 'none';
         document.body.style.overflow = '';
         resetForm();
-    }
-
-    /** "?" next to a field: show only that field's description on top of the overlay. */
-    function openHelpOverlay(fieldId) {
-        const entry = HELP_TEXTS[fieldId];
-        if (!endpointHelpOverlay || !entry) return;
-        endpointHelpTitle.textContent = entry.title;
-        endpointHelpText.innerHTML    = entry.body;
-        endpointHelpOverlay.style.display = 'flex';
-    }
-
-    function closeHelpOverlay() {
-        if (!endpointHelpOverlay) return;
-        endpointHelpOverlay.style.display = 'none';
     }
 
     /** Open the overlay pre-filled with an existing endpoint ("✏ Bearbeiten"). */
@@ -478,27 +429,11 @@ require __DIR__ . '/partials/layout_head.php';
         });
     }
 
-    // One "?" per described field; each shows its own text. preventDefault keeps
-    // the click from also activating the surrounding <label>/<summary>.
-    document.querySelectorAll('.ep-help').forEach(function (btn) {
-        btn.addEventListener('click', function (e) {
-            e.preventDefault();
-            openHelpOverlay(btn.getAttribute('data-help'));
-        });
-    });
-
-    if (endpointHelpOverlayClose) endpointHelpOverlayClose.addEventListener('click', closeHelpOverlay);
-    if (endpointHelpOverlay) {
-        endpointHelpOverlay.addEventListener('click', function (e) {
-            if (e.target === endpointHelpOverlay) closeHelpOverlay();
-        });
-    }
+    // The "?" buttons of the form are wired by admin/partials/help.php.
 
     document.addEventListener('keydown', function (e) {
         if (e.key !== 'Escape') return;
-        if (endpointHelpOverlay && endpointHelpOverlay.style.display === 'flex') {
-            closeHelpOverlay();
-        } else if (endpointEditOverlay && endpointEditOverlay.style.display === 'flex') {
+        if (endpointEditOverlay && endpointEditOverlay.style.display === 'flex') {
             closeEndpointOverlay();
         }
     });

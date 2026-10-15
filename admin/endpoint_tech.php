@@ -16,6 +16,7 @@ session_start();
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../lib/quickinfo.php';
+require_once __DIR__ . '/partials/help.php';
 
 requireAdminOrRedirect('login.php');
 
@@ -111,6 +112,23 @@ function qiShortUrl(string $url): string
     $p = parse_url($url, PHP_URL_PORT);
     return $h ? $h . ($p ? ':' . $p : '') : $url;
 }
+
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('tech-overview', 'Technische Übersicht',
+    'Momentanwerte der gekoppelten quickinfo-Instanzen; Temperatur-Min./Max. beziehen sich auf die '
+    . 'letzten 24&nbsp;Stunden. Modell und Ø&nbsp;Token/s stammen aus LLMInt (heute). Ein Klick auf '
+    . 'eine Zeile öffnet quickinfo des Endpunkts in einem neuen Tab.');
+
+admin_help_text('tech-pairing', 'Pairing mit quickinfo',
+    'Jeder Endpunkt kann mit einer quickinfo-Instanz gekoppelt werden. Server-URL '
+    . '(z.&nbsp;B. <code>https://192.168.1.10</code>) und den API-Schlüssel eintragen – der '
+    . 'Schlüssel wird in quickinfo unter <em>Einstellungen → API &amp; Management-Board</em> erzeugt '
+    . 'oder per <code>php bin/apikey.php rotate</code>. quickinfo nutzt standardmäßig ein '
+    . 'selbstsigniertes Zertifikat; die TLS-Prüfung nur aktivieren, wenn ein gültiges Zertifikat '
+    . 'installiert ist. Ein leeres Schlüsselfeld behält den gespeicherten Schlüssel.');
 ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -271,6 +289,75 @@ function qiShortUrl(string $url): string
             .pair-table tr { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
             .pair-table td { border: none !important; border-radius: 0 !important; }
         }
+
+        /* "?" next to a field label or a section title: opens the description
+           popup of that field or section (admin/partials/help.php). */
+        .field-help {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 15px;
+            height: 15px;
+            padding: 0;
+            margin-left: 4px;
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            color: var(--text-muted);
+            font-family: var(--font);
+            font-size: .62rem;
+            font-weight: 700;
+            line-height: 1;
+            vertical-align: middle;
+            cursor: pointer;
+            flex: none;
+        }
+
+        .field-help:hover { color: var(--text); border-color: var(--text-muted); }
+
+        /* ── Description popup of the "?" buttons ─────────────────── */
+        .field-help-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 1100;
+            background: rgba(0,0,0,.55);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+            overflow: auto;
+            padding: 24px;
+        }
+
+        .field-help-panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 22px 26px;
+            max-width: 440px;
+            width: calc(100% - 32px);
+            max-height: calc(100vh - 48px);
+            overflow: auto;
+            box-shadow: 0 24px 60px rgba(0,0,0,.6);
+            position: relative;
+            margin: auto;
+        }
+
+        .field-help-close {
+            position: absolute;
+            top: 12px;
+            right: 14px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .field-help-title { font-size: .9rem; margin: 0 0 8px; padding-right: 26px; }
+
+        .field-help-text { font-size: .82rem; line-height: 1.55; color: var(--text-muted); }
     </style>
 </head>
 <body>
@@ -297,17 +384,13 @@ function qiShortUrl(string $url): string
     <!-- ── Live overview ─────────────────────────────────────────────────── -->
     <section class="card" id="overview-card">
         <div class="card-head">
-            <h2><span>📡</span> Technische Übersicht</h2>
+            <h2><span>📡</span> Technische Übersicht <?php admin_help_button('tech-overview'); ?></h2>
             <div class="live-meta">
                 <span class="live-dot" id="live-dot"></span>
                 <span id="live-text">Lade Daten …</span>
                 <button type="button" class="btn secondary small" id="refresh-btn">↻ Aktualisieren</button>
             </div>
         </div>
-        <p class="hint" style="margin-bottom:14px">
-            Momentanwerte der gekoppelten quickinfo-Instanzen; Temperatur-Min./Max. beziehen sich auf die letzten 24&nbsp;Stunden.
-            Modell und Ø&nbsp;Token/s stammen aus LLMInt (heute). Ein Klick auf eine Zeile öffnet quickinfo des Endpunkts in einem neuen Tab.
-        </p>
         <div class="ep-list" id="ep-list">
             <div class="ep-empty">Lade Endpunkte …</div>
         </div>
@@ -316,16 +399,9 @@ function qiShortUrl(string $url): string
     <!-- ── Pairing ────────────────────────────────────────────────────────── -->
     <section class="card" id="pairing-card">
         <div class="card-head">
-            <h2><span>🔗</span> Pairing mit quickinfo</h2>
+            <h2><span>🔗</span> Pairing mit quickinfo <?php admin_help_button('tech-pairing'); ?></h2>
             <a class="btn secondary small" href="https://github.com/dareinelt/quickinfo" target="_blank" rel="noopener noreferrer">quickinfo auf GitHub ↗</a>
         </div>
-        <p class="hint" style="margin-bottom:16px">
-            Jeder Endpunkt kann mit einer quickinfo-Instanz gekoppelt werden. Server-URL (z.&nbsp;B. <code>https://192.168.1.10</code>) und den
-            API-Schlüssel eintragen – der Schlüssel wird in quickinfo unter <em>Einstellungen → API &amp; Management-Board</em> erzeugt
-            oder per <code>php bin/apikey.php rotate</code>. quickinfo nutzt standardmäßig ein selbstsigniertes Zertifikat; die
-            TLS-Prüfung nur aktivieren, wenn ein gültiges Zertifikat installiert ist. Ein leeres Schlüsselfeld behält den gespeicherten Schlüssel.
-        </p>
-
         <?php if (empty($endpoints)): ?>
             <div class="ep-empty">Noch keine Endpunkte angelegt. Endpunkte werden im <a href="endpoints.php" style="color:var(--accent)">Admin-Bereich</a> verwaltet.</div>
         <?php else: ?>
@@ -552,5 +628,6 @@ function qiShortUrl(string $url): string
     load().then(schedule);
 })();
 </script>
+<?php admin_help_overlay(); ?>
 </body>
 </html>

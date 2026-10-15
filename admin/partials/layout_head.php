@@ -12,6 +12,7 @@
  */
 
 require_once __DIR__ . '/nav.php';
+require_once __DIR__ . '/help.php';
 
 ?>
 <!DOCTYPE html>
@@ -344,8 +345,9 @@ require_once __DIR__ . '/nav.php';
             cursor: pointer;
         }
 
-        /* "?" next to a field label: opens the description popup of that field. */
-        .ep-help {
+        /* "?" next to a field label or a section title: opens the description
+           popup of that field or section. */
+        .field-help {
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -366,7 +368,52 @@ require_once __DIR__ . '/nav.php';
             flex: none;
         }
 
-        .ep-help:hover { color: var(--text); border-color: var(--text-muted); }
+        .field-help:hover { color: var(--text); border-color: var(--text-muted); }
+
+        /* ── Description popup of the "?" buttons ─────────────────── */
+        /* Sits above the overlays of the pages (endpoints.php uses z-index 1000). */
+        .field-help-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 1100;
+            background: rgba(0,0,0,.55);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+            overflow: auto;
+            padding: 24px;
+        }
+
+        .field-help-panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 22px 26px;
+            max-width: 440px;
+            width: calc(100% - 32px);
+            max-height: calc(100vh - 48px);
+            overflow: auto;
+            box-shadow: 0 24px 60px rgba(0,0,0,.6);
+            position: relative;
+            margin: auto;
+        }
+
+        .field-help-close {
+            position: absolute;
+            top: 12px;
+            right: 14px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .field-help-title { font-size: .9rem; margin: 0 0 8px; padding-right: 26px; }
+
+        .field-help-text { font-size: .82rem; line-height: 1.55; color: var(--text-muted); }
 
         input[type="text"],
         input[type="url"],
