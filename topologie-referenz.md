@@ -41,7 +41,9 @@ Sie beantwortet drei Fragen:
   OpenAI-kompatible Reverse-Proxy-Schnittstelle, je API-Schlüssel ein Eintrag).
 - **Wohin läuft eine Anfrage?** Ein Klick hebt den kompletten Weg zwischen
   Aufrufer und Endpunkt hervor; läuft auf einem Client gerade eine Anfrage, ist
-  der Weg auf deren Zweig eingegrenzt und wird als Lauflicht gezeichnet.
+  der Weg auf deren Zweig eingegrenzt und wird als Lauflicht gezeichnet. Eine
+  Sitzung ohne laufende Anfrage wird nur ausgewählt – ihr Weg ist unbekannt und
+  wird deshalb nicht geraten.
 
 Zwei Darstellungsorte nutzen denselben Payload und denselben Renderer:
 
@@ -314,17 +316,24 @@ Poll-Zyklus. Der Renderer läuft vollständig auf einem 2D-Canvas mit eigener
 
 Regeln in `buildRoute()`:
 
-1. `climb(key)` läuft vom gewählten Knoten über die Elternkanten bis zum Zentrum.
-2. **Laufende Anfrage:** Hat der gewählte Client eine `route` mit Zielknoten
+1. **Sitzung ohne laufende Anfrage:** Wird ein einzelner Client gewählt und hat er
+   keine `route`, ist kein Weg bekannt. Es wird **keiner** markiert – der Klick
+   wählt die Sitzung nur aus (`active = false`, keine Knoten, keine Kanten, keine
+   Linie tritt zurück). Ein geratener Weg würde eine Strecke zeichnen, die die
+   Nachricht nie genommen hat.
+2. `climb(key)` läuft vom gewählten Knoten über die Elternkanten bis zum Zentrum.
+3. **Laufende Anfrage:** Hat der gewählte Client eine `route` mit Zielknoten
    (`busy = true`), werden nur diese Ziele mit hochgeklommen – der Weg ist auf
    den Zweig der laufenden Anfrage eingegrenzt und wird als Lauflicht gezeichnet.
-3. **Sonst** entscheidet die Art des gewählten Knotens:
-   - einzelner Aufrufer (`client`, `api-key`) → alle Knoten **außerhalb** der
+   Führt die `route` auf kein Ziel im aktuellen Netz, gilt die Anfrage als
+   unbekannt und es wird ebenfalls kein Weg markiert.
+4. **Sonst** entscheidet die Art des gewählten Knotens:
+   - einzelner API-Schlüssel (`api-key`) → alle Knoten **außerhalb** der
      Aufruferseite, d. h. bis in die Endpunkt-Zweige;
    - Wolkenknoten (`clients`, `api`) → nur der eigene Zweig (`isBelow`);
    - Endpunkt-/Zweigknoten → alle Aufrufer-Knoten, also Clients **und**
      API-Schlüssel.
-4. Weil das Netz ein Baum ist, gehört eine Kante zum Weg, sobald beide Enden
+5. Weil das Netz ein Baum ist, gehört eine Kante zum Weg, sobald beide Enden
    dazugehören.
 
 ### Zeichnen, Panel und Karte
@@ -408,7 +417,7 @@ Angelegt werden sie idempotent: Erstinstallation in `setup.php`, Migrationen in
 |---|---|
 | Hover | Tooltip mit Titel, Zustand und Meldung |
 | Klick auf einen Endpunkt/Zweig | Detailkarte im Canvas **neben** dem Knoten; der Weg bis zu allen Aufrufern (Clients **und** API-Schlüssel) wird hervorgehoben |
-| Klick auf einen Client | Weg über die Clients-Wolke und LLMInt hinunter in die Endpunkt-Zweige; die Detailkarte eines Endpunkts öffnet sich **nicht**. Läuft auf dem Client gerade eine Anfrage, ist der Weg auf deren Zweig eingegrenzt und wird als Lauflicht gezeichnet |
+| Klick auf einen Client | Weg über die Clients-Wolke und LLMInt hinunter in die Endpunkt-Zweige; die Detailkarte eines Endpunkts öffnet sich **nicht**. Läuft auf dem Client gerade eine Anfrage, ist der Weg auf deren Zweig eingegrenzt und wird als Lauflicht gezeichnet; ohne laufende Anfrage wird kein Weg markiert, nur die Sitzung ausgewählt |
 | Klick auf einen API-Schlüssel | Weg in die Endpunkt-Zweige; die Clients bleiben zurückgesetzt |
 | Klick auf eine Wolke (`clients`, `api`) | nur der eigene Zweig wird hervorgehoben; die Mitgliederliste erscheint im HTML-Seitenpanel |
 | Legenden-Checkbox | blendet eine Knotenart aus (`kindFilter`), das Layout wird neu berechnet |
@@ -498,7 +507,7 @@ ableitet.
 | PHP-Aufbau | `tests/php/test_topology_build.php` | Knoten, Kanten, Hub-Kinder, Zähler, Zustände, API-Wolke inkl. anonymer Eintrag, Minimalzustände |
 | PHP-Helfer | `tests/php/test_topology_helpers.php` | `topology_kinds()`, Labels, Aggregation, Formatierung, `topology_age_label()` |
 | PHP-Payloads | `tests/php/test_admin_payloads.php` | Dass `admin/load_stats.php` **und** `admin/index.php` dieselben Abschnitte an `topology_build()` übergeben |
-| JS | `tests/js/flow-topology.test.js` | Ingest, Layout, Legende, Panels, Detailkarten, Weg-Hervorhebung (inkl. API-Schlüssel und Wolkenklick) |
+| JS | `tests/js/flow-topology.test.js` | Ingest, Layout, Legende, Panels, Detailkarten, Weg-Hervorhebung (inkl. API-Schlüssel, Wolkenklick und Sitzung ohne laufende Anfrage) |
 | Fixtures | `tests/php/fixtures.php` | `topology_stats_fixture()` (mit API-Block) und `topology_stats_without_api()` |
 
 Aufruf (Details in [`tests/README.md`](tests/README.md)):
@@ -540,3 +549,4 @@ Bei Änderungen mitzuziehen:
 | Wie heißt der Eintrag ohne Key? | Knoten `api-key:anon`, Titel „ohne Key" |
 | Welche Knoten haben eine Wolke? | `clients`, `api` (`isCloudNode()`, `CLOUD_RADIUS`) |
 | Karte oder Panel? | `facts` → Karte, `cloud`/`members` → Panel, nie beides |
+| Klick auf eine Sitzung ohne laufende Anfrage? | kein Weg (`buildRoute()` liefert `active = false`), nur die Sitzung ist ausgewählt |

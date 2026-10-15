@@ -502,41 +502,36 @@ test('der Weg führt nicht in fremde Zweige', () => {
     }
 });
 
-test('Klick auf eine Sitzung ohne laufende Anfrage hebt alle Endpunkt-Zweige hervor', () => {
+test('Klick auf eine Sitzung ohne laufende Anfrage markiert keinen Weg', () => {
     const { api } = mountWith();
     api.apply(branchyPayload());
     api.select('client:1');
 
     const route = api.route();
-    assert.equal(route.active, true, 'der Weg muss aktiv sein');
+    assert.equal(route.active, false, 'ohne laufende Anfrage ist kein Weg bekannt');
     assert.equal(route.busy, false, 'ohne laufende Anfrage ist der Weg nicht eingegrenzt');
-    same(route.nodes.slice().sort(), [
-        'client:1', 'clients', 'ep:1', 'ep:2', 'hub', 'llm',
-        'model:gemma-3-27b', 'model:qwen', 'search',
-    ]);
-    same(route.edges.slice().sort(), [
-        'clients>client:1',
-        'hub>clients',
-        'hub>llm',
-        'hub>search',
-        'llm>model:gemma-3-27b',
-        'llm>model:qwen',
-        'model:gemma-3-27b>ep:1',
-        'model:qwen>ep:2',
-    ]);
-    for (const key of ['api', 'api-key:1']) {
-        assert.equal(route.nodes.indexOf(key), -1, 'API-Aufrufe zählen zur Aufruferseite');
-    }
+    same(route.nodes, [], 'kein Knoten gehört zu einem geratenen Weg');
+    same(route.edges, [], 'und keine Linie');
 });
 
-test('die übrigen Sitzungen liegen nicht auf dem Weg einer Sitzung', () => {
-    const { api } = mountWith();
+test('eine Sitzung ohne laufende Anfrage lässt das übrige Netz unberührt', () => {
+    const { env, api } = mountWith();
     api.apply(branchyPayload());
-    api.select('client:1');
+    env.pump(40);
 
-    const route = api.route();
-    assert.equal(route.nodes.indexOf('client:2'), -1, 'die zweite Sitzung liegt nicht auf dem Weg');
-    assert.equal(route.edges.indexOf('clients>client:2'), -1, 'ihre Linie ebenso wenig');
+    const faintHalos = () => env.ctx.calls
+        .filter((call) => call.name === 'stroke' && call.lineWidth >= 8 && call.alpha <= 0.05)
+        .length;
+
+    api.select('client:1');
+    env.ctx.calls.length = 0;
+    env.pump();
+
+    assert.equal(faintHalos(), 0, 'keine Linie tritt zurück, weil kein Weg markiert ist');
+    assert.equal(api.route().edges.length, 0);
+    assert.equal(env.ctx.calls.filter((call) => call.name === 'stroke'
+        && call.alpha >= 0.99 && call.lineWidth >= 4).length, 0,
+        'und keine Linie wird als Weg hervorgehoben');
 });
 
 /**
@@ -604,15 +599,16 @@ test('eine laufende Suche führt zur Suchmaschine', () => {
     same(route.edges.slice().sort(), ['clients>client:1', 'hub>clients', 'hub>search']);
 });
 
-test('ohne bekanntes Ziel bleibt die Sitzung bei ihrem bisherigen Weg', () => {
+test('ohne auffindbares Ziel markiert die Sitzung keinen Weg', () => {
     const { api } = mountWith();
     api.apply(runningPayload({ nodes: ['ep:99'] }));
     api.select('client:1');
 
     const route = api.route();
     assert.equal(route.busy, false, 'ohne auffindbares Ziel gilt die Anfrage als unbekannt');
-    assert.equal(route.nodes.indexOf('ep:2') >= 0, true,
-        'dann öffnen sich wieder alle Endpunkt-Zweige');
+    assert.equal(route.active, false, 'dann bleibt das Netz unmarkiert');
+    same(route.nodes, []);
+    same(route.edges, []);
 });
 
 test('nur der Weg einer laufenden Anfrage fließt', () => {
@@ -644,7 +640,7 @@ test('Klick auf die Clients-Wolke hebt alle Sitzungen hervor', () => {
     same(route.edges.slice().sort(), ['clients>client:1', 'clients>client:2', 'hub>clients']);
 });
 
-test('ohne Gegenstück endet der Weg einer Sitzung am Kern', () => {
+test('ohne laufende Anfrage bleibt auch ein einzelner Zweig unmarkiert', () => {
     const { api } = mountWith();
     api.apply({
         nodes: {
@@ -661,9 +657,9 @@ test('ohne Gegenstück endet der Weg einer Sitzung am Kern', () => {
     api.select('client:1');
 
     const route = api.route();
-    assert.equal(route.active, true);
-    same(route.nodes.slice().sort(), ['client:1', 'clients', 'hub']);
-    same(route.edges.slice().sort(), ['clients>client:1', 'hub>clients']);
+    assert.equal(route.active, false, 'die Sitzung wird ohne Weg ausgewählt');
+    same(route.nodes, []);
+    same(route.edges, []);
 });
 
 test('ohne Auswahl gibt es keinen Weg', () => {
@@ -736,9 +732,9 @@ test('der Weg wird kräftig gezeichnet, der Rest tritt zurück', () => {
     }
 });
 
-test('auch der Weg einer Sitzung wird kräftig gezeichnet', () => {
+test('auch der Weg einer laufenden Anfrage wird kräftig gezeichnet', () => {
     const { env, api } = mountWith();
-    api.apply(branchyPayload());
+    api.apply(runningPayload());
     env.pump(40);
 
     const faintHalos = () => env.ctx.calls
@@ -749,9 +745,9 @@ test('auch der Weg einer Sitzung wird kräftig gezeichnet', () => {
     env.ctx.calls.length = 0;
     env.pump();
 
-    // Only the lines outside the way step back: to the second session and to
-    // the API branch, which no browser request walks through.
-    assert.equal(faintHalos(), 3, 'die Linien neben dem Weg treten zurück');
+    // Only the lines outside the way step back: the second session, the other
+    // model branch, SearXNG and the API branch, which no browser request walks.
+    assert.equal(faintHalos(), 6, 'die Linien neben dem Weg treten zurück');
 
     const way = env.ctx.calls.filter((call) => call.name === 'stroke'
         && call.alpha >= 0.99 && call.lineWidth >= 4);
@@ -775,6 +771,7 @@ test('Klick auf eine Sitzung öffnet nicht die Detailkarte eines Endpunkts', () 
         'die Detailkarte des Endpunkts darf sich nicht öffnen');
     assert.ok(texts.indexOf('Tabs: 2') >= 0, 'die angeklickte Sitzung behält ihre eigene Karte');
     assert.equal(env.hook('[data-topo-panel]').hidden, true, 'das Panel bleibt zu');
+    assert.equal(api.route().active, false, 'und es wird kein Weg markiert');
 });
 
 // ── Platzierung der Detailkarte ──────────────────────────────────────────────
