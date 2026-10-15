@@ -16,13 +16,41 @@ $adminPageTitle = 'Benutzerkonten';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('users-table', 'Benutzerkonten',
+    'Klicke auf einen Benutzer, um Einstellungen zu ändern oder ein Passwort-Reset zu senden.');
+
+admin_help_text('overlay-role', 'Rolle',
+    'Nur Benutzer mit der Rolle "Admin" können den Verwaltungsbereich (/admin) aufrufen.');
+
+admin_help_text('overlay-model', 'Standard-Modell für diesen Benutzer',
+    'Ist das gewählte Modell nicht verfügbar, wird automatisch das Modell mit der nächst-geringeren '
+    . 'Intelligenz verwendet.');
+
+admin_help_text('overlay-doc-upload', 'Dokument-Upload erlauben',
+    'Erlaubt dem Benutzer, Dokumente (Bilder) in der Chat-Oberfläche hochzuladen und per Vision-Modell '
+    . 'zu analysieren.');
+
+admin_help_text('overlay-reset-pw', 'Passwort-Reset senden',
+    'Sendet eine E-Mail mit einem Link zum Zurücksetzen des Passworts. Das Konto wird beim nächsten '
+    . 'Login zur Passwortänderung aufgefordert.');
+
+admin_help_text('cu-username', 'Benutzername',
+    'Erlaubt: Buchstaben, Ziffern und <code>_</code> (max. 100 Zeichen). Keine E-Mail-Adresse nötig.');
+
+admin_help_text('cu-password', 'Passwort',
+    'Min. 8 Zeichen, Groß-/Kleinbuchstaben, Ziffer und Sonderzeichen (<code>#?!@$%^&amp;*-</code>).');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          User accounts
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="users-card">
         <h2 style="display:flex;align-items:center;gap:10px">
-            👤 Benutzerkonten
+            👤 Benutzerkonten <?php admin_help_button('users-table'); ?>
             <button id="create-user-btn"
                     class="btn btn-primary"
                     style="font-size:.8rem;padding:4px 10px;line-height:1.4"
@@ -94,8 +122,6 @@ require __DIR__ . '/partials/layout_head.php';
             </tbody>
         </table>
 
-        <p class="hint" style="margin-top:12px">Klicke auf einen Benutzer, um Einstellungen zu ändern oder ein Passwort-Reset zu senden.</p>
-
         <div style="margin-top:12px;font-size:.82rem">
             <a href="../register.php" style="color:var(--accent);text-decoration:none">+ Registrierungsseite öffnen</a>
         </div>
@@ -120,16 +146,13 @@ require __DIR__ . '/partials/layout_head.php';
 
             <!-- Role selector -->
             <div class="form-group">
-                <label for="overlay-role">Rolle</label>
+                <label for="overlay-role">Rolle <?php admin_help_button('overlay-role'); ?></label>
                 <select id="overlay-role" style="width:100%;padding:8px 12px;background:var(--bg);
                         border:1px solid var(--border);border-radius:var(--radius);
                         color:var(--text);font-size:.88rem;font-family:var(--font)">
                     <option value="user">Benutzer</option>
                     <option value="admin">Admin</option>
                 </select>
-                <p class="hint">
-                    Nur Benutzer mit der Rolle "Admin" können den Verwaltungsbereich (/admin) aufrufen.
-                </p>
             </div>
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px">
                 <button id="overlay-save-role" class="btn btn-sm">💾 Rolle speichern</button>
@@ -140,7 +163,7 @@ require __DIR__ . '/partials/layout_head.php';
 
             <!-- Model selector -->
             <div class="form-group">
-                <label for="overlay-model">Standard-Modell für diesen Benutzer</label>
+                <label for="overlay-model">Standard-Modell für diesen Benutzer <?php admin_help_button('overlay-model'); ?></label>
                 <select id="overlay-model" style="width:100%;padding:8px 12px;background:var(--bg);
                         border:1px solid var(--border);border-radius:var(--radius);
                         color:var(--text);font-size:.88rem;font-family:var(--font)">
@@ -152,9 +175,6 @@ require __DIR__ . '/partials/layout_head.php';
                         </option>
                     <?php endforeach; ?>
                 </select>
-                <p class="hint">
-                    Ist das gewählte Modell nicht verfügbar, wird automatisch das Modell mit der nächst-geringeren Intelligenz verwendet.
-                </p>
             </div>
 
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px">
@@ -166,7 +186,7 @@ require __DIR__ . '/partials/layout_head.php';
 
             <!-- Document upload permission -->
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-                <span style="font-size:.88rem">Dokument-Upload erlauben</span>
+                <span style="font-size:.88rem">Dokument-Upload erlauben <?php admin_help_button('overlay-doc-upload'); ?></span>
                 <label style="position:relative;display:inline-block;width:40px;height:22px;cursor:pointer">
                     <input type="checkbox" id="overlay-doc-upload"
                            style="opacity:0;width:0;height:0;position:absolute">
@@ -182,20 +202,14 @@ require __DIR__ . '/partials/layout_head.php';
                 <button id="overlay-save-doc-perm" class="btn btn-sm">💾 Berechtigung speichern</button>
                 <span id="overlay-doc-perm-result" style="font-size:.82rem"></span>
             </div>
-            <p class="hint" style="margin-bottom:12px">
-                Erlaubt dem Benutzer, Dokumente (Bilder) in der Chat-Oberfläche hochzuladen und per Vision-Modell zu analysieren.
-            </p>
 
             <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
 
             <!-- Password reset (hidden for LDAP users) -->
             <div id="overlay-pw-reset-section">
-                <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:12px">
-                    Sendet eine E-Mail mit einem Link zum Zurücksetzen des Passworts.
-                    Das Konto wird beim nächsten Login zur Passwortänderung aufgefordert.
-                </p>
                 <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
                     <button id="overlay-reset-pw" class="btn">📧 Passwort-Reset senden</button>
+                    <?php admin_help_button('overlay-reset-pw'); ?>
                     <span id="overlay-reset-result" style="font-size:.82rem"></span>
                 </div>
             </div>
@@ -230,17 +244,16 @@ require __DIR__ . '/partials/layout_head.php';
                  font-size:.85rem;padding:10px 14px;margin-bottom:16px"></div>
 
             <div class="form-group">
-                <label for="cu-username">Benutzername <span style="color:var(--error)">*</span></label>
+                <label for="cu-username">Benutzername <span style="color:var(--error)">*</span> <?php admin_help_button('cu-username'); ?></label>
                 <input type="text" id="cu-username" name="cu_username"
                        autocomplete="off" placeholder="z. B. max_mustermann"
                        style="width:100%;padding:9px 12px;background:var(--bg);
                               border:1px solid var(--border);border-radius:var(--radius);
                               color:var(--text);font-size:.9rem;font-family:var(--font)">
-                <p class="hint">Erlaubt: Buchstaben, Ziffern und _ (max. 100 Zeichen). Keine E-Mail-Adresse nötig.</p>
             </div>
 
             <div class="form-group">
-                <label for="cu-password">Passwort <span style="color:var(--error)">*</span></label>
+                <label for="cu-password">Passwort <span style="color:var(--error)">*</span> <?php admin_help_button('cu-password'); ?></label>
                 <input type="password" id="cu-password" autocomplete="new-password"
                        style="width:100%;padding:9px 12px;background:var(--bg);
                               border:1px solid var(--border);border-radius:var(--radius);
@@ -249,7 +262,6 @@ require __DIR__ . '/partials/layout_head.php';
                     <div id="cu-strength-bar" style="height:100%;width:0%;border-radius:3px;transition:width .25s,background .25s"></div>
                 </div>
                 <div id="cu-strength-label" style="font-size:.75rem;margin-top:4px;min-height:1.1em;transition:color .25s"></div>
-                <p class="hint">Min. 8 Zeichen, Groß-/Kleinbuchstaben, Ziffer und Sonderzeichen (#?!@$%^&amp;*-).</p>
             </div>
 
             <div class="form-group">

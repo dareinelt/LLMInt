@@ -16,27 +16,86 @@ $adminPageTitle = 'Bildgenerierung';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('image-intro', 'Bildgenerierung (ImageInt)',
+    'Bilder erzeugt der separate Dienst <strong>ImageInt</strong> (Qwen-Image-2.1, Prompt-Enhancer '
+    . 'und Renderer laufen dort in eigenen Modellservern). LLMInt schickt den Bildwunsch per HTTP '
+    . 'dorthin und präsentiert dem Text-LLM das Tool <code>generate_image</code>.<br>'
+    . 'ImageInt hat die früheren Integrationen AUTOMATIC1111 und ComfyUI abgelöst; deren '
+    . 'Konfiguration bleibt in der Datenbank erhalten, wird aber nicht mehr angesprochen.<br>'
+    . 'Eine Generierung dauert auf einer CPU <strong>mehrere Minuten</strong>. Auf Wunsch schickt '
+    . 'LLMInt deshalb eine Benachrichtigungsmail, wenn das Bild fertig ist.');
+
+admin_help_text('image-generation-enabled', 'Bildgenerierung aktiviert',
+    'Stellt dem Text-LLM das Tool <code>generate_image</code> zur Verfügung. Ohne aktiven '
+    . 'Endpunkt bleibt das Tool aus.');
+
+admin_help_text('image-endpoint-select', 'Aktiver Image-Endpunkt',
+    'Pro Bildauftrag wird genau ein Endpunkt angesprochen – der hier ausgewählte. Ohne Auswahl '
+    . 'wird der erste aktive Endpunkt der Liste genutzt.');
+
+admin_help_text('image-notify-enabled', 'E-Mail-Benachrichtigung anbieten',
+    'Blendet im Chat nach einem laufenden Auftrag die Zustimmungsfrage ein. Erst nach einem „Ja" '
+    . 'verschickt der Worker eine Mail an die hinterlegte Adresse des Nutzers.<br><br>'
+    . 'Die Benachrichtigungsmail wird <strong>serverseitig</strong> zugestellt, damit sie auch bei '
+    . 'geschlossenem Browser ankommt: <code>php api/image_notify_worker.php</code> in kurzem '
+    . 'Intervall (Cron) ausführen. Der Worker fragt den Auftragsstatus ab und verschickt die Mail, '
+    . 'sobald das Bild fertig ist. ImageInt bewahrt fertige Bilder nur für eine begrenzte Zeit auf '
+    . '(Standard 24 h) – innerhalb dieses Fensters muss die Mail raus sein.');
+
+admin_help_text('image-notify-consent', 'Zustimmungsfrage im Chat',
+    'Text der Rückfrage, wenn ein Auftrag länger läuft. Die Antwort kommt als „Ja, per E-Mail '
+    . 'benachrichtigen" / „Nein, ich warte hier" direkt darunter.');
+
+admin_help_text('image-notify-base-url', 'Basis-URL für die Links in der Mail',
+    'Präfix für <code>{chat_url}</code> und <code>{image_url}</code>. Leer lassen, um die Adresse '
+    . 'der Anfrage zu verwenden – im Cron-Kontext ist das nicht möglich, deshalb ist ein fester '
+    . 'Wert hier zuverlässiger. Alternativ die Umgebungsvariable <code>APP_BASE_URL</code> setzen.');
+
+$imagePlaceholderHelp = 'Die Platzhalter gelten in beiden Texten. Unbekannte Platzhalter '
+    . 'bleiben unverändert stehen.<br><br>';
+foreach (imageGenerationPlaceholderHelp() as $ph => $phDesc) {
+    $imagePlaceholderHelp .= '<code>' . htmlspecialchars($ph) . '</code> – '
+        . htmlspecialchars($phDesc) . '<br>';
+}
+
+admin_help_text('image-placeholders', 'Verfügbare Platzhalter', $imagePlaceholderHelp);
+
+admin_help_text('image-prompt-trigger', 'Auslöse-Formulierungen (Systemprompt)',
+    'Wird dem Systemprompt angehängt und sagt dem Text-LLM, wann es <code>generate_image</code> '
+    . 'aufrufen soll. Ohne Deployment erweiterbar.');
+
+admin_help_text('image-prompt-anti-trigger', 'Gegenregel (Systemprompt)',
+    'Ebenso wichtig: sagt dem Modell, wann es das Tool <em>nicht</em> aufrufen darf '
+    . '(z.&nbsp;B. wenn nur über Bilder gesprochen wird).');
+
+admin_help_text('image-ep-alias', 'Name',
+    'Nur zur Anzeige – hilft bei mehreren Image-Endpunkten.');
+
+admin_help_text('image-ep-timeout', 'Auftrags-Obergrenze (Sekunden)',
+    '10 – 86400 s. Obergrenze des <em>ganzen</em> Vorgangs einschließlich Polling, nicht eines '
+    . 'einzelnen HTTP-Aufrufs. Empfehlung: 1800.');
+
+admin_help_text('image-ep-url', 'Basis-URL des ImageInt-Servers',
+    'Ohne Pfad – die API-Pfade (<code>/v1/ready</code>, <code>/v1/images/generations</code>, '
+    . '<code>/v1/jobs/{job_id}</code>) werden automatisch ergänzt. Das Token wird als '
+    . '<code>X-Auth-Token</code> gesendet, dieselbe Kopfzeile wie bei SpeechInt.');
+
+admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
+    'Gemeinsames Geheimnis des ImageInt-Servers (<code>IMAGEINT_TOKEN</code> bzw. '
+    . '<code>AUTH_TOKEN</code>). Das gespeicherte Token wird nur maskiert angezeigt – leer lassen '
+    . 'behält es bei.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Bildgenerierung (ImageInt)
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-image-card">
         <details class="config-panel" id="config-image" open>
-            <summary>🖼️ Bildgenerierung</summary>
-
-            <p class="hint" style="margin-bottom:16px">
-                Bilder erzeugt der separate Dienst <strong>ImageInt</strong>
-                (Qwen-Image-2.1, Prompt-Enhancer und Renderer laufen dort in
-                eigenen Modellservern). LLMInt schickt den Bildwunsch per HTTP
-                dorthin und präsentiert dem Text-LLM das Tool
-                <code>generate_image</code>.<br>
-                ImageInt hat die früheren Integrationen AUTOMATIC1111 und
-                ComfyUI abgelöst; deren Konfiguration bleibt in der Datenbank
-                erhalten, wird aber nicht mehr angesprochen.<br>
-                Eine Generierung dauert auf einer CPU <strong>mehrere
-                Minuten</strong>. Auf Wunsch schickt LLMInt deshalb eine
-                Benachrichtigungsmail, wenn das Bild fertig ist.
-            </p>
+            <summary>🖼️ Bildgenerierung <?php admin_help_button('image-intro'); ?></summary>
 
             <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
@@ -47,15 +106,12 @@ require __DIR__ . '/partials/layout_head.php';
                     <input type="checkbox" name="image_generation_enabled" value="1"
                            <?= $imageEnabled ? 'checked' : '' ?> style="width:auto">
                     Bildgenerierung aktiviert
+                    <?php admin_help_button('image-generation-enabled'); ?>
                 </label>
-                <p class="hint">
-                    Stellt dem Text-LLM das Tool <code>generate_image</code> zur
-                    Verfügung. Ohne aktiven Endpunkt bleibt das Tool aus.
-                </p>
             </div>
 
             <div class="form-group">
-                <label for="image-endpoint-select">Aktiver Image-Endpunkt</label>
+                <label for="image-endpoint-select">Aktiver Image-Endpunkt <?php admin_help_button('image-endpoint-select'); ?></label>
                 <select id="image-endpoint-select" name="image_endpoint_id">
                     <option value="0" <?= $imageEndpointId === 0 ? 'selected' : '' ?>>
                         – Automatisch (erster aktiver Endpunkt) –
@@ -69,8 +125,6 @@ require __DIR__ . '/partials/layout_head.php';
                     <?php endforeach; ?>
                 </select>
                 <p class="hint">
-                    Pro Bildauftrag wird genau ein Endpunkt angesprochen – der hier
-                    ausgewählte. Ohne Auswahl wird der erste aktive Endpunkt der Liste genutzt.<br>
                     Aktuell wirksam: <strong><?= htmlspecialchars(imageIntSourceLabel($imageUrlSrc)) ?></strong><?php
                     if ($imageUrlSrc === 'env'): ?> – die Umgebungsvariable
                     <code>IMAGEINT_URL</code> hat Vorrang vor dieser Auswahl.<?php endif; ?>
@@ -87,23 +141,14 @@ require __DIR__ . '/partials/layout_head.php';
                     <input type="checkbox" name="image_notify_enabled" value="1"
                            <?= $imageNotifyEnabled ? 'checked' : '' ?> style="width:auto">
                     E-Mail-Benachrichtigung anbieten
+                    <?php admin_help_button('image-notify-enabled'); ?>
                 </label>
-                <p class="hint">
-                    Blendet im Chat nach einem laufenden Auftrag die Zustimmungsfrage
-                    ein. Erst nach einem „Ja" verschickt der Worker eine Mail an die
-                    hinterlegte Adresse des Nutzers.
-                </p>
             </div>
 
             <div class="form-group">
-                <label for="image-notify-consent">Zustimmungsfrage im Chat</label>
+                <label for="image-notify-consent">Zustimmungsfrage im Chat <?php admin_help_button('image-notify-consent'); ?></label>
                 <textarea id="image-notify-consent" name="image_notify_consent_text"
                           rows="3"><?= htmlspecialchars($imageConsentText) ?></textarea>
-                <p class="hint">
-                    Text der Rückfrage, wenn ein Auftrag länger läuft. Die Antwort
-                    kommt als „Ja, per E-Mail benachrichtigen" / „Nein, ich warte hier"
-                    direkt darunter.
-                </p>
             </div>
 
             <div class="form-group">
@@ -119,52 +164,26 @@ require __DIR__ . '/partials/layout_head.php';
             </div>
 
             <div class="form-group">
-                <label for="image-notify-base-url">Basis-URL für die Links in der Mail</label>
+                <label for="image-notify-base-url">Basis-URL für die Links in der Mail <?php admin_help_button('image-notify-base-url'); ?></label>
                 <input type="url" id="image-notify-base-url" name="image_notify_base_url"
                        placeholder="https://chat.example.org"
                        value="<?= htmlspecialchars($imageNotifyBaseUrl) ?>">
-                <p class="hint">
-                    Präfix für <code>{chat_url}</code> und <code>{image_url}</code>.
-                    Leer lassen, um die Adresse der Anfrage zu verwenden – im
-                    Cron-Kontext ist das nicht möglich, deshalb ist ein fester Wert
-                    hier zuverlässiger. Alternativ die Umgebungsvariable
-                    <code>APP_BASE_URL</code> setzen.
-                </p>
             </div>
 
             <div class="form-group">
-                <label>Verfügbare Platzhalter</label>
-                <p class="hint" style="font-family:monospace;line-height:1.7">
-                    <?php foreach (imageGenerationPlaceholderHelp() as $ph => $phDesc): ?>
-                        <code><?= htmlspecialchars($ph) ?></code> – <?= htmlspecialchars($phDesc) ?><br>
-                    <?php endforeach; ?>
-                </p>
-                <p class="hint">
-                    Die Platzhalter gelten in beiden Texten. Unbekannte Platzhalter
-                    bleiben unverändert stehen.
-                </p>
+                <label>Verfügbare Platzhalter <?php admin_help_button('image-placeholders'); ?></label>
             </div>
 
             <div class="form-group">
-                <label for="image-prompt-trigger">Auslöse-Formulierungen (Systemprompt)</label>
+                <label for="image-prompt-trigger">Auslöse-Formulierungen (Systemprompt) <?php admin_help_button('image-prompt-trigger'); ?></label>
                 <textarea id="image-prompt-trigger" name="image_prompt_trigger_text"
                           rows="5"><?= htmlspecialchars($imageTriggerText) ?></textarea>
-                <p class="hint">
-                    Wird dem Systemprompt angehängt und sagt dem Text-LLM, wann es
-                    <code>generate_image</code> aufrufen soll. Ohne Deployment
-                    erweiterbar.
-                </p>
             </div>
 
             <div class="form-group">
-                <label for="image-prompt-anti-trigger">Gegenregel (Systemprompt)</label>
+                <label for="image-prompt-anti-trigger">Gegenregel (Systemprompt) <?php admin_help_button('image-prompt-anti-trigger'); ?></label>
                 <textarea id="image-prompt-anti-trigger" name="image_prompt_anti_trigger_text"
                           rows="4"><?= htmlspecialchars($imageAntiTriggerText) ?></textarea>
-                <p class="hint">
-                    Ebenso wichtig: sagt dem Modell, wann es das Tool
-                    <em>nicht</em> aufrufen darf (z.&nbsp;B. wenn nur über Bilder
-                    gesprochen wird).
-                </p>
             </div>
 
             <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
@@ -177,15 +196,6 @@ require __DIR__ . '/partials/layout_head.php';
                  style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);
                         border-radius:8px;background:var(--surface-alt)"></div>
 
-            <p class="hint" style="margin-top:12px">
-                Die Benachrichtigungsmail wird <strong>serverseitig</strong>
-                zugestellt, damit sie auch bei geschlossenem Browser ankommt:
-                <code>php api/image_notify_worker.php</code> in kurzem Intervall
-                (Cron) ausführen. Der Worker fragt den Auftragsstatus ab und
-                verschickt die Mail, sobald das Bild fertig ist. ImageInt bewahrt
-                fertige Bilder nur für eine begrenzte Zeit auf (Standard 24 h) –
-                innerhalb dieses Fensters muss die Mail raus sein.
-            </p>
             </form>
 
             <!-- ── Image endpoint management ──────────────────────────────── -->
@@ -276,52 +286,33 @@ require __DIR__ . '/partials/layout_head.php';
 
                     <div class="form-row">
                         <div class="form-group" style="flex:1">
-                            <label for="image-ep-alias">Name</label>
+                            <label for="image-ep-alias">Name <?php admin_help_button('image-ep-alias'); ?></label>
                             <input type="text" id="image-ep-alias" name="image_ep_alias"
                                    placeholder="Image-Host 1" maxlength="120"
                                    value="<?= $editImageEp ? htmlspecialchars($editImageEp['alias']) : '' ?>">
-                            <p class="hint">Nur zur Anzeige – hilft bei mehreren Image-Endpunkten.</p>
                         </div>
                         <div class="form-group" style="flex:1;min-width:140px">
-                            <label for="image-ep-timeout">Auftrags-Obergrenze (Sekunden) *</label>
+                            <label for="image-ep-timeout">Auftrags-Obergrenze (Sekunden) * <?php admin_help_button('image-ep-timeout'); ?></label>
                             <input type="number" id="image-ep-timeout" name="image_ep_timeout"
                                    min="10" max="86400" required
                                    value="<?= $editImageEp ? (int) $editImageEp['timeout'] : 1800 ?>">
-                            <p class="hint">
-                                10 – 86400 s. Obergrenze des <em>ganzen</em> Vorgangs
-                                einschließlich Polling, nicht eines einzelnen HTTP-Aufrufs.
-                                Empfehlung: 1800.
-                            </p>
                         </div>
                     </div>
 
                     <div class="form-group">
-                        <label for="image-ep-url">Basis-URL des ImageInt-Servers *</label>
+                        <label for="image-ep-url">Basis-URL des ImageInt-Servers * <?php admin_help_button('image-ep-url'); ?></label>
                         <input type="url" id="image-ep-url" name="image_ep_base_url"
                                placeholder="http://192.168.1.30:8080" required
                                value="<?= $editImageEp ? htmlspecialchars($editImageEp['base_url']) : '' ?>">
-                        <p class="hint">
-                            Ohne Pfad – die API-Pfade (<code>/v1/ready</code>,
-                            <code>/v1/images/generations</code>, <code>/v1/jobs/{job_id}</code>)
-                            werden automatisch ergänzt. Das Token wird als
-                            <code>X-Auth-Token</code> gesendet, dieselbe Kopfzeile wie bei
-                            SpeechInt.
-                        </p>
                     </div>
 
                     <div class="form-group">
-                        <label for="image-ep-token">Auth-Token (<code>X-Auth-Token</code>)</label>
+                        <label for="image-ep-token">Auth-Token (<code>X-Auth-Token</code>) <?php admin_help_button('image-ep-token'); ?></label>
                         <input type="text" id="image-ep-token" name="image_ep_token"
                                autocomplete="off" spellcheck="false"
                                placeholder="<?= $editImageEp && (string) ($editImageEp['token'] ?? '') !== ''
                                                   ? htmlspecialchars(imageIntMaskToken((string) $editImageEp['token']))
                                                   : 'ohne Token bleibt der Endpunkt offen' ?>">
-                        <p class="hint">
-                            Gemeinsames Geheimnis des ImageInt-Servers
-                            (<code>IMAGEINT_TOKEN</code> bzw. <code>AUTH_TOKEN</code>).
-                            Das gespeicherte Token wird nur maskiert angezeigt – leer
-                            lassen behält es bei.
-                        </p>
                         <?php if ($editImageEp && (string) ($editImageEp['token'] ?? '') !== ''): ?>
                         <label class="inline" style="margin-top:6px">
                             <input type="checkbox" id="image-ep-clear-token" name="image_ep_clear_token">

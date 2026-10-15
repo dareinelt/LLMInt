@@ -708,7 +708,9 @@ Die Dashboard-Seite des Adminbereichs (661 Zeilen): Nachrichtenflow-Topologie
 
 Gemeinsame Hülle aller Adminseiten. Jede Seite bindet `bootstrap.php`, `layout_head.php`
 und `layout_foot.php` ein und rendert nur ihren eigenen Karten-Markup samt zugehörigem
-Inline-JavaScript.
+Inline-JavaScript. Beschreibungen, die nicht zur unmittelbaren Bedienung nötig sind, stehen
+nicht im Markup, sondern hinter dem **?**-Symbol: die Seite registriert sie mit
+`admin_help_text()`, `layout_foot.php` rendert die Popup.
 
 | Datei | Zweck |
 |---|---|
@@ -717,11 +719,15 @@ Inline-JavaScript.
 | `admin/partials/data.php` | Livedaten-Aufbereitung; einzige top-level Funktion `modelIntelligenceLabel` |
 | `admin/partials/nav.php` | Seitenleiste (`admin_nav(string $active)`) – definiert die Liste der Adminseiten |
 | `admin/partials/layout_head.php` | `<head>` inkl. Admin-CSS, Kopfzeile und Seitenleiste |
-| `admin/partials/layout_foot.php` | Skript-Abschluss und schließende Tags |
+| `admin/partials/help.php` | Feldbeschreibungen hinter dem **?**-Symbol (`admin_help_text()`, `admin_help_button()`, `admin_help_overlay()`) |
+| `admin/partials/layout_foot.php` | Skript-Abschluss, Beschreibungs-Overlay und schließende Tags |
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
 | `modelIntelligenceLabel` | `modelIntelligenceLabel(string $model): string` | Liefert das menschenlesbare Intelligenz-Label eines Modells (`basic`/`standard`/`advanced`/`expert`). |
+| `admin_help_text` | `admin_help_text(string $id, string $title, string $body): void` | Registriert die Beschreibung, die das **?** mit der ID `$id` öffnet. `$title` ist die Überschrift der Popup (reiner Text), `$body` ihr Text mit demselben Inline-Markup wie die Seite (`<code>`, `<strong>`, `<em>`). |
+| `admin_help_button` | `admin_help_button(string $id): void` | Gibt den **?**-Knopf aus (`class="field-help"`, `data-help="$id"`); er öffnet die Popup mit den Beschreibungen der Seite. |
+| `admin_help_overlay` | `admin_help_overlay(): void` | Gibt die Popup samt registrierten Texten einmal je Seite aus; `admin/partials/layout_foot.php` ruft sie auf. |
 
 **Verarbeitete `action`-Werte (POST + CSRF, `admin/partials/actions.php`):**
 `add_endpoint`, `update_endpoint`,

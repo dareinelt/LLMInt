@@ -16,6 +16,15 @@ $adminPageTitle = 'Websuche';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('searxng-base-url', 'SearXNG-URL',
+    'Nur die Basis-URL angeben, <strong>ohne</strong> den Pfad <code>/search</code> – dieser wird '
+    . 'automatisch ergänzt.<br>Beispiele: <code>https://search.example.org</code> oder '
+    . '<code>http://192.168.1.10:8080</code><br>Leer lassen, um die Websuche zu deaktivieren.');
+
 ?>
     <div class="card" id="config-searxng-card">
         <details class="config-panel" id="config-searxng" open>
@@ -25,15 +34,10 @@ require __DIR__ . '/partials/layout_head.php';
             <input type="hidden" name="action" value="save_search_settings">
 
             <div class="form-group">
-                <label for="searxng-base-url">SearXNG-URL</label>
+                <label for="searxng-base-url">SearXNG-URL <?php admin_help_button('searxng-base-url'); ?></label>
                 <input type="url" id="searxng-base-url" name="searxng_base_url"
                        placeholder="https://search.example.org"
                        value="<?= htmlspecialchars($searxngBaseUrl) ?>">
-                <p class="hint">
-                    Nur die Basis-URL angeben, <strong>ohne</strong> den Pfad <code>/search</code> – dieser wird automatisch ergänzt.<br>
-                    Beispiele: <code>https://search.example.org</code> oder <code>http://192.168.1.10:8080</code><br>
-                    Leer lassen, um die Websuche zu deaktivieren.
-                </p>
             </div>
 
             <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">

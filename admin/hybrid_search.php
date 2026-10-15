@@ -16,6 +16,14 @@ $adminPageTitle = 'Hybrid-Suche';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('hybrid-search-rebuild', 'Embeddings neu berechnen',
+    'Berechnet fehlende oder veraltete Embeddings für alle Dokument-Chunks. Läuft im Hintergrund '
+    . 'und kann mehrere Minuten dauern.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Hybrid-Suche Einstellungen
@@ -78,9 +86,7 @@ require __DIR__ . '/partials/layout_head.php';
 
             <!-- Embeddings neu berechnen -->
             <hr style="border-color:var(--border);margin:24px 0">
-            <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">🔄 Embeddings neu berechnen</h3>
-            <p class="hint">Berechnet fehlende oder veraltete Embeddings für alle Dokument-Chunks.
-                Läuft im Hintergrund und kann mehrere Minuten dauern.</p>
+            <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">🔄 Embeddings neu berechnen <?php admin_help_button('hybrid-search-rebuild'); ?></h3>
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
                 <button type="button" class="btn" id="rebuild-emb-btn">🔄 Neu berechnen (fehlende)</button>
                 <button type="button" class="btn btn-secondary" id="rebuild-emb-all-btn">♻️ Alle neu berechnen</button>

@@ -16,18 +16,21 @@ $adminPageTitle = 'Embedding-Endpunkte';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('embedding-intro', 'Embedding-Endpunkte',
+    'Konfiguriere OpenAI-kompatible Embedding-Server (z.B. LM Studio, Ollama, OpenAI). '
+    . 'Embeddings werden für jeden Dokument-Chunk erzeugt und ermöglichen die semantische Suche.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Embedding-Endpunkte (Hybrid-RAG)
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-embedding-card">
         <details class="config-panel" open>
-            <summary>🧬 Embedding-Endpunkte</summary>
-
-            <p class="hint" style="margin-bottom:16px">
-                Konfiguriere OpenAI-kompatible Embedding-Server (z.B. LM Studio, Ollama, OpenAI).
-                Embeddings werden für jeden Dokument-Chunk erzeugt und ermöglichen die semantische Suche.
-            </p>
+            <summary>🧬 Embedding-Endpunkte <?php admin_help_button('embedding-intro'); ?></summary>
 
             <?php if (empty($embeddingEndpoints)): ?>
                 <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:16px">

@@ -16,20 +16,40 @@ $adminPageTitle = 'Entscheidungsfindung';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('decision-overview', 'Kategorien der Entscheidungsfindung',
+    'Verwalte die Kategorien, nach denen das <strong>Entscheidungsmodell</strong> Nutzer-Prompts '
+    . 'klassifiziert. Jede Kategorie besitzt eine <em>Definition</em> (erklärt dem Modell, wann diese '
+    . 'Kategorie zutrifft) und eine <em>Entscheidungsregel</em> (nummerierter Eintrag in der '
+    . 'Prioritätsliste). Änderungen wirken sich sofort auf den erzeugten Klassifikations-Prompt aus.');
+
+admin_help_text('decision-definition', 'Definition',
+    'Erscheint als <code>* Kategorie: …</code> im Klassifikations-Prompt.');
+
+admin_help_text('decision-prompt-import', 'Import aus prompt.txt',
+    'Lade eine Textdatei hoch, die dem Schema der <code>lib/prompt.txt</code> entspricht. Die Datei '
+    . 'wird analysiert und du erhältst eine Vorschau der erkannten Kategorien, bevor die Einstellungen '
+    . 'gespeichert werden.');
+
+admin_help_text('decision-decision-rule', 'Entscheidungsregel',
+    'Vollständiger Regeltext inkl. „If / Else if / Otherwise" und „, return Kategorie."');
+
+admin_help_text('decision-sort-order', 'Anzeigereihenfolge',
+    'Kleinere Zahl = weiter oben in der Kategorieliste.');
+
+admin_help_text('decision-decision-priority', 'Entscheidungspriorität',
+    '1 = höchste Priorität in den Entscheidungsregeln.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Entscheidungsfindung – Kategorien & Definitionen
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-decision-card">
         <details class="config-panel" id="config-decision" open>
-        <summary>🗂️ Entscheidungsfindung</summary>
-
-        <p class="hint" style="margin-bottom:18px">
-            Verwalte die Kategorien, nach denen das <strong>Entscheidungsmodell</strong> Nutzer-Prompts klassifiziert.
-            Jede Kategorie besitzt eine <em>Definition</em> (erklärt dem Modell, wann diese Kategorie zutrifft)
-            und eine <em>Entscheidungsregel</em> (nummerierter Eintrag in der Prioritätsliste).
-            Änderungen wirken sich sofort auf den erzeugten Klassifikations-Prompt aus.
-        </p>
+        <summary>🗂️ Entscheidungsfindung <?php admin_help_button('decision-overview'); ?></summary>
 
         <!-- Category list -->
         <?php if (empty($routingCategoriesData)): ?>
@@ -89,33 +109,29 @@ require __DIR__ . '/partials/layout_head.php';
                 </div>
 
                 <div class="form-group">
-                    <label for="rc-definition">Definition</label>
+                    <label for="rc-definition">Definition <?php admin_help_button('decision-definition'); ?></label>
                     <textarea id="rc-definition" name="rc_definition" rows="3"
                               placeholder="Beschreibe, wann diese Kategorie zutrifft …"
                               style="width:100%;max-width:700px;resize:vertical"></textarea>
-                    <p class="hint">Erscheint als <code>* Kategorie: …</code> im Klassifikations-Prompt.</p>
                 </div>
 
                 <div class="form-group">
-                    <label for="rc-decision-rule">Entscheidungsregel</label>
+                    <label for="rc-decision-rule">Entscheidungsregel <?php admin_help_button('decision-decision-rule'); ?></label>
                     <textarea id="rc-decision-rule" name="rc_decision_rule" rows="2"
                               placeholder="z.&thinsp;B. Else if the primary task is programming, return Programming."
                               style="width:100%;max-width:700px;resize:vertical"></textarea>
-                    <p class="hint">Vollständiger Regeltext inkl. „If / Else if / Otherwise" und „, return Kategorie."</p>
                 </div>
 
                 <div style="display:flex;gap:24px;flex-wrap:wrap">
                     <div class="form-group" style="flex:0 0 160px">
-                        <label for="rc-sort-order">Anzeigereihenfolge</label>
+                        <label for="rc-sort-order">Anzeigereihenfolge <?php admin_help_button('decision-sort-order'); ?></label>
                         <input type="number" id="rc-sort-order" name="rc_sort_order" min="0" max="999" value="0"
                                style="max-width:100px">
-                        <p class="hint">Kleinere Zahl = weiter oben in der Kategorieliste.</p>
                     </div>
                     <div class="form-group" style="flex:0 0 160px">
-                        <label for="rc-decision-priority">Entscheidungspriorität</label>
+                        <label for="rc-decision-priority">Entscheidungspriorität <?php admin_help_button('decision-decision-priority'); ?></label>
                         <input type="number" id="rc-decision-priority" name="rc_decision_priority" min="0" max="999" value="0"
                                style="max-width:100px">
-                        <p class="hint">1 = höchste Priorität in den Entscheidungsregeln.</p>
                     </div>
                 </div>
 
@@ -141,12 +157,7 @@ require __DIR__ . '/partials/layout_head.php';
 
         <!-- Import from prompt.txt -->
         <hr style="margin:28px 0;border:none;border-top:1px solid var(--border)">
-        <h3 style="margin:0 0 10px;font-size:1rem">📥 Import aus prompt.txt</h3>
-        <p class="hint" style="margin-bottom:14px">
-            Lade eine Textdatei hoch, die dem Schema der <code>lib/prompt.txt</code> entspricht.
-            Die Datei wird analysiert und du erhältst eine Vorschau der erkannten Kategorien,
-            bevor die Einstellungen gespeichert werden.
-        </p>
+        <h3 style="margin:0 0 10px;font-size:1rem">📥 Import aus prompt.txt <?php admin_help_button('decision-prompt-import'); ?></h3>
 
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
             <label class="btn" style="cursor:pointer;margin:0" for="rc-import-file">

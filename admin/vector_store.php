@@ -16,20 +16,41 @@ $adminPageTitle = 'Wissensdatenbank';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('vector-store-overview', 'Wissensdatenbank (Vektordatenbank)',
+    'Gemeinsames Wissen für alle Nutzer kommt ausschließlich aus einer Milvus-Vektordatenbank, die von '
+    . '<a href="https://github.com/dareinelt/docvecwizard" target="_blank" rel="noopener">docvecwizard</a> '
+    . 'befüllt wird. Nutzer-Uploads bleiben privat. Bei jeder Chat-Anfrage werden passende Abschnitte '
+    . 'aus der aktiven Vektordatenbank abgerufen und dem Modell als Kontext mitgegeben.');
+
+admin_help_text('vector-store-milvus-instance', 'Eigene Milvus-Instanz',
+    'Der Dienst <code>milvus</code> aus <code>docker-compose.yml</code> ist unter <code>'
+    . htmlspecialchars(milvusBaseUrl()) . '</code> erreichbar. Felder leer lassen, um die '
+    . 'Compose-Standardwerte zu verwenden.');
+
+admin_help_text('vector-store-import', 'docvecwizard-Export importieren',
+    'Exportarchiv (<code>.tar.gz</code>, Format 1.x) aus docvecwizard hochladen. Chunk-Texte landen in '
+    . 'MySQL, die Vektoren unverändert in der lokalen Milvus-Collection. Große Exporte können '
+    . 'alternativ in den Ordner <code>vector_imports/</code> des Web-Containers gelegt und unten '
+    . 'ausgewählt werden.');
+
+admin_help_text('vector-store-embedding-model', 'Embedding-Modell',
+    '⚠️ Für die Anfrage-Vektorisierung muss der Embedding-Endpunkt von LLMInt dasselbe Modell liefern, '
+    . 'mit dem der Export in docvecwizard erzeugt wurde'
+    . (empty($vectorLocalDocs['models'])
+        ? '.'
+        : ' (importiert: ' . htmlspecialchars(implode(', ', array_map(static fn(array $m): string => $m['embedding_model'] . ' / ' . $m['embedding_dimension'] . ' Dim.', $vectorLocalDocs['models']))) . ').'));
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Vektordatenbank (docvecwizard / Milvus)
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-vector-store-card">
         <details class="config-panel" open>
-            <summary>🧠 Wissensdatenbank (Vektordatenbank)</summary>
-
-            <p class="hint" style="margin-bottom:16px">
-                Gemeinsames Wissen für alle Nutzer kommt ausschließlich aus einer Milvus-Vektordatenbank, die von
-                <a href="https://github.com/dareinelt/docvecwizard" target="_blank" rel="noopener">docvecwizard</a> befüllt wird.
-                Nutzer-Uploads bleiben privat. Bei jeder Chat-Anfrage werden passende Abschnitte aus der aktiven
-                Vektordatenbank abgerufen und dem Modell als Kontext mitgegeben.
-            </p>
+            <summary>🧠 Wissensdatenbank (Vektordatenbank) <?php admin_help_button('vector-store-overview'); ?></summary>
 
             <form method="POST" id="vector-store-form">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
@@ -101,8 +122,7 @@ require __DIR__ . '/partials/layout_head.php';
 
                 <!-- ── Local: own Milvus ── -->
                 <fieldset class="vector-mode-fields" data-mode="local" <?= $vectorStoreMode === 'local' ? '' : 'hidden' ?>>
-                    <legend>🗄️ Eigene Milvus-Instanz</legend>
-                    <p class="hint">Der Dienst <code>milvus</code> aus <code>docker-compose.yml</code> ist unter <code><?= htmlspecialchars(milvusBaseUrl()) ?></code> erreichbar. Felder leer lassen, um die Compose-Standardwerte zu verwenden.</p>
+                    <legend>🗄️ Eigene Milvus-Instanz <?php admin_help_button('vector-store-milvus-instance'); ?></legend>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
                         <div class="form-group">
                             <label for="milvus-url">Milvus-URL (REST)</label>
@@ -125,20 +145,11 @@ require __DIR__ . '/partials/layout_head.php';
                             <input type="number" id="milvus-timeout" name="milvus_timeout" min="3" max="600" value="<?= (int) $milvusTimeout ?>">
                         </div>
                         <div class="form-group">
-                            <label for="milvus-collection">Collection <small style="color:var(--text-muted)">(leer = automatisch)</small></label>
+                            <label for="milvus-collection">Collection <small style="color:var(--text-muted)">(leer = automatisch)</small><?php admin_help_button('vector-store-embedding-model'); ?></label>
                             <input type="text" id="milvus-collection" name="milvus_collection" placeholder="docvec_<?= htmlspecialchars($vectorLocalDocs['models'][0]['collection_name'] ?? 'modell') ?>"
                                    value="<?= htmlspecialchars($milvusCollection) ?>">
                         </div>
                     </div>
-                    <p class="hint">
-                        ⚠️ Für die Anfrage-Vektorisierung muss der Embedding-Endpunkt von LLMInt dasselbe Modell liefern,
-                        mit dem der Export in docvecwizard erzeugt wurde
-                        <?php if (!empty($vectorLocalDocs['models'])): ?>
-                            (importiert: <?= htmlspecialchars(implode(', ', array_map(static fn(array $m): string => $m['embedding_model'] . ' / ' . $m['embedding_dimension'] . ' Dim.', $vectorLocalDocs['models']))) ?>).
-                        <?php else: ?>
-                            .
-                        <?php endif; ?>
-                    </p>
                     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
                         <button type="button" class="btn btn-secondary" id="vector-test-local-btn">🔌 Verbindung testen</button>
                         <span id="vector-test-local-result" style="font-size:.85rem"></span>
@@ -151,12 +162,7 @@ require __DIR__ . '/partials/layout_head.php';
             <!-- ── Import of docvecwizard exports (local mode) ── -->
             <div id="vector-import-section" <?= $vectorStoreMode === 'local' ? '' : 'hidden' ?>>
                 <hr style="border-color:var(--border);margin:24px 0">
-                <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">📦 docvecwizard-Export importieren</h3>
-                <p class="hint">
-                    Exportarchiv (<code>.tar.gz</code>, Format 1.x) aus docvecwizard hochladen. Chunk-Texte landen in MySQL,
-                    die Vektoren unverändert in der lokalen Milvus-Collection. Große Exporte können alternativ in den
-                    Ordner <code>vector_imports/</code> des Web-Containers gelegt und unten ausgewählt werden.
-                </p>
+                <h3 style="margin:0 0 12px;font-size:.95rem;font-weight:600">📦 docvecwizard-Export importieren <?php admin_help_button('vector-store-import'); ?></h3>
                 <form id="vector-import-form" style="margin-top:12px">
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
                         <div class="form-group">

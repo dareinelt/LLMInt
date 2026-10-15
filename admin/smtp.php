@@ -16,6 +16,13 @@ $adminPageTitle = 'E-Mail (SMTP)';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('smtp-pass', 'SMTP-Passwort',
+    'Leer lassen, um das gespeicherte Passwort beizubehalten.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          SMTP / Outgoing Mail Server
@@ -70,11 +77,10 @@ require __DIR__ . '/partials/layout_head.php';
                            value="<?= htmlspecialchars($smtpUser) ?>">
                 </div>
                 <div class="form-group">
-                    <label for="smtp-pass">SMTP-Passwort</label>
+                    <label for="smtp-pass">SMTP-Passwort <?php admin_help_button('smtp-pass'); ?></label>
                     <input type="password" id="smtp-pass" name="smtp_pass"
                            autocomplete="new-password"
                            placeholder="<?= $smtpPass !== '' ? '(gespeichert – leer lassen zum Beibehalten)' : 'Passwort eingeben' ?>">
-                    <p class="hint">Leer lassen, um das gespeicherte Passwort beizubehalten.</p>
                 </div>
             </div>
             </div>

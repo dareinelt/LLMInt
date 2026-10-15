@@ -16,6 +16,13 @@ $adminPageTitle = 'Passwort ändern';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('new-password', 'Neues Passwort',
+    'Mindestens 8 Zeichen.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Change password
@@ -34,10 +41,9 @@ require __DIR__ . '/partials/layout_head.php';
 
             <div class="form-row" style="max-width:740px">
                 <div class="form-group">
-                    <label for="new_password">Neues Passwort</label>
+                    <label for="new_password">Neues Passwort <?php admin_help_button('new-password'); ?></label>
                     <input type="password" id="new_password" name="new_password"
                            autocomplete="new-password" minlength="8" required>
-                    <p class="hint">Mindestens 8 Zeichen.</p>
                 </div>
                 <div class="form-group">
                     <label for="new_password_confirm">Neues Passwort wiederholen</label>
