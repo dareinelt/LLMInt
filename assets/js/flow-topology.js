@@ -247,7 +247,9 @@
         let previousStates = new Map();
         let selected = null;
         let hovered = null;
+        let route = { nodes: new Set(), edges: new Set(), active: false };
         let cardHit = null;
+        let cardSpot = null;
         let problemFilter = false;
         const kindFilter = new Set(Object.keys(KIND_LABELS));
 
@@ -737,6 +739,59 @@
             return { X: s.X, Y: s.Y, s: p.s, behind: p.behind };
         }
 
+        // ── Weg vom Endpunkt bis zum Client ───────────────────────────────────
+        // The network is a tree with LLMInt at its root, so the way of a message
+        // can be walked: from the clicked node up its branch to the core and from
+        // there across into the clients branch. The clients are siblings of the
+        // endpoint branches, not their descendants, so both halves belong to it.
+
+        function parentEdges() {
+            const parents = new Map();
+            for (const edge of edges) {
+                if (parents.has(edge.to)) continue;
+                parents.set(edge.to, edge);
+            }
+            return parents;
+        }
+
+        function buildRoute(key) {
+            const next = { nodes: new Set(), edges: new Set(), active: false };
+            if (!key || !nodes.has(key)) return next;
+
+            const parents = parentEdges();
+            const walked = new Set();
+            let cursor = key;
+            while (cursor && !walked.has(cursor)) {
+                walked.add(cursor);
+                next.nodes.add(cursor);
+                const up = parents.get(cursor);
+                if (!up) break;
+                next.edges.add(up.id);
+                cursor = up.from;
+            }
+
+            const cloud = Array.from(nodes.values())
+                .find(function (node) { return node.kind === 'clients'; });
+            if (cloud && !next.nodes.has(cloud.key)) {
+                next.nodes.add(cloud.key);
+                const cloudUp = parents.get(cloud.key);
+                if (cloudUp) next.edges.add(cloudUp.id);
+                for (const node of nodes.values()) {
+                    if (node.kind !== 'client') continue;
+                    next.nodes.add(node.key);
+                    const clientUp = parents.get(node.key);
+                    if (clientUp) next.edges.add(clientUp.id);
+                }
+            }
+
+            next.active = next.nodes.size > 0;
+            return next;
+        }
+
+        function refreshRoute() {
+            route = buildRoute(selected);
+        }
+
         function nodeAlpha(node) {
             const isSelected = selected === node.key;
             const isHovered = hovered === node.key;
@@ -746,22 +801,28 @@
             }
             if (!kindFilter.has(node.kind) && !isSelected) alpha *= 0.22;
             if (mode3d && !node.screen.visible) alpha *= 0.3;
+            // Everything beside the way steps back, so the way itself reads.
+            if (route.active && !route.nodes.has(node.key) && !isSelected && !isHovered) alpha *= 0.16;
             return alpha;
         }
 
-        function isNeighbour(node) {
-            if (!selected) return false;
-            if (node.key === selected) return true;
-            const centre = nodes.get(selected);
-            return !!centre && centre.neighbours.indexOf(node.key) !== -1;
+        function isNeighbour(node, key) {
+            const centre = key ? nodes.get(key) : null;
+            if (!centre || !node) return false;
+            if (node.key === centre.key) return true;
+            return centre.neighbours.indexOf(node.key) !== -1;
         }
 
         function edgeAlpha(edge) {
             if (!edge.visible) return 0;
-            const focusKey = selected || hovered;
-            if (focusKey) {
-                if (edge.from === focusKey || edge.to === focusKey) return 1;
-                if (isNeighbour(edge.a) && isNeighbour(edge.b)) return 0.5;
+            if (route.active) {
+                if (route.edges.has(edge.id)) return 1;
+                // Hovering previews the way a click would trace.
+                if (hovered && isNeighbour(edge.a, hovered) && isNeighbour(edge.b, hovered)) return 0.42;
+                return 0.06;
+            }
+            if (hovered) {
+                if (edge.from === hovered || edge.to === hovered) return 1;
                 return 0.09;
             }
             if (problemFilter) return (edge.state === 'error' || edge.state === 'warn') ? 1 : 0.07;
@@ -885,21 +946,21 @@
 
         function drawEdges() {
             const dashOffset = -((performance.now() / 90) % 11);
-            const focusKey = selected || hovered;
             for (const edge of edges) {
                 const alpha = edgeAlpha(edge);
                 if (alpha <= 0.02) continue;
                 const path = edgePath(edge);
                 const triple = STATE_RGB[edge.state] || STATE_RGB.off;
-                const focused = !!focusKey && (edge.from === focusKey || edge.to === focusKey);
+                const onRoute = route.active && route.edges.has(edge.id);
+                const focused = !!hovered && (edge.from === hovered || edge.to === hovered);
                 const baseWidth = edge.state === 'error' ? 3.2 : 2.4;
-                const width = baseWidth + (focused ? 1 : 0);
+                const width = baseWidth + (onRoute ? 1.8 : focused ? 1 : 0);
                 const stroke = edge.state === 'off' ? 'rgba(150,162,188,0.75)' : rgba(triple, 0.9);
 
                 // Soft halo first: it keeps the lines legible when the whole
                 // picture is scaled down for the README.
                 ctx.save();
-                ctx.globalAlpha = alpha * (focused ? 0.34 : 0.24);
+                ctx.globalAlpha = alpha * (onRoute ? 0.5 : focused ? 0.34 : 0.24);
                 ctx.lineWidth = width * 3.4;
                 ctx.lineCap = 'round';
                 ctx.strokeStyle = rgba(triple, 0.55);
@@ -914,10 +975,10 @@
                 if (edge.state === 'error') {
                     ctx.setLineDash([6, 5]);
                     ctx.lineDashOffset = dashOffset;
-                } else if (edge.synthetic) {
+                } else if (edge.synthetic && !onRoute) {
                     ctx.setLineDash([7, 6]);
                 }
-                ctx.strokeStyle = stroke;
+                ctx.strokeStyle = onRoute ? rgba(triple, 1) : stroke;
                 traceEdge(path);
                 ctx.stroke();
                 ctx.restore();
@@ -955,6 +1016,8 @@
             for (const edge of edges) {
                 const alpha = edgeAlpha(edge);
                 if (alpha <= 0.05 || edge.state === 'off') continue;
+                // While a way is highlighted only that way keeps its dots.
+                if (route.active && !route.edges.has(edge.id)) continue;
                 const path = edgePath(edge);
                 const triple = STATE_RGB[edge.state] || STATE_RGB.ok;
                 for (const particle of edge.particles) {
@@ -1114,6 +1177,7 @@
                 const stateTriple = STATE_RGB[node.state] || STATE_RGB.off;
                 const isSelected = selected === node.key;
                 const isHovered = hovered === node.key;
+                const onRoute = route.active && route.nodes.has(node.key);
 
                 ctx.save();
                 ctx.globalAlpha = alpha;
@@ -1156,6 +1220,16 @@
                 if (node.synthetic) ctx.setLineDash([4, 3]);
                 ctx.stroke();
                 ctx.setLineDash([]);
+
+                // A station on the way gets its own ring, so the highlighted path
+                // is readable even where several lines meet in the core.
+                if (onRoute) {
+                    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.arc(node.screen.x, node.screen.y, radius * 1.6, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
 
                 if (radius > 9) {
                     drawGlyph(node, node.screen.x, node.screen.y, radius * 0.92,
@@ -1497,12 +1571,127 @@
             ctx.closePath();
         }
 
+        // ── Placing the detail card ──────────────────────────────────────────
+
+        // The card is as big as a good part of the picture, so where it lands
+        // decides what stays readable. It never sits on the clicked bubble and
+        // never on the way that leads away from it - otherwise the click would
+        // hide exactly what it was meant to show.
+        const CARD_GAP = 14;
+
+        /** How much the card would cover at this spot - 0 means free space. */
+        function cardOverlap(node, x, y, w, h) {
+            const pad = 8;
+            const left = x - pad;
+            const right = x + w + pad;
+            const top = y - pad;
+            const bottom = y + h + pad;
+            const covers = (px, py) => px >= left && px <= right && py >= top && py <= bottom;
+
+            let score = 0;
+            for (const other of nodes.values()) {
+                if (!other.screen.visible) continue;
+                const dx = Math.max(left - other.screen.x, 0, other.screen.x - right);
+                const dy = Math.max(top - other.screen.y, 0, other.screen.y - bottom);
+                if (Math.hypot(dx, dy) >= other.screen.r + pad) continue;
+                // The clicked bubble itself must stay free, the neighbours are
+                // weighed more lightly: on a crowded branch something has to give.
+                score += other.key === node.key ? 40 : 6;
+            }
+            for (const edge of edges) {
+                if (!edge.visible || !route.edges.has(edge.id)) continue;
+                const path = edgePath(edge);
+                for (let t = 0; t <= 1.0001; t += 0.05) {
+                    const point = bezierPoint(path, t);
+                    if (covers(point.x, point.y)) {
+                        score += 12;
+                        break;
+                    }
+                }
+            }
+            return score;
+        }
+
+        /**
+         * The free spot with the least overlap: first right beside the bubble,
+         * then the border of the canvas. The network fills the middle of the
+         * view, so its border is where the free room is left once the graph is
+         * fitted in - and the card is big enough to need it. Among equally free
+         * spots the one closest to the bubble wins, so the card only travels as
+         * far as it has to.
+         */
+        function placeCard(node, width, height) {
+            const margin = 10;
+            const maxX = Math.max(margin, viewW - width - margin);
+            const maxY = Math.max(margin, viewH - height - margin);
+            const gap = node.screen.r + CARD_GAP;
+            const cx = node.screen.x;
+            const cy = node.screen.y;
+            const left = cx - width / 2;
+            const middle = cy - height / 2;
+
+            const spots = [
+                [cx + gap, middle],
+                [cx - gap - width, middle],
+                [left, cy + gap],
+                [left, cy - gap - height],
+                [cx + gap * 0.75, cy + gap * 0.75],
+                [cx - gap * 0.75 - width, cy + gap * 0.75],
+                [cx + gap * 0.75, cy - gap * 0.75 - height],
+                [cx - gap * 0.75 - width, cy - gap * 0.75 - height],
+                [margin, middle],
+                [maxX, middle],
+                [left, margin],
+                [left, maxY],
+                [margin, margin],
+                [maxX, margin],
+                [margin, maxY],
+                [maxX, maxY],
+            ];
+
+            const options = spots.map((spot) => {
+                const x = clamp(spot[0], margin, maxX);
+                const y = clamp(spot[1], margin, maxY);
+                return {
+                    x: x,
+                    y: y,
+                    score: cardOverlap(node, x, y, width, height),
+                    away: Math.hypot(x + width / 2 - cx, y + height / 2 - cy),
+                };
+            });
+
+            let index = 0;
+            for (let i = 1; i < options.length; i++) {
+                const option = options[i];
+                const best = options[index];
+                if (option.score < best.score || (option.score === best.score && option.away < best.away)) {
+                    index = i;
+                }
+            }
+
+            // The network keeps turning while nobody touches it, so the spot is
+            // kept as long as it stays as good as the best one - a card hopping
+            // from one side of the bubble to the other would be unreadable.
+            if (cardSpot && cardSpot.key === node.key && options[cardSpot.index]
+                && options[cardSpot.index].score <= options[index].score) {
+                index = cardSpot.index;
+            }
+            cardSpot = { key: node.key, index: index };
+            return options[index];
+        }
+
         function drawDetailCard() {
             cardHit = null;
-            if (!selected) return;
+            if (!selected) {
+                cardSpot = null;
+                return;
+            }
             const node = nodes.get(selected);
-            if (!node || !node.screen.visible || !kindFilter.has(node.kind)) return;
-            if (!usesDetailCard(node) || usesPanel(node)) return;
+            if (!node || !node.screen.visible || !kindFilter.has(node.kind)
+                || !usesDetailCard(node) || usesPanel(node)) {
+                cardSpot = null;
+                return;
+            }
 
             const slots    = node.slots && Number(node.slots.max) > 0 ? node.slots : null;
             const hasUrl   = !!node.url;
@@ -1524,14 +1713,15 @@
 
             const width  = CARD.width;
             const height = chrome + rows.length * CARD.rowHeight;
-            const margin = 10;
-            const x = clamp(node.screen.x - width / 2, margin, Math.max(margin, viewW - width - margin));
-            const y = clamp(node.screen.y - height / 2, margin, Math.max(margin, viewH - height - margin));
+            const spot   = placeCard(node, width, height);
+            const x = spot.x;
+            const y = spot.y;
 
             const stateColor = STATE_COLORS[node.state] || STATE_COLORS.off;
             const stateTriple = STATE_RGB[node.state] || STATE_RGB.off;
 
-            // Keep the connection visible when the card had to move off the bubble.
+            // The card sits beside the bubble, so a dashed line ties it back to
+            // the node it belongs to.
             const anchorX = clamp(node.screen.x, x + 16, x + width - 16);
             const anchorY = clamp(node.screen.y, y + 16, y + height - 16);
             if (Math.hypot(anchorX - node.screen.x, anchorY - node.screen.y) > 2) {
@@ -1660,6 +1850,7 @@
 
         function select(key) {
             selected = key && nodes.has(key) ? key : null;
+            refreshRoute();
             const node = selected ? nodes.get(selected) : null;
             // Lists stay in the HTML panel, key/value detail goes to the card.
             renderPanel(usesPanel(node) ? node : null);
@@ -1972,6 +2163,7 @@
             diff();
             setField('generated', timeNow());
             if (selected && !nodes.has(selected)) selected = null;
+            refreshRoute();
             const current = selected ? nodes.get(selected) : null;
             renderPanel(usesPanel(current) ? current : null);
             if (!userAdjusted) {
@@ -2093,6 +2285,20 @@
             resetView: resetView,
             select: function (key) { select(key || null); },
             state: function () { return { nodes: Array.from(nodes.values()), edges: edges, overall: overall }; },
+            /** Geometry of the open detail card, or null - the same rectangle
+             *  the canvas uses for hit testing. */
+            card: function () {
+                return cardHit
+                    ? { x: cardHit.x, y: cardHit.y, w: cardHit.w, h: cardHit.h, url: cardHit.url }
+                    : null;
+            },
+            route: function () {
+                return {
+                    active: route.active,
+                    nodes: Array.from(route.nodes),
+                    edges: Array.from(route.edges),
+                };
+            },
         };
     }
 

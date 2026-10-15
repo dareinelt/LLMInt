@@ -66,7 +66,7 @@ OpenAI-compatible API.
 | `lib/quickinfo.php` | Client for the quickinfo Management-Board API (`/api/v1/*`) used for live CPU/GPU/RAM/VRAM metrics |
 | `lib/speech_dictation.php` | Dictation as HTTP client of a SpeechInt endpoint: endpoint table access, transcription, post-processing, dictation commands + quick-command pills, prompt, health/config probes, deterministic rule fallback (see [Dictation](#dictation-speech-to-text)) |
 | `lib/topology.php` | Translation layer from the `admin/load_stats.php` JSON to the node/edge payload of the message-flow topology; no DB access and no HTTP of its own. Hierarchy: `hub` (LLMInt) → `llm` → `model` → `endpoint`, plus `speech`, `image`, `search`, `vector` and `clients` → `client` (see [Admin dashboard topology](#admin-dashboard-topology)) |
-| `assets/js/flow-topology.js` | Canvas renderer of the message-flow topology: 3D ring layout around LLMInt, animated edges with particles, hover/click, in-canvas detail cards, full-screen mode (~2,100 lines) |
+| `assets/js/flow-topology.js` | Canvas renderer of the message-flow topology: 3D ring layout around LLMInt, animated edges with particles, hover/click, in-canvas detail cards placed beside the node, highlighting of the complete route from an endpoint to the client, full-screen mode (~2,300 lines) |
 | `assets/css/flow-topology.css` | Styles for the topology canvas, detail cards and overlay controls |
 | `lib/prompt.txt` | Seed/fallback routing categories (imported into `routing_categories`) |
 | `api/chat.php` | **Main chat pipeline** (~3,650 lines): prompt security → routing → balancer → tools (search, web fetch, RAG, vector store, image gen) → streaming → token accounting |

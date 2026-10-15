@@ -142,9 +142,22 @@ class FakeCanvas extends FakeElement {
 function createContext(canvas) {
     const gradient = { addColorStop() {} };
     const calls = [];
-    const record = (name) => function (...args) { calls.push({ name, args }); };
+    const stack = [];
+    // Every call also snapshots the paint state it ran with: assertions about
+    // how strongly something was drawn (highlighted way vs. dimmed rest) would
+    // otherwise only see the call and not the style it used.
+    const record = (name) => function (...args) {
+        calls.push({
+            name,
+            args,
+            alpha: ctx.globalAlpha,
+            lineWidth: ctx.lineWidth,
+            strokeStyle: ctx.strokeStyle,
+            dash: ctx.dash,
+        });
+    };
 
-    return {
+    const ctx = {
         canvas,
         calls,
         fillStyle: '#000',
@@ -155,6 +168,7 @@ function createContext(canvas) {
         lineJoin: 'miter',
         lineWidth: 1,
         lineDashOffset: 0,
+        dash: [],
         shadowBlur: 0,
         shadowColor: 'transparent',
         shadowOffsetY: 0,
@@ -171,9 +185,31 @@ function createContext(canvas) {
         lineTo: record('lineTo'),
         moveTo: record('moveTo'),
         quadraticCurveTo: record('quadraticCurveTo'),
-        restore: record('restore'),
-        save: record('save'),
-        setLineDash: record('setLineDash'),
+        restore() {
+            record('restore')();
+            const state = stack.pop();
+            if (state) Object.assign(ctx, state);
+        },
+        save() {
+            record('save')();
+            stack.push({
+                globalAlpha: ctx.globalAlpha,
+                lineWidth: ctx.lineWidth,
+                strokeStyle: ctx.strokeStyle,
+                fillStyle: ctx.fillStyle,
+                font: ctx.font,
+                lineCap: ctx.lineCap,
+                lineJoin: ctx.lineJoin,
+                lineDashOffset: ctx.lineDashOffset,
+                textAlign: ctx.textAlign,
+                textBaseline: ctx.textBaseline,
+                dash: ctx.dash,
+            });
+        },
+        setLineDash(segments) {
+            record('setLineDash')(segments);
+            ctx.dash = Array.from(segments || []);
+        },
         setTransform: record('setTransform'),
         stroke: record('stroke'),
         strokeRect: record('strokeRect'),
@@ -181,6 +217,8 @@ function createContext(canvas) {
         createRadialGradient: () => gradient,
         measureText: (text) => ({ width: String(text == null ? '' : text).length * 6 }),
     };
+
+    return ctx;
 }
 
 // ── Environment ──────────────────────────────────────────────────────────────

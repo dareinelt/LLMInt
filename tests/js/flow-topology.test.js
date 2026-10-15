@@ -133,7 +133,7 @@ test('mount() lehnt fehlende oder unbrauchbare Wurzeln ab', () => {
 test('mount() liefert die Steuer-API und baut die Legende', () => {
     const { env, api } = mountWith();
     assert.ok(api);
-    for (const name of ['apply', 'load', 'resize', 'fit', 'resetView', 'select', 'state']) {
+    for (const name of ['apply', 'load', 'resize', 'fit', 'resetView', 'select', 'route', 'card', 'state']) {
         assert.equal(typeof api[name], 'function', name + ' fehlt');
     }
     same(api.state(), {
@@ -360,6 +360,258 @@ test('eine Auswahl, die aus den Daten verschwindet, wird zurückgesetzt', () => 
 
     api.apply({ nodes: { hub: { key: 'hub', kind: 'hub' } }, edges: [], overall: { state: 'ok' } });
     assert.equal(env.hook('[data-topo-panel]').hidden, true);
+});
+
+// ── Weg vom Endpunkt bis zum Client ──────────────────────────────────────────
+
+/**
+ * basePayload() plus a second model group, a second endpoint, SearXNG and a
+ * second chat session - enough branches to tell the way of one endpoint apart
+ * from everything beside it.
+ */
+function branchyPayload() {
+    const payload = basePayload();
+    const add = (entry) => { payload.nodes[entry.key] = entry; };
+
+    add(node('model:qwen', 'model', { title: 'qwen', neighbours: ['llm', 'ep:2'] }));
+    add(node('ep:2', 'endpoint', { title: 'ep:2', neighbours: ['model:qwen'] }));
+    add(node('search', 'search', { title: 'SearXNG', neighbours: ['hub'] }));
+    add(node('client:2', 'client', { title: 'pc-2', neighbours: ['clients'] }));
+
+    payload.nodes['llm'].neighbours = ['hub', 'model:gemma-3-27b', 'model:qwen'];
+    payload.nodes['hub'].neighbours = ['llm', 'clients', 'search'];
+    payload.nodes['clients'].neighbours = ['hub', 'client:1', 'client:2'];
+    payload.edges = payload.edges.concat([
+        { from: 'llm', to: 'model:qwen', state: 'ok' },
+        { from: 'model:qwen', to: 'ep:2', state: 'ok' },
+        { from: 'hub', to: 'search', state: 'ok' },
+        { from: 'clients', to: 'client:2', state: 'ok' },
+    ]);
+    payload.overall.nodes = 10;
+    return payload;
+}
+
+test('Klick auf einen Endpunkt hebt den Weg bis zum Client hervor', () => {
+    const { api } = mountWith();
+    api.apply(branchyPayload());
+    api.select('ep:1');
+
+    const route = api.route();
+    assert.equal(route.active, true, 'der Weg muss aktiv sein');
+    same(route.nodes.slice().sort(), [
+        'client:1', 'client:2', 'clients', 'ep:1', 'hub', 'llm', 'model:gemma-3-27b',
+    ]);
+    same(route.edges.slice().sort(), [
+        'clients>client:1',
+        'clients>client:2',
+        'hub>clients',
+        'hub>llm',
+        'llm>model:gemma-3-27b',
+        'model:gemma-3-27b>ep:1',
+    ]);
+});
+
+test('der Weg führt nicht in fremde Zweige', () => {
+    const { api } = mountWith();
+    api.apply(branchyPayload());
+    api.select('ep:1');
+
+    const route = api.route();
+    for (const key of ['ep:2', 'model:qwen', 'search']) {
+        assert.equal(route.nodes.indexOf(key), -1, key + ' liegt nicht auf dem Weg');
+    }
+    for (const id of ['llm>model:qwen', 'model:qwen>ep:2', 'hub>search']) {
+        assert.equal(route.edges.indexOf(id), -1, id + ' liegt nicht auf dem Weg');
+    }
+});
+
+test('der Weg einer Sitzung endet am Kern', () => {
+    const { api } = mountWith();
+    api.apply(branchyPayload());
+    api.select('client:1');
+
+    const route = api.route();
+    assert.equal(route.active, true);
+    same(route.nodes.slice().sort(), ['client:1', 'clients', 'hub']);
+    same(route.edges.slice().sort(), ['clients>client:1', 'hub>clients']);
+});
+
+test('ohne Auswahl gibt es keinen Weg', () => {
+    const { api } = mountWith();
+    api.apply(basePayload());
+
+    assert.equal(api.route().active, false);
+    same(api.route().nodes, []);
+    same(api.route().edges, []);
+
+    api.select('ep:1');
+    assert.equal(api.route().active, true);
+
+    api.select(null);
+    assert.equal(api.route().active, false);
+    same(api.route().edges, []);
+});
+
+test('eine neue Nutzlast rechnet den Weg neu', () => {
+    const { api } = mountWith();
+    api.apply(basePayload());
+    api.select('ep:1');
+    assert.equal(api.route().nodes.length, 6);
+
+    // A second session turns up: it joins the way without a new click.
+    api.apply(branchyPayload());
+    assert.equal(api.route().nodes.indexOf('ep:1') >= 0, true, 'die Auswahl bleibt erhalten');
+    assert.equal(api.route().nodes.indexOf('client:2') >= 0, true, 'die neue Sitzung gehört zum Weg');
+    assert.equal(api.route().nodes.length, 7);
+
+    // The endpoint disappears: the selection and with it the way are dropped.
+    api.apply({
+        nodes: { hub: { key: 'hub', kind: 'hub' }, clients: { key: 'clients', kind: 'clients' } },
+        edges: [{ from: 'hub', to: 'clients', state: 'ok' }],
+        overall: { state: 'ok' },
+    });
+    assert.equal(api.route().active, false, 'ohne den gewählten Knoten gibt es keinen Weg');
+    same(api.route().nodes, []);
+});
+
+test('der Weg wird kräftig gezeichnet, der Rest tritt zurück', () => {
+    const { env, api } = mountWith();
+    api.apply(branchyPayload());
+    env.pump(40);
+
+    // The halo is the widest stroke in the picture and only edges paint one,
+    // so its alpha tells how far a line steps back - independent of how far a
+    // node has faded in.
+    const faintHalos = () => env.ctx.calls
+        .filter((call) => call.name === 'stroke' && call.lineWidth >= 8 && call.alpha <= 0.05)
+        .length;
+
+    env.ctx.calls.length = 0;
+    env.pump();
+    assert.equal(faintHalos(), 0, 'ohne Auswahl darf keine Kante verblassen');
+
+    api.select('ep:1');
+    env.ctx.calls.length = 0;
+    env.pump();
+
+    // llm>model:qwen, model:qwen>ep:2 and hub>search lie beside the way.
+    assert.equal(faintHalos(), 3, 'die Kanten neben dem Weg müssen zurücktreten');
+
+    const way = env.ctx.calls.filter((call) => call.name === 'stroke'
+        && call.alpha >= 0.99 && call.lineWidth >= 4);
+    assert.equal(way.length, api.route().edges.length,
+        'jede Kante des Weges wird kräftig und durchgezogen gezeichnet');
+    for (const call of way) {
+        same(call.dash, [], 'der Weg darf nicht gestrichelt sein');
+    }
+});
+
+// ── Platzierung der Detailkarte ──────────────────────────────────────────────
+
+/** Distance from a point to a rectangle - 0 when the point lies inside. */
+function distanceToRect(x, y, rect) {
+    const dx = Math.max(rect.x - x, 0, x - (rect.x + rect.w));
+    const dy = Math.max(rect.y - y, 0, y - (rect.y + rect.h));
+    return Math.hypot(dx, dy);
+}
+
+/** Straight line between two nodes, sampled - the way the eye follows it. */
+function crossesRect(from, to, rect, steps) {
+    const count = steps || 40;
+    for (let i = 0; i <= count; i++) {
+        const t = i / count;
+        const x = from.x + (to.x - from.x) * t;
+        const y = from.y + (to.y - from.y) * t;
+        if (x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h) return true;
+    }
+    return false;
+}
+
+test('die Detailkarte liegt neben dem Knoten, nicht darüber', () => {
+    const { env, api } = mountWith();
+    api.apply(branchyPayload());
+    env.pump(40);
+
+    api.select('ep:1');
+    env.pump();
+
+    const card = api.card();
+    assert.ok(card, 'die Karte ist offen');
+
+    const nodes = api.state().nodes;
+    const selected = nodes.find((entry) => entry.key === 'ep:1');
+    assert.ok(selected.screen.r > 0, 'der Knoten hat einen Radius');
+
+    // The bubble the click landed on must stay visible - otherwise the click
+    // would hide the very node it was meant to explain.
+    const distance = distanceToRect(selected.screen.x, selected.screen.y, card);
+    assert.ok(distance >= selected.screen.r,
+        'der Knoten liegt neben der Karte, Abstand ' + distance.toFixed(1)
+        + ' >= Radius ' + selected.screen.r.toFixed(1));
+
+    assert.ok(card.x >= 0 && card.y >= 0
+        && card.x + card.w <= 800 && card.y + card.h <= 480,
+        'die Karte bleibt im sichtbaren Bereich');
+});
+
+test('die Detailkarte überdeckt keine Kante des Weges', () => {
+    const { env, api } = mountWith();
+    api.apply(branchyPayload());
+    env.pump(40);
+
+    api.select('ep:1');
+    env.pump();
+
+    const card = api.card();
+    const nodes = api.state().nodes;
+    const byKey = new Map(nodes.map((entry) => [entry.key, entry]));
+    const route = api.route();
+    assert.ok(route.edges.length > 0, 'der Weg ist aktiv');
+
+    for (const id of route.edges) {
+        const parts = id.split('>');
+        const from = byKey.get(parts[0]);
+        const to = byKey.get(parts[1]);
+        assert.ok(from && to, 'beide Enden von ' + id + ' existieren');
+        assert.equal(crossesRect(from.screen, to.screen, card), false,
+            'die Karte verdeckt ' + id + ' nicht');
+    }
+});
+
+test('die Detailkarte bleibt mit dem Knoten verbunden', () => {
+    const { env, api } = mountWith();
+    api.apply(branchyPayload());
+    env.pump(40);
+
+    api.select('ep:1');
+    env.ctx.calls.length = 0;
+    env.pump();
+
+    // The card sits beside the bubble now, so a dashed line has to tie the two
+    // together - otherwise the card would float next to an unknown node.
+    const tie = env.ctx.calls.filter((call) => call.name === 'stroke'
+        && call.lineWidth <= 2 && Array.isArray(call.dash) && call.dash.length > 0);
+    assert.equal(tie.length, 1, 'genau eine Ankerlinie verbindet Karte und Knoten');
+});
+
+test('ohne geöffnete Karte gibt es keine Ankerlinie', () => {
+    const { env, api } = mountWith();
+    api.apply(branchyPayload());
+    env.pump(40);
+
+    const ties = () => env.ctx.calls.filter((call) => call.name === 'stroke'
+        && call.lineWidth <= 2 && Array.isArray(call.dash) && call.dash.length > 0).length;
+
+    env.ctx.calls.length = 0;
+    env.pump();
+    assert.equal(ties(), 0, 'ohne Auswahl gibt es keine Karte');
+
+    // A group opens the HTML panel, not the detail card.
+    api.select('llm');
+    env.ctx.calls.length = 0;
+    env.pump();
+    assert.equal(api.card(), null, 'eine Gruppe öffnet das HTML-Panel');
+    assert.equal(ties(), 0, 'ohne Karte gibt es keine Ankerlinie');
 });
 
 // ── Rendering ────────────────────────────────────────────────────────────────

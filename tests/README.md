@@ -7,7 +7,7 @@ zur Nachrichtenflow-Topologie entstanden sind:
 |---|---|---|
 | PHP | `php/test_topology_helpers.php` | Die reinen Helfer aus `lib/topology.php`: Zustands- und Aktivitätsbewertung, Zahlen- und Temperaturformatierung, URL- und Client-Beschriftung, Parametergrößen, Endpunktzustand, JSON-Insel. |
 | PHP | `php/test_topology_build.php` | `topology_build()`: Hierarchie (LLMInt → LLM/SpeechInt/ImageInt/SearXNG/Wissensdatenbank/Clients), Knoten-/Kantenvertrag für den Renderer, Detailkarten-Felder, Optionen (`include_off`, `slot_limit`), Störungsliste. |
-| JavaScript | `js/flow-topology.test.js` | Der Canvas-Renderer `assets/js/flow-topology.js` in einer VM-Sandbox: was `apply()` übernimmt und verwirft, Umschalten zwischen Detailkarte und HTML-Panel, Auswahl per Klick, ein vollständiger Frame, reduzierte Bewegung, ResizeObserver, JSON-Insel und `load()`. |
+| JavaScript | `js/flow-topology.test.js` | Der Canvas-Renderer `assets/js/flow-topology.js` in einer VM-Sandbox: was `apply()` übernimmt und verwirft, Umschalten zwischen Detailkarte und HTML-Panel, Auswahl per Klick, der hervorgehobene Weg vom Endpunkt bis zum Client, die Platzierung der Detailkarte neben dem Knoten, ein vollständiger Frame, reduzierte Bewegung, ResizeObserver, JSON-Insel und `load()`. |
 
 Die Tests sind bewusst **abhängigkeitsfrei**: kein Composer, kein PHPUnit, kein
 npm-Paket, kein Browser. `php/bootstrap.php` ist ein Mini-Harness,
@@ -69,7 +69,7 @@ tests/
 │   └── test_topology_build.php   # 36 Tests
 └── js/
     ├── support/sandbox.js        # DOM-/Canvas-Attrappe + node:vm-Lader
-    └── flow-topology.test.js     # 27 Tests
+    └── flow-topology.test.js     # 37 Tests
 ```
 
 ## Neue Tests ergänzen
