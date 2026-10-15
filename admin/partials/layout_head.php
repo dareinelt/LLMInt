@@ -344,6 +344,30 @@ require_once __DIR__ . '/nav.php';
             cursor: pointer;
         }
 
+        /* "?" next to a field label: opens the description popup of that field. */
+        .ep-help {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 15px;
+            height: 15px;
+            padding: 0;
+            margin-left: 4px;
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            color: var(--text-muted);
+            font-family: var(--font);
+            font-size: .62rem;
+            font-weight: 700;
+            line-height: 1;
+            vertical-align: middle;
+            cursor: pointer;
+            flex: none;
+        }
+
+        .ep-help:hover { color: var(--text); border-color: var(--text-muted); }
+
         input[type="text"],
         input[type="url"],
         input[type="number"],

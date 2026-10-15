@@ -70,9 +70,9 @@ $endpoints = $db->query(
     'SELECT * FROM endpoints ORDER BY sort_order ASC, id ASC'
 )->fetchAll();
 
-// Safe edit data for every endpoint (never expose ssh_password) — used both by
-// the "✏ Bearbeiten" button in the Endpunkte table and by clicking an endpoint
-// node in the Dashboard mindmap, so both open the identical edit overlay.
+// Safe edit data for every endpoint (never expose ssh_password). The
+// "✏ Bearbeiten" button in the Endpunkte table hands it to the add/edit
+// overlay; the ?edit=<id> deeplink uses it to open the same overlay.
 $epEditDataMap = [];
 foreach ($endpoints as $ep) {
     $epEditDataMap[(int) $ep['id']] = [
