@@ -66,7 +66,7 @@ OpenAI-compatible API.
 | `lib/quickinfo.php` | Client for the quickinfo Management-Board API (`/api/v1/*`) used for live CPU/GPU/RAM/VRAM metrics |
 | `lib/speech_dictation.php` | Dictation as HTTP client of a SpeechInt endpoint: endpoint table access, transcription, post-processing, dictation commands + quick-command pills, prompt, health/config probes, deterministic rule fallback (see [Dictation](#dictation-speech-to-text)) |
 | `lib/topology.php` | Translation layer from the `admin/load_stats.php` JSON to the node/edge payload of the message-flow topology; no DB access and no HTTP of its own. Hierarchy: `hub` (LLMInt) → `llm` → `model` → `endpoint`, plus `speech`, `image`, `search`, `vector` and `clients` → `client` (see [Admin dashboard topology](#admin-dashboard-topology)) |
-| `assets/js/flow-topology.js` | Canvas renderer of the message-flow topology: 3D ring layout around LLMInt, animated edges with particles, hover/click, in-canvas detail cards placed beside the node, highlighting of the complete route between an endpoint and a client (both directions), full-screen mode (~2,320 lines) |
+| `assets/js/flow-topology.js` | Canvas renderer of the message-flow topology: 3D ring layout around LLMInt, animated edges with particles, hover/click, in-canvas detail cards placed beside the node, highlighting of the route between an endpoint and a client (both directions; a client with a running request narrows it to that branch and draws it as a running light), full-screen mode (~2,360 lines) |
 | `assets/css/flow-topology.css` | Styles for the topology canvas, detail cards and overlay controls |
 | `lib/prompt.txt` | Seed/fallback routing categories (imported into `routing_categories`) |
 | `api/chat.php` | **Main chat pipeline** (~3,650 lines): prompt security → routing → balancer → tools (search, web fetch, RAG, vector store, image gen) → streaming → token accounting |
@@ -81,7 +81,7 @@ OpenAI-compatible API.
 | `api/document_retention.php` | Toggles `document_uploads.is_library` ("Bibliothek") for a chat-attached document |
 | `api/document_status.php` / `api/document_delete.php` / `api/rebuild_embeddings.php` | Upload status, deletion (with chunks), embedding rebuild |
 | `api/chat_sessions.php` | `action=list\|load\|delete` for a user's conversation sessions |
-| `api/heartbeat.php` | Presence heartbeat → `active_clients`, `client_count_log`, `client_count_daily` |
+| `api/heartbeat.php` | Presence heartbeat → `active_clients`, `client_count_log`, `client_count_daily`; an optional `route:{kind, model, endpoint_id}` records the request the tab is waiting for |
 | `api/models.php` | Query the models of an endpoint |
 | `api/healthcheck.php` | Aggregated health status of all LLM endpoints |
 | `api/image_status.php` | Job status of a running image render; also adopts the finished PNG into the stored session |
@@ -459,7 +459,16 @@ hub (LLMInt, always the centre)
   model, image, speech) keep the HTML side panel instead.
 - Selecting a node highlights the whole route through the branches: from an endpoint up
   to LLMInt and across into every client session, and from a client the other way round
-  down into all endpoint branches. The card of a client does not open an endpoint card.
+  down into the endpoint branches. The card of a client does not open an endpoint card.
+- A client that is currently waiting for an answer highlights **only that branch** and
+  draws it as a running light (white, dashed, scrolling). The browser is the only source
+  that knows this: `index.php` reports `route:{kind, model, endpoint_id}` in its presence
+  heartbeat (immediately when a request starts, `null` once the answer arrived),
+  `api/chat.php` refines it with the endpoint that was really picked
+  (`recordClientRoute()` → `active_clients.route_*`) and `topology_build()` attaches it
+  as `route` to the client node. An idle client keeps the full fan-out. Age comes from
+  SQL (`TIMESTAMPDIFF`), never from comparing a DB timestamp with PHP's `time()` – the
+  DB writes wall-clock time in its own time zone.
 - `topology_initial_script()` embeds the payload as
   `<script type="application/json" data-flow-initial>`, so the first paint needs no extra
   request; `flow-topology.js` polls `admin/load_stats.php` afterwards.
@@ -587,7 +596,7 @@ domain:
 | `api/chat.php` | POST | session optional | Chat incl. routing, tools, streaming |
 | `api/chat_sessions.php` | GET/POST | session | `action=list\|load\|delete` |
 | `api/models.php` | GET | – | Models of an endpoint |
-| `api/heartbeat.php` | POST | – | Presence token |
+| `api/heartbeat.php` | POST | – | Presence token (optional with the running request) |
 | `api/healthcheck.php` | GET | – | Aggregated LLM endpoint health |
 | `api/document_status.php` | GET | session | Upload status (optionally `session_id`-filtered) |
 | `api/upload_document.php` | POST | session + CSRF | Document upload (Office, text, PDF, image) |
@@ -635,7 +644,7 @@ Tables are created in `setup.php` (first install) and kept current by
 | `endpoints` | LLM endpoints: base_url, default_model, timeout, is_active, capabilities (`supports_tool_calling`, `supports_vision`, `is_llamacpp`, `reasoning_effort`, `specialized_for_category`, `max_context`, `context_limit_per_slot`), SSH + quickinfo pairing, balancer health (`circuit_state`, `consecutive_failures`, `cooldown_until`, `circuit_opened_at`, `avg_latency_ms`, `last_latency_ms`) |
 | `tasks` | LLM request lifecycle: endpoint_id, model, status, token counters, `tokens_per_second` |
 | `endpoint_sys_stats` | SSH system metrics per endpoint |
-| `active_clients`, `client_count_log`, `client_count_daily` | Presence tracking (heartbeat → live samples → daily aggregates) |
+| `active_clients`, `client_count_log`, `client_count_daily` | Presence tracking (heartbeat → live samples → daily aggregates); `active_clients.route_kind/route_model/route_endpoint_id/route_at` describe the request a tab is currently waiting for |
 | `search_logs` | SearXNG search history |
 
 **Image generation**

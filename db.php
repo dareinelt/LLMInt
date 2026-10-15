@@ -221,11 +221,15 @@ function ensureRuntimeSchema(PDO $pdo): void
     // Active-client heartbeat tracking.
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS active_clients (
-            token      CHAR(128)    NOT NULL,
-            ip         VARCHAR(45)  NULL,
-            hostname   VARCHAR(255) NULL,
-            last_seen  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-                                    ON UPDATE CURRENT_TIMESTAMP(3),
+            token            CHAR(128)    NOT NULL,
+            ip               VARCHAR(45)  NULL,
+            hostname         VARCHAR(255) NULL,
+            route_kind       VARCHAR(16)  NOT NULL DEFAULT '',
+            route_model      VARCHAR(255) NOT NULL DEFAULT '',
+            route_endpoint_id INT UNSIGNED NOT NULL DEFAULT 0,
+            route_at         TIMESTAMP(3) NULL DEFAULT NULL,
+            last_seen        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                          ON UPDATE CURRENT_TIMESTAMP(3),
             PRIMARY KEY (token),
             KEY idx_ac_last_seen (last_seen)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -237,6 +241,21 @@ function ensureRuntimeSchema(PDO $pdo): void
     } catch (Throwable $_e) { /* column already exists */ }
     try {
         $pdo->exec("ALTER TABLE active_clients ADD COLUMN hostname VARCHAR(255) NULL AFTER ip");
+    } catch (Throwable $_e) { /* column already exists */ }
+
+    // The request a tab is waiting for right now (see recordClientRoute()).
+    // Added later – older installations get the columns here.
+    try {
+        $pdo->exec("ALTER TABLE active_clients ADD COLUMN route_kind VARCHAR(16) NOT NULL DEFAULT '' AFTER hostname");
+    } catch (Throwable $_e) { /* column already exists */ }
+    try {
+        $pdo->exec("ALTER TABLE active_clients ADD COLUMN route_model VARCHAR(255) NOT NULL DEFAULT '' AFTER route_kind");
+    } catch (Throwable $_e) { /* column already exists */ }
+    try {
+        $pdo->exec("ALTER TABLE active_clients ADD COLUMN route_endpoint_id INT UNSIGNED NOT NULL DEFAULT 0 AFTER route_model");
+    } catch (Throwable $_e) { /* column already exists */ }
+    try {
+        $pdo->exec("ALTER TABLE active_clients ADD COLUMN route_at TIMESTAMP(3) NULL DEFAULT NULL AFTER route_endpoint_id");
     } catch (Throwable $_e) { /* column already exists */ }
 
     // Periodic samples of the concurrent client count (for min/max/avg).
@@ -1979,7 +1998,16 @@ function purgeExpiredConversationSessions(): void
  * Each entry contains the IP address, the reverse-resolved hostname (may be
  * empty) and the number of open tabs from that address.
  *
- * @return array<int,array{ip:string,hostname:string,tabs:int}>
+ * Tabs that are waiting for an answer right now (see recordClientRoute())
+ * additionally carry the request they are waiting for: `route_kind` (`llm`,
+ * `image`, `speech`, `search` or `''` when idle), `route_model`,
+ * `route_endpoint_id`, the number of seconds the request has been running
+ * (`route_seconds`) and the derived `busy` flag. Tabs of one address share a
+ * single entry, so the most recently updated request wins.
+ *
+ * @return array<int,array{ip:string,hostname:string,tabs:int,route_kind:string,
+ *                         route_model:string,route_endpoint_id:int,
+ *                         route_seconds:?int,busy:bool}>
  */
 function listActiveClients(?PDO $pdo = null): array
 {
@@ -1989,9 +2017,26 @@ function listActiveClients(?PDO $pdo = null): array
             // Every selected column has to be aggregated – grouping by a CASE
             // expression is not recognised as a functional dependency by
             // MySQL's default sql_mode ONLY_FULL_GROUP_BY (error 1055).
+            //
+            // The route columns are picked from the most recently started
+            // request within the group; GROUP_CONCAT + SUBSTRING_INDEX is the
+            // only portable way to do that with plain aggregates. Empty
+            // (idle) values turn into NULL and are skipped by GROUP_CONCAT,
+            // so an idle tab never masks a running one. token is part of the
+            // sort key to keep the three lists aligned when timestamps tie.
             "SELECT COALESCE(MAX(ip), '')       AS ip,
                     COALESCE(MAX(hostname), '') AS hostname,
-                    COUNT(*)                    AS tabs
+                    COUNT(*)                    AS tabs,
+                    COALESCE(SUBSTRING_INDEX(GROUP_CONCAT(
+                        NULLIF(route_kind, '') ORDER BY route_at DESC, last_seen DESC, token DESC
+                    ), ',', 1), '')             AS route_kind,
+                    COALESCE(SUBSTRING_INDEX(GROUP_CONCAT(
+                        NULLIF(route_model, '') ORDER BY route_at DESC, last_seen DESC, token DESC
+                    ), ',', 1), '')             AS route_model,
+                    COALESCE(SUBSTRING_INDEX(GROUP_CONCAT(
+                        NULLIF(route_endpoint_id, 0) ORDER BY route_at DESC, last_seen DESC, token DESC
+                    ), ',', 1), 0)              AS route_endpoint_id,
+                    TIMESTAMPDIFF(SECOND, MAX(route_at), NOW(3)) AS route_age
                FROM active_clients
               WHERE last_seen > DATE_SUB(NOW(), INTERVAL 90 SECOND)
               GROUP BY CASE WHEN COALESCE(ip, '') = '' THEN token ELSE ip END
@@ -2001,16 +2046,79 @@ function listActiveClients(?PDO $pdo = null): array
 
         $out = [];
         foreach ($rows as $r) {
+            $kind = (string) $r['route_kind'];
+            // The age is computed by MySQL so the client and the server do not
+            // have to agree on a time zone (route_at is a wall-clock value).
+            $seconds = null;
+            if ($kind !== '' && $r['route_age'] !== null) {
+                $seconds = max(0, (int) $r['route_age']);
+            }
             $out[] = [
-                'ip'       => (string) $r['ip'],
-                'hostname' => (string) $r['hostname'],
-                'tabs'     => (int) $r['tabs'],
+                'ip'                => (string) $r['ip'],
+                'hostname'          => (string) $r['hostname'],
+                'tabs'              => (int) $r['tabs'],
+                'route_kind'        => $kind,
+                'route_model'       => (string) $r['route_model'],
+                'route_endpoint_id' => (int) $r['route_endpoint_id'],
+                'route_seconds'     => $seconds,
+                'busy'              => $kind !== '',
             ];
         }
         return $out;
     } catch (Throwable $e) {
         // Table or columns may not exist on older installations
         return [];
+    }
+}
+
+/** Kinds of running requests a client tab may report (see recordClientRoute()). */
+const CLIENT_ROUTE_KINDS = ['llm', 'image', 'speech', 'search'];
+
+/**
+ * Record which request a browser tab is waiting for right now.
+ *
+ * The chat page announces the start of a request with its heartbeat and the
+ * end of it with an empty kind, so the admin topology can highlight exactly
+ * the path that belongs to a running session instead of guessing it. Called
+ * from api/heartbeat.php (presence) and api/chat.php (refined with the
+ * endpoint the load balancer actually picked).
+ *
+ * An unknown kind or an unknown token is ignored; a kind that is not part of
+ * CLIENT_ROUTE_KINDS clears the entry, so a tab that reloads mid-request
+ * cannot leave a stale path behind.
+ *
+ * @param int $endpointId 0 when the endpoint is not known to the caller
+ */
+function recordClientRoute(string $token, string $kind, string $model = '', int $endpointId = 0): bool
+{
+    if (!preg_match('/^[0-9a-f]{32,128}$/i', $token)) {
+        return false;
+    }
+
+    $kind = strtolower(trim($kind));
+    if (!in_array($kind, CLIENT_ROUTE_KINDS, true)) {
+        $kind  = '';
+        $model = '';
+        $endpointId = 0;
+    }
+
+    try {
+        $stmt = getDb()->prepare(
+            'UPDATE active_clients
+                SET route_kind = ?, route_model = ?, route_endpoint_id = ?,
+                    route_at = ' . ($kind === '' ? 'NULL' : 'NOW(3)') . '
+              WHERE token = ?'
+        );
+        $stmt->execute([
+            $kind,
+            mb_substr(trim($model), 0, 255),
+            max(0, $endpointId),
+            $token,
+        ]);
+        return $stmt->rowCount() > 0;
+    } catch (Throwable $e) {
+        // Best-effort: the topology simply shows no running request.
+        return false;
     }
 }
 

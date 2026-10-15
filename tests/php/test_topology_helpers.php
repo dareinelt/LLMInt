@@ -181,6 +181,16 @@ test_case('topology_client_label() fällt auf IP und Platzhalter zurück', funct
     assert_same('unbekannt 3', topology_client_label([], 3));
 });
 
+// ── Laufende Anfrage ──────────────────────────────────────────────────────────
+
+test_case('topology_route_label() benennt jede Art von Anfrage', function (): void {
+    assert_same('Laufende Anfrage', topology_route_label('llm'));
+    assert_same('Laufende Bildgenerierung', topology_route_label('image'));
+    assert_same('Laufende Spracherkennung', topology_route_label('speech'));
+    assert_same('Laufende Websuche', topology_route_label('search'));
+    assert_same('Laufende Anfrage', topology_route_label('unbekannt'), 'unbekannte Arten fallen auf den Standard zurück');
+});
+
 // ── Node defaults ─────────────────────────────────────────────────────────────
 
 test_case('topology_node() füllt alle Felder, die der Renderer erwartet', function (): void {
@@ -200,6 +210,7 @@ test_case('topology_node() füllt alle Felder, die der Renderer erwartet', funct
         'cloud'      => null,
         'members'    => null,
         'neighbours' => [],
+        'route'      => null,
         'url'        => '',
         'synthetic'  => false,
     ], $node);

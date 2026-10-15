@@ -56,8 +56,8 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `lib/ldap_auth.php` | 320 | LDAP-Bind, Benutzerabgleich, Kerberos-SSO (direkt oder über Reverse-Proxy) |
 | `lib/reverse_proxy.php` | – | Betrieb hinter Reverse-Proxy (lanpa): `TRUSTED_PROXIES`, Client-IP, HTTPS, `X-Forwarded-Prefix`, Proxy-SSO-Header, `appPublicBaseUrl()` |
 | `lib/mailer.php` | 334 | Eigener SMTP-Client (kein PHPMailer) |
-| `lib/topology.php` | 1.050 | Übersetzungsschicht von den Dashboard-Livedaten auf den Knoten-/Kanten-Payload der Nachrichtenflow-Topologie (`topology_build()`, `topology_initial_script()`); ohne DB-Zugriff und ohne eigene HTTP-Aufrufe |
-| `assets/js/flow-topology.js` | 2.320 | Canvas-Renderer der Topologie: radiale 3D-Anordnung um LLMInt, animierte Kanten mit Partikeln, Detailkarten im Canvas neben dem Knoten, Hervorhebung des Weges zwischen Endpunkt und Client (in beide Richtungen), Vollbildmodus |
+| `lib/topology.php` | 1.170 | Übersetzungsschicht von den Dashboard-Livedaten auf den Knoten-/Kanten-Payload der Nachrichtenflow-Topologie (`topology_build()`, `topology_initial_script()`); ohne DB-Zugriff und ohne eigene HTTP-Aufrufe; markiert am Client-Knoten die gerade laufende Anfrage (`route`) |
+| `assets/js/flow-topology.js` | 2.360 | Canvas-Renderer der Topologie: radiale 3D-Anordnung um LLMInt, animierte Kanten mit Partikeln, Detailkarten im Canvas neben dem Knoten, Hervorhebung des Weges zwischen Endpunkt und Client (in beide Richtungen, bei laufender Anfrage auf deren Zweig eingegrenzt und als Lauflicht gezeichnet), Vollbildmodus |
 | `assets/css/flow-topology.css` | – | Stile für Canvas, Detailkarten, Statusleiste und Vollbild-Overlay |
 | `tests/` | – | Abhängigkeitsfreie Tests: PHP für `lib/topology.php`, `node:test` für `assets/js/flow-topology.js`, Runner `tests/run.sh`, CI-Workflow |
 | `lib/prompt.txt` | – | Fallback-Kategorien/Prompt für das Routing, importierbar in die DB |
@@ -101,7 +101,7 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `tasks` | Lebenszyklus jeder LLM-Anfrage: `endpoint_id`, `status` (`running`/`done`/`error`), Tokenzähler, `tokens_per_second` |
 | `endpoint_sys_stats` | per SSH gelesene Systemmetriken je Endpunkt |
 | `search_logs` | SearXNG-Suchen mit Status und Ergebnissen |
-| `active_clients` | Heartbeat-Token aktiver Browser-Tabs (IP, Hostname, `last_seen`) |
+| `active_clients` | Heartbeat-Token aktiver Browser-Tabs (IP, Hostname, `last_seen`) und, falls gerade eine Anfrage läuft, deren Art (`route_kind`), Modell (`route_model`), Endpunkt (`route_endpoint_id`) und Startzeit (`route_at`) |
 | `client_count_log` | Zeitreihe gleichzeitiger Clients |
 | `image_endpoints` | ImageInt-Endpunkte (`base_url`, `token`, `timeout`, `is_active`, Balancer-Gesundheit) |
 | `image_notifications` | Zustimmungen zu Fertigstellungs-Mails (`session_id`, `job_id`, `user_id`, `prompt`, `status_url`, `image_url`, `status`, `sent_at`; `UNIQUE KEY uniq_job_user`; Empfängeradresse kommt aus `users.email`) |
@@ -320,7 +320,12 @@ Verwaltung: `admin/prompt_security.php` (Dashboard, Regeln, Logs, Einstellungen)
   werden als eigene Pillen dargestellt.
 - Dokumente: `openUploadModal()`, `setFile()`, Upload per `FormData` inklusive `csrf_token`
   an `api/upload_document.php`, Statusanzeige über `loadStatus()`/`renderUploads()`.
-- Präsenz: `sendHeartbeat()` gegen `api/heartbeat.php`.
+- Präsenz: `sendHeartbeat()` gegen `api/heartbeat.php` – immer mit `{token, route}`.
+  `route` ist `null`, solange der Tab untätig ist; `startRoute()` setzt beim Absenden
+  einer Nachricht `{kind, model, endpoint_id}` und meldet sofort, `clearRoute()` löscht
+  die Angabe nach der Antwort (und bei `pagehide`). `sendMessage()` gibt dazu das
+  Heartbeat-Token als `client_token` mit, damit `api/chat.php` den tatsächlich
+  gewählten Endpunkt nachtragen kann (`window.llmintClientRoute`).
 
 ---
 
@@ -369,8 +374,16 @@ Seitenaufbau als `<script type="application/json" data-flow-initial>` eingebette
 aus, öffnet seine Detailkarte in einer freien Stelle neben dem Knoten und hebt den
 kompletten Weg durch die Zweige hervor; der Rest des Netzes tritt zurück. Bei einem
 Endpunkt verläuft der Weg bis zu den Clients, bei einem Client umgekehrt über die
-Clients-Wolke und LLMInt hinunter in alle Endpunkt-Zweige – ohne dass sich dabei die
-Detailkarte eines Endpunkts öffnet.
+Clients-Wolke und LLMInt hinunter in die Endpunkt-Zweige – ohne dass sich dabei die
+Detailkarte eines Endpunkts öffnet. Läuft auf dem angeklickten Client gerade eine
+Anfrage, ist der hervorgehobene Weg auf deren Zweig eingegrenzt und wird mit einem
+hellen, wandernden Strichmuster als laufender Weg gezeichnet; ein untätiger Client
+zeigt weiterhin alle Zweige. Quelle dafür ist der Browser selbst: `index.php` meldet
+im Heartbeat an `api/heartbeat.php` (`{token, route:{kind, model, endpoint_id}}`) den
+Endpunkt, auf den die Sitzung gerade wartet – beim Start der Anfrage und nach der
+Antwort wieder als `route: null`. `api/chat.php` verfeinert die Meldung mit dem
+tatsächlich gewählten Endpunkt (`recordClientRoute()`, Tabelle `active_clients`), und
+`lib/topology.php` hängt sie als `route` an den Client-Knoten.
 
 ---
 
@@ -381,7 +394,7 @@ Detailkarte eines Endpunkts öffnet.
 | `api/chat.php` | POST | Session optional | Chat inklusive Routing, Tools, Streaming |
 | `api/chat_sessions.php` | GET/POST | Session | `action=list\|load\|delete` |
 | `api/models.php` | GET | – | Modelle eines Endpunkts abfragen |
-| `api/heartbeat.php` | POST | – | Präsenz-Token melden |
+| `api/heartbeat.php` | POST | – | Präsenz-Token melden; optional `route:{kind, model, endpoint_id}` der gerade laufenden Anfrage |
 | `api/document_status.php` | GET | Session | Upload-Status des Benutzers |
 | `api/upload_document.php` | POST | Session + CSRF | Dokument-Upload (`retain=1` bewahrt die Datei auf) |
 | `api/document_retention.php` | POST | Session + CSRF | Datei in die private Wissensdatenbank aufnehmen / wieder entfernen |

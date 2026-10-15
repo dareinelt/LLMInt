@@ -6,8 +6,8 @@ zur Nachrichtenflow-Topologie entstanden sind:
 | Ebene | Datei | Gegenstand |
 |---|---|---|
 | PHP | `php/test_topology_helpers.php` | Die reinen Helfer aus `lib/topology.php`: Zustands- und Aktivitätsbewertung, Zahlen- und Temperaturformatierung, URL- und Client-Beschriftung, Parametergrößen, Endpunktzustand, JSON-Insel. |
-| PHP | `php/test_topology_build.php` | `topology_build()`: Hierarchie (LLMInt → LLM/SpeechInt/ImageInt/SearXNG/Wissensdatenbank/Clients), Knoten-/Kantenvertrag für den Renderer, Detailkarten-Felder, Optionen (`include_off`, `slot_limit`), Störungsliste. |
-| JavaScript | `js/flow-topology.test.js` | Der Canvas-Renderer `assets/js/flow-topology.js` in einer VM-Sandbox: was `apply()` übernimmt und verwirft, Umschalten zwischen Detailkarte und HTML-Panel, Auswahl per Klick, der hervorgehobene Weg zwischen Endpunkt und Client (in beide Richtungen), die Platzierung der Detailkarte neben dem Knoten, ein vollständiger Frame, reduzierte Bewegung, ResizeObserver, JSON-Insel und `load()`. |
+| PHP | `php/test_topology_build.php` | `topology_build()`: Hierarchie (LLMInt → LLM/SpeechInt/ImageInt/SearXNG/Wissensdatenbank/Clients), Knoten-/Kantenvertrag für den Renderer, Detailkarten-Felder, Optionen (`include_off`, `slot_limit`), Störungsliste, laufende Anfrage am Client-Knoten (`route`). |
+| JavaScript | `js/flow-topology.test.js` | Der Canvas-Renderer `assets/js/flow-topology.js` in einer VM-Sandbox: was `apply()` übernimmt und verwirft, Umschalten zwischen Detailkarte und HTML-Panel, Auswahl per Klick, der hervorgehobene Weg zwischen Endpunkt und Client (in beide Richtungen, bei laufender Anfrage auf deren Zweig eingegrenzt), das Lauflicht des laufenden Weges, die Platzierung der Detailkarte neben dem Knoten, ein vollständiger Frame, reduzierte Bewegung, ResizeObserver, JSON-Insel und `load()`. |
 
 Die Tests sind bewusst **abhängigkeitsfrei**: kein Composer, kein PHPUnit, kein
 npm-Paket, kein Browser. `php/bootstrap.php` ist ein Mini-Harness,
@@ -65,11 +65,11 @@ tests/
 ├── php/
 │   ├── bootstrap.php             # Mini-Harness (test_case, Assertions, Summary)
 │   ├── fixtures.php              # realistische load_stats-Antworten als Vorlagen
-│   ├── test_topology_helpers.php # 28 Tests
-│   └── test_topology_build.php   # 36 Tests
+│   ├── test_topology_helpers.php # 29 Tests
+│   └── test_topology_build.php   # 43 Tests
 └── js/
     ├── support/sandbox.js        # DOM-/Canvas-Attrappe + node:vm-Lader
-    └── flow-topology.test.js     # 42 Tests
+    └── flow-topology.test.js     # 47 Tests
 ```
 
 ## Neue Tests ergänzen

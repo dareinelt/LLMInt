@@ -425,13 +425,14 @@ test('der Weg führt nicht in fremde Zweige', () => {
     }
 });
 
-test('Klick auf eine Sitzung hebt den Weg bis zu den Endpunkten hervor', () => {
+test('Klick auf eine Sitzung ohne laufende Anfrage hebt alle Endpunkt-Zweige hervor', () => {
     const { api } = mountWith();
     api.apply(branchyPayload());
     api.select('client:1');
 
     const route = api.route();
     assert.equal(route.active, true, 'der Weg muss aktiv sein');
+    assert.equal(route.busy, false, 'ohne laufende Anfrage ist der Weg nicht eingegrenzt');
     same(route.nodes.slice().sort(), [
         'client:1', 'clients', 'ep:1', 'ep:2', 'hub', 'llm',
         'model:gemma-3-27b', 'model:qwen', 'search',
@@ -456,6 +457,98 @@ test('die übrigen Sitzungen liegen nicht auf dem Weg einer Sitzung', () => {
     const route = api.route();
     assert.equal(route.nodes.indexOf('client:2'), -1, 'die zweite Sitzung liegt nicht auf dem Weg');
     assert.equal(route.edges.indexOf('clients>client:2'), -1, 'ihre Linie ebenso wenig');
+});
+
+/**
+ * branchyPayload() plus a running request on the first session. The server
+ * resolves it into the keys of the path it walks (route.nodes), exactly like
+ * topology_build() does.
+ */
+function runningPayload(route) {
+    const payload = branchyPayload();
+    payload.nodes['client:1'].route = Object.assign({
+        kind: 'llm',
+        model: 'gemma-3-27b',
+        endpoint_id: 1,
+        seconds: 4,
+        nodes: ['model:gemma-3-27b', 'ep:1'],
+    }, route || {});
+    return payload;
+}
+
+test('Klick auf eine Sitzung mit laufender Anfrage hebt nur deren Zweig hervor', () => {
+    const { api } = mountWith();
+    api.apply(runningPayload());
+    api.select('client:1');
+
+    const route = api.route();
+    assert.equal(route.active, true, 'der Weg muss aktiv sein');
+    assert.equal(route.busy, true, 'die Sitzung wartet auf eine Antwort');
+    same(route.nodes.slice().sort(), [
+        'client:1', 'clients', 'ep:1', 'hub', 'llm', 'model:gemma-3-27b',
+    ]);
+    same(route.edges.slice().sort(), [
+        'clients>client:1',
+        'hub>clients',
+        'hub>llm',
+        'llm>model:gemma-3-27b',
+        'model:gemma-3-27b>ep:1',
+    ]);
+});
+
+test('die übrigen Zweige bleiben bei einer laufenden Anfrage dunkel', () => {
+    const { api } = mountWith();
+    api.apply(runningPayload());
+    api.select('client:1');
+
+    const route = api.route();
+    for (const key of ['client:2', 'ep:2', 'model:qwen', 'search']) {
+        assert.equal(route.nodes.indexOf(key), -1, key + ' gehört nicht zur laufenden Anfrage');
+    }
+    for (const id of ['clients>client:2', 'llm>model:qwen', 'model:qwen>ep:2', 'hub>search']) {
+        assert.equal(route.edges.indexOf(id), -1, id + ' gehört nicht zur laufenden Anfrage');
+    }
+});
+
+test('eine laufende Suche führt zur Suchmaschine', () => {
+    const { api } = mountWith();
+    api.apply(runningPayload({ kind: 'search', model: '', endpoint_id: 0, nodes: ['search'] }));
+    api.select('client:1');
+
+    const route = api.route();
+    assert.equal(route.busy, true);
+    same(route.nodes.slice().sort(), ['client:1', 'clients', 'hub', 'search']);
+    same(route.edges.slice().sort(), ['clients>client:1', 'hub>clients', 'hub>search']);
+});
+
+test('ohne bekanntes Ziel bleibt die Sitzung bei ihrem bisherigen Weg', () => {
+    const { api } = mountWith();
+    api.apply(runningPayload({ nodes: ['ep:99'] }));
+    api.select('client:1');
+
+    const route = api.route();
+    assert.equal(route.busy, false, 'ohne auffindbares Ziel gilt die Anfrage als unbekannt');
+    assert.equal(route.nodes.indexOf('ep:2') >= 0, true,
+        'dann öffnen sich wieder alle Endpunkt-Zweige');
+});
+
+test('nur der Weg einer laufenden Anfrage fließt', () => {
+    const { env, api } = mountWith();
+    api.apply(runningPayload());
+    env.pump(40);
+
+    // The travelling dashes are the only strokes with a 12/12 pattern.
+    const flowing = () => env.ctx.calls.filter((call) => call.name === 'stroke'
+        && call.dash.length === 2 && call.dash[0] === 12 && call.dash[1] === 12).length;
+
+    env.ctx.calls.length = 0;
+    env.pump();
+    assert.equal(flowing(), 0, 'ohne Auswahl fließt nichts');
+
+    api.select('client:1');
+    env.ctx.calls.length = 0;
+    env.pump();
+    assert.equal(flowing(), api.route().edges.length, 'jede Kante der laufenden Anfrage fließt');
 });
 
 test('Klick auf die Clients-Wolke hebt alle Sitzungen hervor', () => {

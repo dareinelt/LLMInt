@@ -462,6 +462,127 @@ test_case('die Sitzungen sind alphabetisch sortiert', function (): void {
     assert_same(['Alpha', 'mitte', 'zeta'], $titles);
 });
 
+// ── Laufende Anfrage ──────────────────────────────────────────────────────────
+
+/** Key of a session node, matching the hashing in topology_build(). */
+function topo_client_key(string $host, string $ip): string
+{
+    return 'client:' . md5($host . '|' . $ip);
+}
+
+/**
+ * topology_build() over a fixture where the session $host reports $route as its
+ * running request. The other sessions of the fixture stay idle.
+ */
+function topo_running(array $route, string $host = 'ws-anna', string $ip = '10.0.0.11'): array
+{
+    return topo(['clients' => ['list' => [array_merge(
+        ['ip' => $ip, 'hostname' => $host, 'tabs' => 1],
+        $route
+    )]]]);
+}
+
+test_case('eine laufende Anfrage markiert den Weg der Sitzung', function (): void {
+    $topology = topology_build(topology_stats_with_running_requests(), ['base_url' => '', 'slot_limit' => 4]);
+
+    $busy = topo_node($topology, topo_client_key('ws-anna', '10.0.0.11'));
+    assert_same([
+        'kind'        => 'llm',
+        'model'       => 'gemma-3-27b-it-Q4_K_M',
+        'endpoint_id' => 1,
+        'nodes'       => [topo_model_key('gemma-3-27b-it-Q4_K_M'), 'ep:1'],
+    ], $busy['route'], 'Modell und Endpunkt der Anfrage gehören zum Weg');
+
+    $search = topo_node($topology, topo_client_key('ws-ein-sehr-langer-rechnername', '10.0.0.13'));
+    assert_same(['search'], $search['route']['nodes'], 'eine Websuche endet bei SearXNG');
+});
+
+test_case('ohne laufende Anfrage bleibt der Weg einer Sitzung offen', function (): void {
+    $topology = topology_build(topology_stats_with_running_requests(), ['base_url' => '', 'slot_limit' => 4]);
+
+    $idle = topo_node($topology, topo_client_key('ws-bernd', '10.0.0.12'));
+    assert_same(null, $idle['route'], 'ohne Anfrage gibt es keinen Weg');
+});
+
+test_case('ohne Route-Daten bleibt der Weg jeder Sitzung offen', function (): void {
+    $topology = topo();
+
+    foreach (topo_node($topology, 'clients')['cloud']['items'] as $item) {
+        assert_same(null, topo_node($topology, $item['key'])['route'], 'Sitzung ohne Anfrage hat keinen Weg');
+    }
+});
+
+test_case('unbekannte Route-Arten werden ignoriert', function (): void {
+    // Only CLIENT_ROUTE_KINDS (llm, image, speech, search) count as a request;
+    // anything else must not light up a path.
+    $topology = topo_running([
+        'route_kind'        => 'vector',
+        'route_model'       => 'irgendwas',
+        'route_endpoint_id' => 1,
+        'route_seconds'     => 3,
+    ]);
+
+    assert_same(null, topo_node($topology, topo_client_key('ws-anna', '10.0.0.11'))['route']);
+});
+
+test_case('der Weg einer laufenden Anfrage wird bis zum Ziel aufgelöst', function (): void {
+    $cases = [
+        [
+            ['route_kind' => 'image', 'route_model' => '', 'route_endpoint_id' => 1, 'route_seconds' => 1],
+            ['image-ep:1'],
+        ],
+        [
+            ['route_kind' => 'speech', 'route_model' => '', 'route_endpoint_id' => 1, 'route_seconds' => 1],
+            ['speech-ep:1'],
+        ],
+        [
+            // The endpoint is gone: the way ends at the group it belongs to.
+            ['route_kind' => 'image', 'route_model' => '', 'route_endpoint_id' => 99, 'route_seconds' => 1],
+            ['image'],
+        ],
+        [
+            // Model and endpoint unknown: at least the LLM branch stays marked.
+            ['route_kind' => 'llm', 'route_model' => 'gibt-es-nicht', 'route_endpoint_id' => 99, 'route_seconds' => 1],
+            ['llm'],
+        ],
+    ];
+
+    foreach ($cases as [$route, $expected]) {
+        $topology = topo_running($route);
+        $node = topo_node($topology, topo_client_key('ws-anna', '10.0.0.11'));
+        assert_same($expected, $node['route']['nodes'], test_describe($route['route_kind']));
+    }
+});
+
+test_case('die laufende Anfrage einer Sitzung erscheint als Fakt', function (): void {
+    $topology = topology_build(topology_stats_with_running_requests(), ['base_url' => '', 'slot_limit' => 4]);
+
+    $busy = topo_node($topology, topo_client_key('ws-anna', '10.0.0.11'));
+    $fact = topo_fact($busy, 'Laufende Anfrage');
+    assert_same('gemma-3-27b-it-Q4_K_M · seit 7 s', $fact['value']);
+    assert_same('running', $fact['tone'], 'eine laufende Anfrage wird hervorgehoben');
+    assert_same(3, $busy['activity'], 'eine arbeitende Sitzung ist aktiver');
+
+    $search = topo_node($topology, topo_client_key('ws-ein-sehr-langer-rechnername', '10.0.0.13'));
+    assert_same('Laufende Websuche', topo_fact($search, 'Laufende Websuche')['label']);
+
+    $idle = topo_node($topology, topo_client_key('ws-bernd', '10.0.0.12'));
+    assert_same('keine', topo_fact($idle, 'Laufende Anfrage')['value']);
+    assert_same('muted', topo_fact($idle, 'Laufende Anfrage')['tone']);
+    assert_same(1, $idle['activity']);
+});
+
+test_case('die Sitzung ohne Route-Felder gilt als untätig', function (): void {
+    // A load_stats.php response from before the columns existed must not break.
+    $topology = topo(['clients' => ['list' => [
+        ['ip' => '10.0.0.21', 'hostname' => 'ws-ohne', 'tabs' => 1],
+    ]]]);
+    $node = topo_node($topology, topo_client_key('ws-ohne', '10.0.0.21'));
+
+    assert_same(null, $node['route']);
+    assert_same('keine', topo_fact($node, 'Laufende Anfrage')['value']);
+});
+
 // ── Neighbours ────────────────────────────────────────────────────────────────
 
 test_case('Nachbarlisten sind beidseitig und ohne Doppelte', function (): void {

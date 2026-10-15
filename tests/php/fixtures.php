@@ -173,6 +173,28 @@ function topology_stats_fixture(array $overrides = []): array
     return array_replace_recursive($stats, $overrides);
 }
 
+/**
+ * Fixture where two sessions report a running request (see recordClientRoute()
+ * in db.php): ws-anna waits for the first LLM endpoint, the long-named machine
+ * searches the web. ws-bernd stays idle.
+ */
+function topology_stats_with_running_requests(): array
+{
+    $stats = topology_stats_fixture();
+
+    $stats['clients']['list'][0]['route_kind']        = 'llm';
+    $stats['clients']['list'][0]['route_model']       = 'gemma-3-27b-it-Q4_K_M';
+    $stats['clients']['list'][0]['route_endpoint_id'] = 1;
+    $stats['clients']['list'][0]['route_seconds']     = 7;
+
+    $stats['clients']['list'][2]['route_kind']        = 'search';
+    $stats['clients']['list'][2]['route_model']       = '';
+    $stats['clients']['list'][2]['route_endpoint_id'] = 0;
+    $stats['clients']['list'][2]['route_seconds']     = 2;
+
+    return $stats;
+}
+
 /** Fixture without the ImageInt endpoints (feature not configured). */
 function topology_stats_without_image(): array
 {

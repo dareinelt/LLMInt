@@ -8,15 +8,20 @@
  * Each browser tab that has the main app open sends a POST every 30 s with a
  * randomly-generated per-tab token.  This endpoint:
  *   1. Upserts the token in active_clients (resets last_seen, stores IP/hostname).
- *   2. Purges entries older than 90 s (tab is considered gone).
- *   3. Records a count sample in client_count_log at most once per 30 s
+ *   2. Stores which request the tab is waiting for right now (optional
+ *      "route" field, see recordClientRoute() in db.php). An omitted field
+ *      leaves the stored route untouched, an explicit null clears it.
+ *   3. Purges entries older than 90 s (tab is considered gone).
+ *   4. Records a count sample in client_count_log at most once per 30 s
  *      (used for today's min / max / avg in the admin load tree).
  *
  * No authentication is required; apart from the network address of the client
  * (shown to admins only) no user-identifiable data is stored.
  *
- * Expected POST body (JSON):  { "token": "<32-128 hex chars>" }
- * Response (JSON):            { "ok": true, "count": <int> }
+ * Expected POST body (JSON):
+ *   { "token": "<32-128 hex chars>",
+ *     "route": { "kind": "llm", "model": "<label>", "endpoint_id": 12 } | null }
+ * Response (JSON):  { "ok": true, "count": <int> }
  */
 
 require_once __DIR__ . '/../db.php';
@@ -85,6 +90,19 @@ try {
                                  hostname = VALUES(hostname),
                                  last_seen = NOW(3)'
     )->execute([$token, $ip, $hostname]);
+
+    // 1b. The request this tab is waiting for right now. Only tabs that know
+    //     the field at all (current chat page) are synchronised – an omitted
+    //     field keeps the stored route, an explicit null clears it.
+    if (array_key_exists('route', $input)) {
+        $route = is_array($input['route']) ? $input['route'] : [];
+        recordClientRoute(
+            $token,
+            (string) ($route['kind'] ?? ''),
+            (string) ($route['model'] ?? ''),
+            (int) ($route['endpoint_id'] ?? 0)
+        );
+    }
 
     // 2. Purge expired clients (no activity for > 90 s)
     $db->exec(

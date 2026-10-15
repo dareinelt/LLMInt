@@ -348,6 +348,9 @@
                 neighbours: Array.isArray(raw.neighbours) ? raw.neighbours.map(String) : [],
                 url:        typeof raw.url === 'string' ? raw.url : '',
                 synthetic:  !!raw.synthetic,
+                // Set by topology_build() for a client that is waiting for an
+                // answer right now: the path of that very request.
+                route:      raw.route && typeof raw.route === 'object' ? raw.route : null,
                 alpha:      1,
                 appear:     0,
                 effect:     0,
@@ -744,8 +747,13 @@
         // can be walked: from the clicked node up its branch to the core and from
         // there across into the opposite side. The clients are siblings of the
         // endpoint branches, not their descendants, so both halves belong to it:
-        // a click on an endpoint lights up every session, a click on a session
-        // every branch that ends in an endpoint.
+        // a click on an endpoint lights up every session.
+        //
+        // A session is different: while it waits for an answer it reports the
+        // endpoint it asked (node.route, filled by topology_build()), so its way
+        // is known exactly and only that one branch lights up. Without a running
+        // request its way is unknown and every branch that ends in an endpoint
+        // joins in – as it does for an endpoint click.
 
         function parentEdges() {
             const parents = new Map();
@@ -762,29 +770,42 @@
         }
 
         function buildRoute(key) {
-            const next = { nodes: new Set(), edges: new Set(), active: false };
+            const next = { nodes: new Set(), edges: new Set(), active: false, busy: false };
             if (!key || !nodes.has(key)) return next;
 
             const parents = parentEdges();
-            const walked = new Set();
-            let cursor = key;
-            while (cursor && !walked.has(cursor)) {
-                walked.add(cursor);
-                next.nodes.add(cursor);
-                const up = parents.get(cursor);
-                if (!up) break;
-                next.edges.add(up.id);
-                cursor = up.from;
+            const climbed = new Set();
+
+            /** Walks up from a node to the core and collects the way. */
+            function climb(start) {
+                let cursor = start;
+                while (cursor && !climbed.has(cursor)) {
+                    climbed.add(cursor);
+                    next.nodes.add(cursor);
+                    const up = parents.get(cursor);
+                    if (!up) break;
+                    next.edges.add(up.id);
+                    cursor = up.from;
+                }
             }
 
-            // The opposite side joins in full: from a session the way runs
-            // through every branch that ends in an endpoint (the other sessions
-            // are not part of it), from an endpoint through every session.
-            const fromSession = nodes.get(key).kind === 'client';
-            for (const node of nodes.values()) {
-                if (next.nodes.has(node.key)) continue;
-                const wanted = fromSession ? !isSessionSide(node) : isSessionSide(node);
-                if (wanted) next.nodes.add(node.key);
+            climb(key);
+
+            const node = nodes.get(key);
+            const running = node.kind === 'client' && node.route && Array.isArray(node.route.nodes)
+                ? node.route.nodes.filter(function (target) { return nodes.has(String(target)); })
+                : [];
+
+            if (running.length) {
+                next.busy = true;
+                for (const target of running) climb(String(target));
+            } else {
+                const fromSession = node.kind === 'client';
+                for (const other of nodes.values()) {
+                    if (next.nodes.has(other.key)) continue;
+                    const wanted = fromSession ? !isSessionSide(other) : isSessionSide(other);
+                    if (wanted) next.nodes.add(other.key);
+                }
             }
 
             // The network is a tree, so a line belongs to the way when both of
@@ -991,6 +1012,21 @@
                 traceEdge(path);
                 ctx.stroke();
                 ctx.restore();
+
+                // The way of a request that is running right now flows: bright
+                // dashes travel along it from the session to the endpoint.
+                if (onRoute && route.busy) {
+                    ctx.save();
+                    ctx.globalAlpha = alpha * 0.8;
+                    ctx.lineWidth = width + 1.4;
+                    ctx.lineCap = 'round';
+                    ctx.setLineDash([12, 12]);
+                    ctx.lineDashOffset = -((performance.now() / 24) % 24);
+                    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+                    traceEdge(path);
+                    ctx.stroke();
+                    ctx.restore();
+                }
 
                 if (edge.state === 'error') {
                     const mid = bezierPoint(path, 0.5);
@@ -2304,6 +2340,7 @@
             route: function () {
                 return {
                     active: route.active,
+                    busy: route.busy,
                     nodes: Array.from(route.nodes),
                     edges: Array.from(route.edges),
                 };

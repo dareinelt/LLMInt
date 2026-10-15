@@ -248,6 +248,76 @@ function topology_client_label(array $client, int $unknownNo): string
     return $unknownNo > 1 ? 'unbekannt ' . $unknownNo : 'unbekannt';
 }
 
+/**
+ * Human label of a running request kind (see CLIENT_ROUTE_KINDS in db.php).
+ */
+function topology_route_label(string $kind): string
+{
+    switch ($kind) {
+        case 'llm':
+            return 'Laufende Anfrage';
+        case 'image':
+            return 'Laufende Bildgenerierung';
+        case 'speech':
+            return 'Laufende Spracherkennung';
+        case 'search':
+            return 'Laufende Websuche';
+    }
+    return 'Laufende Anfrage';
+}
+
+/**
+ * Resolve a client's running request into the node keys of the path it walks
+ * (see the "Path of the running request" section in topology_build()).
+ *
+ * @param array<string,array> $nodes All nodes built so far.
+ * @return array<int,string> Target node keys – empty when nothing matches.
+ */
+function topology_route_targets(array $route, array $nodes): array
+{
+    $kind = (string) ($route['kind'] ?? '');
+    $id   = (int) ($route['endpoint_id'] ?? 0);
+    $model = trim((string) ($route['model'] ?? ''));
+
+    $targets = [];
+    switch ($kind) {
+        case 'llm':
+            $canonical = function_exists('canonicalModelName')
+                ? canonicalModelName($model)
+                : strtolower($model);
+            if ($canonical !== '' && isset($nodes['model:' . $canonical])) {
+                $targets[] = 'model:' . $canonical;
+            }
+            if ($id > 0 && isset($nodes['ep:' . $id])) {
+                $targets[] = 'ep:' . $id;
+            }
+            if ($targets === [] && isset($nodes['llm'])) {
+                $targets[] = 'llm';
+            }
+            break;
+        case 'image':
+            if ($id > 0 && isset($nodes['image-ep:' . $id])) {
+                $targets[] = 'image-ep:' . $id;
+            } elseif (isset($nodes['image'])) {
+                $targets[] = 'image';
+            }
+            break;
+        case 'speech':
+            if ($id > 0 && isset($nodes['speech-ep:' . $id])) {
+                $targets[] = 'speech-ep:' . $id;
+            } elseif (isset($nodes['speech'])) {
+                $targets[] = 'speech';
+            }
+            break;
+        case 'search':
+            if (isset($nodes['search'])) {
+                $targets[] = 'search';
+            }
+            break;
+    }
+    return $targets;
+}
+
 /** Fill in the defaults every node shares. */
 function topology_node(array $node): array
 {
@@ -266,6 +336,7 @@ function topology_node(array $node): array
         'cloud'      => null,
         'members'    => null,
         'neighbours' => [],
+        'route'      => null,
         'url'        => '',
         'synthetic'  => false,
     ], $node);
@@ -353,6 +424,13 @@ function topology_build(array $stats, array $options = []): array
         $tabs = max(1, (int) ($client['tabs'] ?? 1));
         $who  = $host !== '' ? ($ip !== '' ? $host . ' (' . $ip . ')' : $host)
                              : ($ip !== '' ? $ip : 'Unbekannte Adresse');
+
+        // The request this tab is waiting for right now (empty while idle).
+        // The path it belongs to is resolved further down, once every node of
+        // the graph exists – see "Path of the running request".
+        $routeKind = strtolower(trim((string) ($client['route_kind'] ?? '')));
+        $busy      = in_array($routeKind, CLIENT_ROUTE_KINDS, true);
+
         $clientItems[] = [
             'key'      => 'client:' . md5($host . '|' . $ip),
             'title'    => topology_client_label($client, $unknownNo),
@@ -360,6 +438,13 @@ function topology_build(array $stats, array $options = []): array
             'state'    => 'ok',
             'badge'    => $tabs . '×',
             'facts'    => [],
+            'route'    => $busy ? [
+                'kind'        => $routeKind,
+                'model'       => trim((string) ($client['route_model'] ?? '')),
+                'endpoint_id' => (int) ($client['route_endpoint_id'] ?? 0),
+                'seconds'     => isset($client['route_seconds']) && $client['route_seconds'] !== null
+                    ? (int) $client['route_seconds'] : null,
+            ] : null,
         ];
     }
     usort($clientItems, static fn(array $a, array $b): int => strcasecmp($a['title'], $b['title']));
@@ -369,6 +454,20 @@ function topology_build(array $stats, array $options = []): array
     foreach ($clientItems as $item) {
         $key          = (string) $item['key'];
         $clientKeys[] = $key;
+        $route        = is_array($item['route'] ?? null) ? $item['route'] : null;
+
+        $facts = [topology_fact('🗔', 'Tabs', (string) $item['badge'], 'plain')];
+        if ($route === null) {
+            $facts[] = topology_fact('⚡', 'Laufende Anfrage', 'keine', 'muted');
+        } else {
+            $running = (string) $route['model'];
+            if ($running !== '' && $route['seconds'] !== null) {
+                $running .= ' · seit ' . $route['seconds'] . ' s';
+            }
+            $facts[] = topology_fact('⚡', topology_route_label((string) $route['kind']),
+                $running !== '' ? $running : '–', 'running');
+        }
+
         $nodes[$key]  = topology_node([
             'key'      => $key,
             'kind'     => 'client',
@@ -377,10 +476,8 @@ function topology_build(array $stats, array $options = []): array
             'state'    => 'ok',
             'badge'    => (string) $item['badge'],
             'message'  => '',
-            'activity' => topology_activity(1),
-            'facts'    => [
-                topology_fact('🗔', 'Tabs', (string) $item['badge'], 'plain'),
-            ],
+            'activity' => topology_activity($route !== null ? 3 : 1),
+            'facts'    => $facts,
             'url'      => $linkBase . 'index.php#dashboard-card',
         ]);
     }
@@ -1014,6 +1111,30 @@ function topology_build(array $stats, array $options = []): array
             $parts[] = count($warningKeys) . ' Einschränkung' . (count($warningKeys) !== 1 ? 'en' : '');
         }
         $overallMessage = implode(' und ', $parts) . ' erkannt.';
+    }
+
+    // ── Path of the running request ───────────────────────────────────────────
+    // A tab that is waiting for an answer right now reports which endpoint it
+    // asked (see recordClientRoute() in db.php). Its node carries that request
+    // as route_kind/route_model/route_endpoint_id; here it is resolved into the
+    // node keys of the path it walks, so a click on the client can highlight
+    // exactly this path instead of every branch (see buildRoute() in
+    // assets/js/flow-topology.js). Done last – it needs every node to exist.
+
+    foreach ($clientItems as $item) {
+        if (!is_array($item['route'] ?? null)) {
+            continue;
+        }
+        $targets = topology_route_targets($item['route'], $nodes);
+        if ($targets === []) {
+            continue;
+        }
+        $nodes[$item['key']]['route'] = [
+            'kind'        => (string) $item['route']['kind'],
+            'model'       => (string) $item['route']['model'],
+            'endpoint_id' => (int) $item['route']['endpoint_id'],
+            'nodes'       => $targets,
+        ];
     }
 
     return [
