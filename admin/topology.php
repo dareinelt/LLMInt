@@ -124,8 +124,8 @@ $version = static function (string $file): string {
                     aria-label="Nachrichtenfluss der LLMInt-Bausteine: Clients, Kern, Modellgruppen, LLM-Endpunkte und Zusatzdienste"></canvas>
 
             <div class="topo-hint" data-topo-hint>
-                Ziehen dreht die Ansicht · Mausrad zoomt · Klick öffnet Details ·
-                <kbd>F</kbd> einpassen · <kbd>R</kbd> zurücksetzen · <kbd>Tab</kbd> nächster Baustein
+                Ziehen dreht die Ansicht · Mausrad zoomt · Klick öffnet die Detailkarte ·
+                <kbd>Esc</kbd> schließt sie · <kbd>F</kbd> einpassen · <kbd>R</kbd> zurücksetzen · <kbd>Tab</kbd> nächster Baustein
             </div>
 
             <div class="topo-tooltip" data-topo-tooltip hidden>

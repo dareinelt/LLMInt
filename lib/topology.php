@@ -21,7 +21,8 @@
  *         'key','kind','title','subtitle','state','badge','message',
  *         'activity'  => int 0..12 (flow intensity driving the particles),
  *         'counters'  => ['current'=>int,'peak'=>int] | null,
- *         'facts'     => [['label'=>..,'value'=>..], …],
+ *         'facts'     => [['icon'=>..,'label'=>..,'value'=>..,'tone'=>..], …],
+ *         'slots'     => ['used'=>int,'max'=>int] | null (parallel slots bar),
  *         'cloud'     => ['title','empty','items'=>[…]],
  *         'members'   => ['title','empty','items'=>[…]],
  *         'neighbours'=> [key, …],
@@ -54,6 +55,15 @@
  *
  * Node kinds: clients, client, hub, llm, model, endpoint, search, vector, image,
  * speech (see topology_kinds()). States: ok, warn, error, off.
+ *
+ * Detail cards
+ * ------------
+ * The front end turns a clicked node into an in-canvas detail card. Nodes that
+ * carry a 'cloud' or 'members' list (clients, llm, model, image, speech) keep
+ * the HTML side panel instead, because their payload is a list and not a set of
+ * key/value rows. Every other node renders 'facts' as "icon  label: value" rows
+ * in the colour named by 'tone' (see FACT_TONES in flow-topology.js) plus the
+ * 'slots' bar when present.
  */
 
 /** All node kinds known to the front end. */
@@ -122,6 +132,46 @@ function topology_activity(int $value, int $max = 12): int
     return max(0, min($max, $value));
 }
 
+/**
+ * Compact counter used by the endpoint detail cards. Mirrors formatNum() of the
+ * previous dashboard graphic: 3512 -> "3.5K", 1250000 -> "1.2M".
+ */
+function topology_format_num($value): string
+{
+    $n = (float) $value;
+    if ($n >= 1000000) {
+        return number_format($n / 1000000, 1, '.', '') . 'M';
+    }
+    if ($n >= 1000) {
+        return number_format($n / 1000, 1, '.', '') . 'K';
+    }
+    return (string) (int) $n;
+}
+
+/**
+ * One row of a node detail card.
+ *
+ * The front end renders "icon  label: value" in the colour of $tone; an empty
+ * label collapses to "icon  value". See FACT_TONES in flow-topology.js.
+ */
+function topology_fact(string $icon, string $label, string $value, string $tone = 'plain'): array
+{
+    return ['icon' => $icon, 'label' => $label, 'value' => $value, 'tone' => $tone];
+}
+
+/** Colour tone for a CPU temperature reading (°C). */
+function topology_temp_tone($temp): string
+{
+    if ($temp === null || $temp === '') {
+        return 'muted';
+    }
+    $value = (float) $temp;
+    if ($value >= 80) {
+        return 'error';
+    }
+    return $value >= 65 ? 'warn' : 'temp';
+}
+
 /** "https://host:8000/v1" -> "host:8000" for compact node titles. */
 function topology_short_url(string $url): string
 {
@@ -139,8 +189,9 @@ function topology_short_url(string $url): string
 
 /**
  * Parameter size marker of a model name ("gemma-3-27b-it" -> "27b", "qwen3-a3b"
- * -> "3b"). Mirrors extractIntelligenceLabel() in admin/index.php so the
- * topology shows the same label as the legacy load diagram.
+ * -> "3b"), used as the label of the intelligence groups in the topology. A MoE
+ * active-parameter marker (A3B, A17B) is only a fallback so that "qwen3-a3b"
+ * still yields a readable size.
  */
 function topology_param_size_label(string $model): string
 {
@@ -211,6 +262,7 @@ function topology_node(array $node): array
         'activity'   => 0,
         'counters'   => null,
         'facts'      => [],
+        'slots'      => null,
         'cloud'      => null,
         'members'    => null,
         'neighbours' => [],
@@ -327,7 +379,7 @@ function topology_build(array $stats, array $options = []): array
             'message'  => '',
             'activity' => topology_activity(1),
             'facts'    => [
-                ['label' => 'Tabs', 'value' => (string) $item['badge']],
+                topology_fact('🗔', 'Tabs', (string) $item['badge'], 'plain'),
             ],
             'url'      => $linkBase . 'index.php#dashboard-card',
         ]);
@@ -402,30 +454,29 @@ function topology_build(array $stats, array $options = []): array
         $llmStates[] = $state;
 
         $facts = [
-            ['label' => 'Laufend', 'value' => (string) $running],
-            ['label' => 'Jobs heute', 'value' => number_format($jobs, 0, ',', '.')],
-            ['label' => 'Prompt Token heute', 'value' => number_format($prompt, 0, ',', '.')],
-            ['label' => 'Completion Token heute', 'value' => number_format($complet, 0, ',', '.')],
-            ['label' => 'Total Token heute', 'value' => number_format($tokens, 0, ',', '.')],
-            ['label' => 'Ø Geschwindigkeit', 'value' => $tps > 0 ? number_format($tps, 1, ',', '.') . ' Tok/s' : '–'],
-            ['label' => 'Slots', 'value' => $running . ' / ' . $slotLimit],
+            topology_fact('▶', 'Laufend', (string) $running, $running > 0 ? 'running' : 'muted'),
+            topology_fact('✓', 'Jobs heute', topology_format_num($jobs), 'jobs'),
+            topology_fact('↑', 'Prompt heute', topology_format_num($prompt), 'prompt'),
+            topology_fact('↓', 'Completion', topology_format_num($complet), 'completion'),
+            topology_fact('⬡', 'Total Token', topology_format_num($tokens), 'total'),
+            topology_fact('⚡', 'Ø Geschwindigkeit', $tps > 0 ? number_format($tps, 1, ',', '.') . ' Tok/s' : '–', 'speed'),
         ];
         if ($ssh) {
             if (is_array($sysStats) && !empty($sysStats['ok'])) {
                 $ramTotal = (float) ($sysStats['ram_total'] ?? 0);
                 $ramUsed  = $sysStats['ram_used'] !== null ? (float) $sysStats['ram_used'] : null;
-                $facts[]  = ['label' => 'RAM', 'value' => ($ramTotal > 0 && $ramUsed !== null)
+                $facts[]  = topology_fact('🧠', 'RAM', ($ramTotal > 0 && $ramUsed !== null)
                     ? sprintf('%.1f / %.1f GB (%d%%)', $ramUsed / 1073741824, $ramTotal / 1073741824, (int) round($ramUsed / $ramTotal * 100))
-                    : '–'];
-                $facts[]  = ['label' => 'CPU-Last 1/5 min', 'value' => sprintf(
-                    '%s / %s',
+                    : '–', 'ram');
+                $facts[]  = topology_fact('📊', 'CPU-Last', sprintf(
+                    '%s (5 min: %s)',
                     $sysStats['cpu_load_1m'] !== null ? number_format((float) $sysStats['cpu_load_1m'], 2, ',', '.') : '–',
                     $sysStats['cpu_load_5m'] !== null ? number_format((float) $sysStats['cpu_load_5m'], 2, ',', '.') : '–'
-                )];
-                $facts[]  = ['label' => 'CPU-Temperatur', 'value' => $sysStats['cpu_temp'] !== null
-                    ? number_format((float) $sysStats['cpu_temp'], 1, ',', '.') . ' °C' : '–'];
+                ), 'cpu');
+                $facts[]  = topology_fact('🌡', 'Temp', $sysStats['cpu_temp'] !== null
+                    ? number_format((float) $sysStats['cpu_temp'], 1, ',', '.') . ' °C' : '–', topology_temp_tone($sysStats['cpu_temp'] ?? null));
             } else {
-                $facts[] = ['label' => 'SSH-Systemwerte', 'value' => 'warte auf Daten …'];
+                $facts[] = topology_fact('🔑', 'SSH', 'warte auf Daten …', 'muted');
             }
         }
 
@@ -450,6 +501,7 @@ function topology_build(array $stats, array $options = []): array
                 'peak_label' => 'Jobs heute',
             ],
             'facts'    => $facts,
+            'slots'    => ['used' => $running, 'max' => $slotLimit],
             'url'      => $linkBase . 'index.php#config-endpoints-card',
         ]);
 
@@ -482,15 +534,16 @@ function topology_build(array $stats, array $options = []): array
             : 'Keine laufenden Aufgaben.',
         'activity' => topology_activity(max(1, $totalRunning * 2 + 1)),
         'facts'    => [
-            ['label' => 'LLM laufend', 'value' => number_format($totalRunning, 0, ',', '.')],
-            ['label' => 'LLM erledigt (24 h)', 'value' => number_format((int) ($totals['total_done_24h'] ?? 0), 0, ',', '.')],
-            ['label' => 'LLM erledigt (gesamt)', 'value' => number_format((int) ($totals['total_done'] ?? 0), 0, ',', '.')],
-            ['label' => 'LLM Fehler (gesamt)', 'value' => number_format((int) ($totals['total_error'] ?? 0), 0, ',', '.')],
-            ['label' => 'Prompt Token (gesamt)', 'value' => number_format((int) ($totals['grand_prompt_tokens'] ?? 0), 0, ',', '.')],
-            ['label' => 'Completion Token (gesamt)', 'value' => number_format((int) ($totals['grand_completion_tokens'] ?? 0), 0, ',', '.')],
-            ['label' => 'Total Token (gesamt)', 'value' => number_format((int) ($totals['grand_tokens'] ?? 0), 0, ',', '.')],
-            ['label' => 'Modelle', 'value' => (string) count($modelGroups)],
-            ['label' => 'Endpunkte', 'value' => (string) count($epKeys)],
+            topology_fact('▶', 'LLM laufend', topology_format_num($totalRunning), $totalRunning > 0 ? 'running' : 'muted'),
+            topology_fact('✓', 'LLM erledigt (24 h)', topology_format_num((int) ($totals['total_done_24h'] ?? 0)), 'jobs'),
+            topology_fact('✓', 'LLM erledigt (gesamt)', topology_format_num((int) ($totals['total_done'] ?? 0)), 'jobs'),
+            topology_fact('⚠', 'LLM Fehler (gesamt)', topology_format_num((int) ($totals['total_error'] ?? 0)),
+                (int) ($totals['total_error'] ?? 0) > 0 ? 'error' : 'muted'),
+            topology_fact('↑', 'Prompt Token (gesamt)', topology_format_num((int) ($totals['grand_prompt_tokens'] ?? 0)), 'prompt'),
+            topology_fact('↓', 'Completion Token (gesamt)', topology_format_num((int) ($totals['grand_completion_tokens'] ?? 0)), 'completion'),
+            topology_fact('⬡', 'Total Token (gesamt)', topology_format_num((int) ($totals['grand_tokens'] ?? 0)), 'total'),
+            topology_fact('🧩', 'Modelle', (string) count($modelGroups), 'plain'),
+            topology_fact('🔌', 'Endpunkte', (string) count($epKeys), 'plain'),
         ],
         'synthetic' => true,
         'url'       => $linkBase . 'index.php#config-balancer-card',
@@ -525,11 +578,11 @@ function topology_build(array $stats, array $options = []): array
                 'peak_label' => 'Jobs heute',
             ],
             'facts'    => [
-                ['label' => 'Intelligenzgruppen', 'value' => (string) count($modelGroups)],
-                ['label' => 'Endpunkte', 'value' => (string) count($epKeys)],
-                ['label' => 'Laufend', 'value' => number_format($totalRunning, 0, ',', '.')],
-                ['label' => 'Jobs heute', 'value' => number_format($llmDoneJobs, 0, ',', '.')],
-                ['label' => 'Token heute', 'value' => number_format($llmTokens, 0, ',', '.')],
+                topology_fact('🧩', 'Intelligenzgruppen', (string) count($modelGroups), 'plain'),
+                topology_fact('🔌', 'Endpunkte', (string) count($epKeys), 'plain'),
+                topology_fact('▶', 'Laufend', (string) $totalRunning, $totalRunning > 0 ? 'running' : 'muted'),
+                topology_fact('✓', 'Jobs heute', topology_format_num($llmDoneJobs), 'jobs'),
+                topology_fact('⬡', 'Token heute', topology_format_num($llmTokens), 'total'),
             ],
             'members'  => [
                 'title' => 'Intelligenzgruppen',
@@ -578,11 +631,11 @@ function topology_build(array $stats, array $options = []): array
                 'peak_label' => 'Jobs heute',
             ],
             'facts'    => [
-                ['label' => 'Endpunkte', 'value' => (string) $count],
-                ['label' => 'Laufend', 'value' => (string) $group['running']],
-                ['label' => 'Jobs heute', 'value' => number_format($group['jobs'], 0, ',', '.')],
-                ['label' => 'Token heute', 'value' => number_format($group['tokens'], 0, ',', '.')],
-                ['label' => 'Parametergröße', 'value' => topology_param_size_label($group['model'])],
+                topology_fact('🔌', 'Endpunkte', (string) $count, 'plain'),
+                topology_fact('▶', 'Laufend', (string) $group['running'], $group['running'] > 0 ? 'running' : 'muted'),
+                topology_fact('✓', 'Jobs heute', topology_format_num($group['jobs']), 'jobs'),
+                topology_fact('⬡', 'Token heute', topology_format_num($group['tokens']), 'total'),
+                topology_fact('🧮', 'Parametergröße', topology_param_size_label($group['model']), 'muted'),
             ],
             'members'  => [
                 'title' => 'Endpunkte',
@@ -624,10 +677,10 @@ function topology_build(array $stats, array $options = []): array
             'activity' => topology_activity(max(1, $sxRunning * 2 + ($sxJobs > 0 ? 1 : 0))),
             'counters' => ['current' => $sxRunning, 'peak' => $sxJobs, 'peak_label' => 'Suchen heute'],
             'facts'    => [
-                ['label' => 'Laufend', 'value' => (string) $sxRunning],
-                ['label' => 'Suchen heute', 'value' => number_format($sxJobs, 0, ',', '.')],
-                ['label' => 'Ø Dauer', 'value' => $sxAvg !== null ? number_format((float) $sxAvg, 1, ',', '.') . ' s' : '–'],
-                ['label' => 'URL', 'value' => (string) ($searxng['base_url'] ?? '–')],
+                topology_fact('▶', 'Laufend', (string) $sxRunning, $sxRunning > 0 ? 'running' : 'muted'),
+                topology_fact('✓', 'Jobs heute', topology_format_num($sxJobs), 'jobs'),
+                topology_fact('⏱', 'Ø Antwortzeit', $sxAvg !== null ? number_format((float) $sxAvg, 1, ',', '.') . ' s' : '–', 'plain'),
+                topology_fact('🔗', 'URL', (string) ($searxng['base_url'] ?? '–'), 'muted'),
             ],
             'url'      => $linkBase . 'index.php#config-searxng-card',
         ]);
@@ -658,18 +711,18 @@ function topology_build(array $stats, array $options = []): array
             'activity' => topology_activity($vOnline ? ($vQueries > 0 ? 3 : 1) : 0),
             'counters' => ['current' => $vQueries, 'peak' => $vQueries, 'peak_label' => 'Abfragen heute'],
             'facts'    => [
-                ['label' => 'Status', 'value' => $vOnline ? 'online' : 'offline'],
-                ['label' => 'Modus', 'value' => (string) ($vectorStore['mode'] ?? '–')],
-                ['label' => 'Abfragen heute', 'value' => number_format($vQueries, 0, ',', '.')],
-                ['label' => 'Fehler heute', 'value' => number_format($vErrors, 0, ',', '.')],
-                ['label' => 'Ø Dauer', 'value' => isset($vectorStore['avg_duration_ms']) && $vectorStore['avg_duration_ms'] !== null
-                    ? number_format((float) $vectorStore['avg_duration_ms'], 0, ',', '.') . ' ms' : '–'],
-                ['label' => 'Dokumente', 'value' => isset($vectorStore['documents']) && $vectorStore['documents'] !== null
-                    ? number_format((int) $vectorStore['documents'], 0, ',', '.') : '–'],
-                ['label' => 'Vektoren', 'value' => isset($vectorStore['vectors']) && $vectorStore['vectors'] !== null
-                    ? number_format((int) $vectorStore['vectors'], 0, ',', '.') : '–'],
-                ['label' => 'Collection', 'value' => (string) ($vectorStore['collection'] ?? '–')],
-                ['label' => 'URL', 'value' => (string) ($vectorStore['base_url'] ?? '–')],
+                topology_fact('●', 'Status', $vOnline ? 'online' : 'offline', $vOnline ? 'ok' : 'error'),
+                topology_fact('⚙', 'Modus', (string) ($vectorStore['mode'] ?? '–'), 'muted'),
+                topology_fact('🔍', 'Abfragen heute', topology_format_num($vQueries), 'plain'),
+                topology_fact('⚠', 'Fehler heute', topology_format_num($vErrors), $vErrors > 0 ? 'warn' : 'muted'),
+                topology_fact('⏱', 'Ø Dauer', isset($vectorStore['avg_duration_ms']) && $vectorStore['avg_duration_ms'] !== null
+                    ? number_format((float) $vectorStore['avg_duration_ms'], 0, ',', '.') . ' ms' : '–', 'plain'),
+                topology_fact('📚', 'Dokumente', isset($vectorStore['documents']) && $vectorStore['documents'] !== null
+                    ? topology_format_num((int) $vectorStore['documents']) : '–', 'plain'),
+                topology_fact('🧮', 'Vektoren', isset($vectorStore['vectors']) && $vectorStore['vectors'] !== null
+                    ? topology_format_num((int) $vectorStore['vectors']) : '–', 'plain'),
+                topology_fact('🗂', 'Collection', (string) ($vectorStore['collection'] ?? '–'), 'muted'),
+                topology_fact('🔗', 'URL', (string) ($vectorStore['base_url'] ?? '–'), 'muted'),
             ],
             'url'      => $linkBase . 'index.php#config-vector-store-card',
         ]);
@@ -728,16 +781,16 @@ function topology_build(array $stats, array $options = []): array
         }
 
         $facts = [
-            ['label' => 'Alias', 'value' => trim((string) ($row['alias'] ?? '')) !== '' ? (string) $row['alias'] : '–'],
-            ['label' => 'URL', 'value' => (string) ($row['base_url'] ?? '–')],
-            ['label' => 'Timeout', 'value' => (int) ($row['timeout'] ?? 0) . ' s'],
-            ['label' => 'Wirksam', 'value' => $isEffective ? 'ja' : 'nein'],
+            topology_fact('🖼', 'Alias', trim((string) ($row['alias'] ?? '')) !== '' ? (string) $row['alias'] : '–', 'plain'),
+            topology_fact('🔗', 'URL', (string) ($row['base_url'] ?? '–'), 'muted'),
+            topology_fact('⏳', 'Timeout', (int) ($row['timeout'] ?? 0) . ' s', 'muted'),
+            topology_fact('★', 'Wirksam', $isEffective ? 'ja' : 'nein', $isEffective ? 'ok' : 'muted'),
         ];
         if ($isEffective && $imageStatus !== null) {
-            $facts[] = ['label' => 'Status', 'value' => (string) ($imageStatus['status'] ?? '–')];
-            $facts[] = ['label' => 'Quelle', 'value' => (string) ($imageStatus['source'] ?? '–')];
+            $facts[] = topology_fact('●', 'Status', (string) ($imageStatus['status'] ?? '–'), $state);
+            $facts[] = topology_fact('⚙', 'Quelle', (string) ($imageStatus['source'] ?? '–'), 'muted');
             if (!empty($imageStatus['retry_after'])) {
-                $facts[] = ['label' => 'Erneut in', 'value' => (int) $imageStatus['retry_after'] . ' s'];
+                $facts[] = topology_fact('↻', 'Erneut in', (int) $imageStatus['retry_after'] . ' s', 'warn');
             }
         }
 
@@ -773,9 +826,9 @@ function topology_build(array $stats, array $options = []): array
                 : 'Kein Bild-Endpunkt ist einsatzbereit.',
             'activity' => topology_activity($imageOk > 0 ? max(1, $imageOk * 2) : 0),
             'facts'    => [
-                ['label' => 'Endpunkte', 'value' => (string) count($imageKeys)],
-                ['label' => 'Bereit', 'value' => (string) $imageOk],
-                ['label' => 'Wirksam', 'value' => (string) ($imageStatus['url'] ?? '–')],
+                topology_fact('🔌', 'Endpunkte', (string) count($imageKeys), 'plain'),
+                topology_fact('✓', 'Bereit', (string) $imageOk, $imageOk > 0 ? 'ok' : 'muted'),
+                topology_fact('★', 'Wirksam', (string) ($imageStatus['url'] ?? '–'), 'muted'),
             ],
             'members'  => [
                 'title' => 'Bild-Endpunkte',
@@ -843,16 +896,16 @@ function topology_build(array $stats, array $options = []): array
         }
 
         $facts = [
-            ['label' => 'Alias', 'value' => (string) ($row['alias'] ?? '–')],
-            ['label' => 'URL', 'value' => (string) ($row['base_url'] ?? '–')],
-            ['label' => 'Timeout', 'value' => (int) ($row['timeout'] ?? 0) . ' s'],
-            ['label' => 'Wirksam', 'value' => $isEffective ? 'ja' : 'nein'],
+            topology_fact('🎙', 'Alias', (string) ($row['alias'] ?? '–'), 'plain'),
+            topology_fact('🔗', 'URL', (string) ($row['base_url'] ?? '–'), 'muted'),
+            topology_fact('⏳', 'Timeout', (int) ($row['timeout'] ?? 0) . ' s', 'muted'),
+            topology_fact('★', 'Wirksam', $isEffective ? 'ja' : 'nein', $isEffective ? 'ok' : 'muted'),
         ];
         if ($isEffective && $speechStatus !== null) {
-            $facts[] = ['label' => 'Status', 'value' => (string) ($speechStatus['status'] ?? '–')];
-            $facts[] = ['label' => 'Quelle', 'value' => (string) ($speechStatus['source'] ?? '–')];
+            $facts[] = topology_fact('●', 'Status', (string) ($speechStatus['status'] ?? '–'), $state);
+            $facts[] = topology_fact('⚙', 'Quelle', (string) ($speechStatus['source'] ?? '–'), 'muted');
             if (!empty($speechStatus['retry_after'])) {
-                $facts[] = ['label' => 'Erneut in', 'value' => (int) $speechStatus['retry_after'] . ' s'];
+                $facts[] = topology_fact('↻', 'Erneut in', (int) $speechStatus['retry_after'] . ' s', 'warn');
             }
         }
 
@@ -888,9 +941,9 @@ function topology_build(array $stats, array $options = []): array
                 : 'Kein Dictation-Endpunkt ist einsatzbereit.',
             'activity' => topology_activity($speechOk > 0 ? max(1, $speechOk * 2) : 0),
             'facts'    => [
-                ['label' => 'Endpunkte', 'value' => (string) count($speechKeys)],
-                ['label' => 'Bereit', 'value' => (string) $speechOk],
-                ['label' => 'Wirksam', 'value' => (string) ($speechStatus['url'] ?? '–')],
+                topology_fact('🔌', 'Endpunkte', (string) count($speechKeys), 'plain'),
+                topology_fact('✓', 'Bereit', (string) $speechOk, $speechOk > 0 ? 'ok' : 'muted'),
+                topology_fact('★', 'Wirksam', (string) ($speechStatus['url'] ?? '–'), 'muted'),
             ],
             'members'  => [
                 'title' => 'Dictation-Endpunkte',

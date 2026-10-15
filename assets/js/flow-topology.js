@@ -96,6 +96,37 @@
     };
 
     const DEFAULT_KIND_RADIUS = 14;
+
+    // Colours of the detail-card rows. The server names a tone per fact
+    // (topology_fact() in lib/topology.php); unknown tones fall back to 'plain'.
+    const FACT_TONES = {
+        plain:      '#c7d2fe',
+        muted:      '#8e8ea0',
+        running:    '#f59e0b',
+        jobs:       '#22c55e',
+        ok:         '#22c55e',
+        warn:       '#f59e0b',
+        error:      '#ef4444',
+        prompt:     '#6c63ff',
+        completion: '#8b5cf6',
+        total:      '#a78bfa',
+        speed:      '#fbbf24',
+        ram:        '#60a5fa',
+        cpu:        '#34d399',
+        temp:       '#fb923c',
+    };
+
+    // Geometry of the in-canvas detail card that replaces a clicked bubble.
+    const CARD = {
+        width:        264,
+        pad:          12,
+        headerHeight: 40,
+        rowHeight:    17,
+        radius:       12,
+        barHeight:    5,
+        barGap:       6,
+        footerHeight: 24,
+    };
     // Long focal length: the network is a wide, flat disc, so a strong
     // perspective would blow up the near side and squash the far one.
     const FOCAL = 3000;
@@ -216,6 +247,7 @@
         let previousStates = new Map();
         let selected = null;
         let hovered = null;
+        let cardHit = null;
         let problemFilter = false;
         const kindFilter = new Set(Object.keys(KIND_LABELS));
 
@@ -308,6 +340,7 @@
                 activity:   clamp(Number(raw.activity) || 0, 0, 12),
                 counters:   raw.counters && typeof raw.counters === 'object' ? raw.counters : null,
                 facts:      Array.isArray(raw.facts) ? raw.facts : [],
+                slots:      raw.slots && typeof raw.slots === 'object' ? raw.slots : null,
                 cloud:      raw.cloud && typeof raw.cloud === 'object' ? raw.cloud : null,
                 members:    raw.members && typeof raw.members === 'object' ? raw.members : null,
                 neighbours: Array.isArray(raw.neighbours) ? raw.neighbours.map(String) : [],
@@ -524,6 +557,18 @@
         const CLIENT_CLOUD_MARGIN = 48;
 
         /**
+         * Extra ring radius for the point-like service branches that share the
+         * hub with the client swarm. They lose nothing by sitting further out,
+         * while the volumetric swarm gains the room its spheres need.
+         */
+        const SERVICE_RING_OFFSET = { search: 190, speech: 190, image: 190 };
+
+        function serviceRingOffset(parent, node) {
+            if (!parent || parent.kind !== 'hub') return 0;
+            return SERVICE_RING_OFFSET[node.kind] || 0;
+        }
+
+        /**
          * Extra angular slice a branch claims on top of its proportional share, so
          * that branches with wide content keep clear of their neighbours. Only the
          * client swarm is wider than a point, and it is the reason the service
@@ -590,7 +635,7 @@
             const placed = new Set([hub.key]);
             placeAt(hub, 0, 0, 0);
 
-            const walk = function (parent, depth) {
+            const walk = function (parent, depth, offset) {
                 const kids = childrenOf.get(parent.key) || [];
                 if (!kids.length) return;
 
@@ -600,7 +645,7 @@
                     cloudAround(kids, parent, CLIENT_CLOUD_RADIUS, 'clients|' + parent.key);
                     for (const kid of kids) {
                         placed.add(kid.key);
-                        walk(kid, depth + 1);
+                        walk(kid, depth + 1, offset);
                     }
                     return;
                 }
@@ -626,12 +671,16 @@
                     cursor = own[1] + pad / 2;
                     slices.set(kid.key, own);
                     const angle = (own[0] + own[1]) / 2;
-                    placeAt(kid, Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+                    // A shifted branch keeps its own internal spacing: the offset
+                    // travels down with it, so parents and children stay apart.
+                    const branchOffset = offset + serviceRingOffset(parent, kid);
+                    const branchRadius = radius + branchOffset;
+                    placeAt(kid, Math.cos(angle) * branchRadius, 0, Math.sin(angle) * branchRadius);
                     placed.add(kid.key);
-                    walk(kid, depth + 1);
+                    walk(kid, depth + 1, branchOffset);
                 });
             };
-            walk(hub, 0);
+            walk(hub, 0, 0);
 
             // Nodes the core cannot reach still get a place on the outer ring.
             const orphans = Array.from(nodes.values()).filter((node) => !placed.has(node.key));
@@ -1244,6 +1293,7 @@
                 drawNodes();
                 drawEffects();
                 drawVignette();
+                drawDetailCard();
             } catch (error) {
                 if (!frameErrorLogged) {
                     frameErrorLogged = true;
@@ -1364,7 +1414,8 @@
                 for (const fact of node.facts) {
                     if (!fact || typeof fact !== 'object') continue;
                     const row = el('div', 'topo-fact');
-                    row.appendChild(el('span', 'topo-fact-label', fact.label));
+                    row.appendChild(el('span', 'topo-fact-label',
+                        (fact.icon ? fact.icon + ' ' : '') + (fact.label || '')));
                     row.appendChild(el('span', 'topo-fact-value', fact.value));
                     factsEl.appendChild(row);
                 }
@@ -1398,9 +1449,220 @@
             }
         }
 
+        // ── Detail card ───────────────────────────────────────────────────────
+
+        // A clicked bubble turns into an in-canvas detail card carrying the same
+        // values the previous dashboard graphic showed. Nodes that ship a list
+        // (cloud/members) keep the HTML side panel instead, because a list does
+        // not fit a compact card - the two views never show up together.
+        function usesDetailCard(node) {
+            return !!node && Array.isArray(node.facts) && node.facts.length > 0;
+        }
+
+        function usesPanel(node) {
+            return !!node && (!!node.cloud || !!node.members);
+        }
+
+        function factText(fact) {
+            const icon = fact.icon ? String(fact.icon) + '  ' : '';
+            const label = fact.label ? String(fact.label) + ': ' : '';
+            const value = fact.value === null || fact.value === undefined ? '' : String(fact.value);
+            return icon + label + value;
+        }
+
+        function factColor(fact) {
+            return FACT_TONES[String(fact.tone || 'plain')] || FACT_TONES.plain;
+        }
+
+        function fitText(text, maxWidth) {
+            if (ctx.measureText(text).width <= maxWidth) return text;
+            let cut = text;
+            while (cut.length > 1 && ctx.measureText(cut + '…').width > maxWidth) {
+                cut = cut.slice(0, -1);
+            }
+            return cut + '…';
+        }
+
+        function roundRect(x, y, w, h, r) {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+        }
+
+        function drawDetailCard() {
+            cardHit = null;
+            if (!selected) return;
+            const node = nodes.get(selected);
+            if (!node || !node.screen.visible || !kindFilter.has(node.kind)) return;
+            if (!usesDetailCard(node) || usesPanel(node)) return;
+
+            const slots    = node.slots && Number(node.slots.max) > 0 ? node.slots : null;
+            const hasUrl   = !!node.url;
+            const chrome   = CARD.headerHeight + CARD.pad
+                + (slots ? CARD.barGap + CARD.barHeight : 0)
+                + (hasUrl ? CARD.footerHeight : 0);
+
+            ctx.save();
+            ctx.font = CARD.rowHeight + 'px "Segoe UI", system-ui, sans-serif';
+
+            // Trim the rows when the viewport is too short for the full card.
+            const maxRows  = Math.max(1, Math.floor((viewH - 24 - chrome) / CARD.rowHeight));
+            const overflow = node.facts.length > maxRows;
+            const keep     = overflow ? Math.max(0, maxRows - 1) : node.facts.length;
+            const rows     = node.facts.slice(0, keep);
+            if (overflow) {
+                rows.push({ icon: '…', label: '', value: (node.facts.length - keep) + ' weitere', tone: 'muted' });
+            }
+
+            const width  = CARD.width;
+            const height = chrome + rows.length * CARD.rowHeight;
+            const margin = 10;
+            const x = clamp(node.screen.x - width / 2, margin, Math.max(margin, viewW - width - margin));
+            const y = clamp(node.screen.y - height / 2, margin, Math.max(margin, viewH - height - margin));
+
+            const stateColor = STATE_COLORS[node.state] || STATE_COLORS.off;
+            const stateTriple = STATE_RGB[node.state] || STATE_RGB.off;
+
+            // Keep the connection visible when the card had to move off the bubble.
+            const anchorX = clamp(node.screen.x, x + 16, x + width - 16);
+            const anchorY = clamp(node.screen.y, y + 16, y + height - 16);
+            if (Math.hypot(anchorX - node.screen.x, anchorY - node.screen.y) > 2) {
+                ctx.strokeStyle = rgba(stateTriple, 0.55);
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(node.screen.x, node.screen.y);
+                ctx.lineTo(anchorX, anchorY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            ctx.shadowColor = 'rgba(0,0,0,0.55)';
+            ctx.shadowBlur = 22;
+            ctx.shadowOffsetY = 8;
+            const body = ctx.createLinearGradient(x, y, x, y + height);
+            body.addColorStop(0, 'rgba(24,27,44,0.97)');
+            body.addColorStop(1, 'rgba(12,14,25,0.97)');
+            ctx.fillStyle = body;
+            roundRect(x, y, width, height, CARD.radius);
+            ctx.fill();
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetY = 0;
+
+            ctx.strokeStyle = rgba(stateTriple, 0.55);
+            ctx.lineWidth = 1.2;
+            roundRect(x, y, width, height, CARD.radius);
+            ctx.stroke();
+
+            // Accent bar on the left edge, exactly like the old endpoint tile.
+            ctx.fillStyle = stateColor;
+            roundRect(x + 1.5, y + 10, 3, height - 20, 1.5);
+            ctx.fill();
+
+            // Header: status dot, title, state badge.
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = stateColor;
+            ctx.beginPath();
+            ctx.arc(x + CARD.pad + 4, y + 20, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            const badge = node.badge || STATE_LABELS[node.state] || '';
+            ctx.font = '600 10px "Segoe UI", system-ui, sans-serif';
+            const badgeWidth = badge ? ctx.measureText(badge).width + 10 : 0;
+            if (badge) {
+                ctx.textAlign = 'right';
+                ctx.fillStyle = stateColor;
+                ctx.fillText(badge, x + width - CARD.pad, y + 20);
+            }
+
+            ctx.textAlign = 'left';
+            ctx.font = '600 13px "Segoe UI", system-ui, sans-serif';
+            ctx.fillStyle = '#eef2ff';
+            ctx.fillText(
+                fitText(node.title, width - CARD.pad * 2 - 16 - badgeWidth),
+                x + CARD.pad + 16,
+                y + 20
+            );
+
+            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + 1, y + CARD.headerHeight - 6);
+            ctx.lineTo(x + width - 1, y + CARD.headerHeight - 6);
+            ctx.stroke();
+
+            // Facts, one row per value in the colour the server named.
+            ctx.font = '11.5px "Segoe UI", system-ui, sans-serif';
+            let rowY = y + CARD.headerHeight + CARD.rowHeight / 2;
+            for (const fact of rows) {
+                ctx.fillStyle = factColor(fact);
+                ctx.fillText(fitText(factText(fact), width - CARD.pad * 2), x + CARD.pad, rowY);
+                rowY += CARD.rowHeight;
+            }
+            const rowsEnd = y + CARD.headerHeight + rows.length * CARD.rowHeight;
+
+            // Parallel slot bar (max 4, like the previous dashboard graphic).
+            if (slots) {
+                const used = Math.max(0, Number(slots.used) || 0);
+                const max = Math.max(1, Number(slots.max) || 1);
+                const barX = x + CARD.pad;
+                const barW = width - CARD.pad * 2;
+                const barY = rowsEnd + CARD.barGap;
+                ctx.fillStyle = 'rgba(255,255,255,0.07)';
+                roundRect(barX, barY, barW, CARD.barHeight, CARD.barHeight / 2);
+                ctx.fill();
+                if (used > 0) {
+                    ctx.fillStyle = '#f59e0b';
+                    roundRect(barX, barY, Math.round(barW * Math.min(1, used / max)), CARD.barHeight, CARD.barHeight / 2);
+                    ctx.fill();
+                }
+            }
+
+            cardHit = { x: x, y: y, w: width, h: height, url: hasUrl ? node.url : '' };
+
+            if (hasUrl) {
+                const footerY = y + height - CARD.footerHeight;
+                ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+                ctx.beginPath();
+                ctx.moveTo(x + 1, footerY);
+                ctx.lineTo(x + width - 1, footerY);
+                ctx.stroke();
+                ctx.fillStyle = '#8ea2ff';
+                ctx.font = '600 11px "Segoe UI", system-ui, sans-serif';
+                ctx.textAlign = 'left';
+                ctx.fillText(fitText('In der Konfiguration öffnen →', width - CARD.pad * 2),
+                    x + CARD.pad, footerY + CARD.footerHeight / 2);
+            }
+
+            ctx.restore();
+        }
+
+        function pointInCard(x, y) {
+            return !!cardHit
+                && x >= cardHit.x && x <= cardHit.x + cardHit.w
+                && y >= cardHit.y && y <= cardHit.y + cardHit.h;
+        }
+
+        function pointOnCardLink(x, y) {
+            return !!cardHit && !!cardHit.url
+                && pointInCard(x, y)
+                && y >= cardHit.y + cardHit.h - CARD.footerHeight;
+        }
+
         function select(key) {
             selected = key && nodes.has(key) ? key : null;
-            renderPanel(selected ? nodes.get(selected) : null);
+            const node = selected ? nodes.get(selected) : null;
+            // Lists stay in the HTML panel, key/value detail goes to the card.
+            renderPanel(usesPanel(node) ? node : null);
         }
 
         function centerOn(node) {
@@ -1546,11 +1808,11 @@
 
             const hit = hitTest(point.x, point.y);
             const key = hit ? hit.key : null;
-            if (key !== hovered) {
-                hovered = key;
-                canvas.classList.toggle('topo-canvas--pointing', !!hit);
-            }
-            if (hit) showTooltip(hit, point.x, point.y);
+            const overCard = pointInCard(point.x, point.y);
+            if (key !== hovered) hovered = key;
+            canvas.classList.toggle('topo-canvas--pointing',
+                pointOnCardLink(point.x, point.y) || (!!hit && !overCard));
+            if (hit && !overCard) showTooltip(hit, point.x, point.y);
             else hideTooltip();
         });
 
@@ -1558,6 +1820,10 @@
             const point = localPoint(event);
             endPointer(event);
             if (suppressClick) return;
+            if (pointInCard(point.x, point.y)) {
+                if (pointOnCardLink(point.x, point.y)) window.location.href = cardHit.url;
+                return;
+            }
             const hit = hitTest(point.x, point.y);
             select(hit ? hit.key : null);
         });
@@ -1590,6 +1856,11 @@
             else if (event.key === '-') zoomBy(0.87);
             else if (event.key === 'f' || event.key === 'F') fit();
             else if (event.key === 'r' || event.key === 'R') resetView();
+            else if (event.key === 'Escape') {
+                if (!selected) return;
+                select(null);
+                hideTooltip();
+            }
             else if (event.key === 'Tab') {
                 const order = Array.from(nodes.values()).filter((node) => kindFilter.has(node.kind));
                 if (!order.length) return;
@@ -1692,11 +1963,17 @@
         }
 
         function apply(payload) {
+            // The public API is also called with partial or missing data (for
+            // example when a poll failed), so a broken payload is a no-op.
+            if (!payload || typeof payload !== 'object') return;
             ingest(payload);
             applyOverall(payload.overall);
             setIncidents(payload.incidents);
             diff();
             setField('generated', timeNow());
+            if (selected && !nodes.has(selected)) selected = null;
+            const current = selected ? nodes.get(selected) : null;
+            renderPanel(usesPanel(current) ? current : null);
             if (!userAdjusted) {
                 layout();
                 layout2d();
