@@ -25,6 +25,7 @@
 session_start();
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../lib/balancer_engine.php';
 require_once __DIR__ . '/../lib/speech_dictation.php';
 require_once __DIR__ . '/../lib/image_generation.php';
 require_once __DIR__ . '/../lib/topology.php';
@@ -313,7 +314,7 @@ try {
     // topology consumed by assets/js/flow-topology.js. Only the consumers that
     // actually render the graph (dashboard card, admin/topology.php) ask for it.
     if (($_GET['topology'] ?? '') === '1') {
-        $payload['topology'] = topology_build($payload, ['base_url' => '', 'slot_limit' => 4]);
+        $payload['topology'] = topology_build($payload, ['base_url' => '', 'slot_limit' => getBalancerMaxConcurrent()]);
     }
 
     echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

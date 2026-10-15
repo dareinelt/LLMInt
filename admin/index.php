@@ -161,7 +161,7 @@ require __DIR__ . '/partials/layout_head.php';
                 ];
             }, $speechEndpoints),
             'speech_status'    => $speechStatus,
-        ], ['base_url' => '', 'slot_limit' => 4]);
+        ], ['base_url' => '', 'slot_limit' => $balancerMaxConcurrent]);
 
         $hasSshEndpoints = false;
         foreach ($epStats as $epRow) {
