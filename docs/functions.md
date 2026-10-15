@@ -724,7 +724,7 @@ nicht im Markup, sondern hinter dem **?**-Symbol: die Seite registriert sie mit
 
 | Funktion | Signatur | Beschreibung |
 |---|---|---|
-| `modelIntelligenceLabel` | `modelIntelligenceLabel(string $model): string` | Liefert das menschenlesbare Intelligenz-Label eines Modells (`basic`/`standard`/`advanced`/`expert`). |
+| `modelIntelligenceLabel` | `modelIntelligenceLabel(string $model): string` | Extrahiert die Modellgröße aus dem Modellnamen (z. B. `7b`, `27b`, `397b`); MoE-Marker für aktive Parameter (A17B, A3B, …) werden ignoriert, `–` wenn keine Größe erkannt wird. |
 | `admin_help_text` | `admin_help_text(string $id, string $title, string $body): void` | Registriert die Beschreibung, die das **?** mit der ID `$id` öffnet. `$title` ist die Überschrift der Popup (reiner Text), `$body` ihr Text mit demselben Inline-Markup wie die Seite (`<code>`, `<strong>`, `<em>`). |
 | `admin_help_button` | `admin_help_button(string $id): void` | Gibt den **?**-Knopf aus (`class="field-help"`, `data-help="$id"`); er öffnet die Popup mit den Beschreibungen der Seite. |
 | `admin_help_overlay` | `admin_help_overlay(): void` | Gibt die Popup samt registrierten Texten einmal je Seite aus; `admin/partials/layout_foot.php` ruft sie auf. |
