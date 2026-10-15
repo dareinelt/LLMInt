@@ -1,227 +1,118 @@
-# LLMInt / KHWF KI
+# LLMInt
 
-LLMInt ist eine framework-freie PHP-/MySQL-Anwendung für den Betrieb einer internen KI-Plattform. Sie stellt Chat, Routing und Lastverteilung, Dokument-RAG, Bildgenerierung, Benutzerverwaltung sowie Betriebsmonitoring in einer Oberfläche bereit.
+**Viele KI-Modelle, eine Oberfläche – LLMInt wählt automatisch das passende, verteilt die Last und hält Modelle, Dokumente und Antworten im eigenen Netz.**
+
+LLMInt ist eine selbst gehostete KI-Plattform für Teams. Ein Chat versteht die Anfrage, leitet sie an das dafür geeignete Modell weiter, lastet die verfügbaren Endpunkte gerecht aus und ergänzt die Antwort bei Bedarf um Websuche, internes Dokumentwissen oder ein generiertes Bild. Nutzer müssen keine Modelle kennen und nichts umschalten – und keine Anfrage geht an einen fremden KI-Anbieter.
+
+**Auf einen Blick**
+
+- **Ein Zugang statt vieler Werkzeuge:** Chat, Dokumentenwissen, Websuche, Diktat und Bildgenerierung in einer Oberfläche mit einem Login.
+- **Automatische Modellwahl:** Routing schickt Coding-, Mathe- oder Bildfragen an die passende Modellgruppe – fällt die Klassifikation aus, wird die Anfrage trotzdem beantwortet.
+- **Lastverteilung mit Ausfallsicherheit:** mehrere Endpunkte pro Modell, Circuit Breaker, Retry und Fallback-Ketten statt Wartezeiten und Ausfällen.
+- **Datensouveränität:** Modelle, Dokumente und Antworten bleiben im eigenen Netz; es gibt keine Cloud-Abhängigkeit.
+
+[![Tests](https://github.com/dareinelt/LLMInt/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/dareinelt/LLMInt/actions/workflows/tests.yml)
+![Lizenz](https://img.shields.io/badge/Lizenz-MIT-blue.svg)
+![PHP](https://img.shields.io/badge/PHP-8.0%2B-777bb4.svg)
+
+```bash
+git clone https://github.com/dareinelt/LLMInt.git && cd LLMInt
+cp .env.example .env          # Datenbank- und phpMyAdmin-Passwörter ändern
+docker compose up -d --build  # Datenbank, Chat, Admin, docconvert, Milvus, phpMyAdmin
+# → Chat: http://localhost:8080   Admin: http://localhost:8080/admin/login.php
+```
 
 ![Admin-Dashboard als Nachrichtenflow-Topologie, aufgenommen mit Beispiel-Endpunkten, Mock-SearXNG und Mock-Clients](docs/images/admin-dashboard-topologie.png)
 
-Weitere Dokumente im Repository:
+[Funktionen](#kernfunktionen) · [In Aktion](#llmint-in-aktion) · [Schnellstart](#schnellstart-mit-docker) · [Dokumentation](#weiterführende-dokumentation) · [API](#api)
 
-| Dokument | Zielgruppe |
+## Warum LLMInt?
+
+In vielen Organisationen laufen mehrere KI-Systeme nebeneinander – und mit ihnen die Fragen: Welches Modell passt für diese Aufgabe? Welcher Server hat gerade Kapazität? Wo liegen die Antworten aus den internen Dokumenten? Wer darf was nutzen, und wohin gehen die Daten?
+
+LLMInt beantwortet diese Fragen zentral statt pro Nutzer:
+
+| Problem | LLMInt |
 |---|---|
-| `README.md` | Betrieb, Installation, Konfiguration und Funktionsüberblick |
-| `description.md` | detaillierte Architektur- und Funktionsreferenz für Entwicklung und Coding-Agenten |
-| `docs/architecture.md` | Systemarchitektur, Datenflüsse und Diagramme (ergänzt `description.md`) |
-| `docs/functions.md` | vollständige Funktionsreferenz je Datei |
-| `docs/agent_index.md` | kompakte Navigationshilfe für Coding-Agenten |
-| `Demo.md` | nicht-technische Erklärung für Entscheider und Fachbereiche |
+| Nutzer wissen nicht, welches Modell sie wählen sollen | Ein Entscheidungsmodell klassifiziert die Anfrage und Routing-Regeln ordnen sie einem Zielmodell zu – ohne Zutun des Nutzers |
+| Ein einzelner Server wird zum Flaschenhals oder Single Point of Failure | Der Balancer verteilt Anfragen auf alle gesunden Endpunkte einer Modellgruppe, mit Circuit Breaker, Retry und Fallback-Ketten |
+| Wissen liegt verteilt in Dokumenten, Wikis und Köpfen | Dokument-RAG und eine zentrale Vektordatenbank liefern Kontext direkt in die Antwort |
+| Toolwechsel für Recherche und Bilder kostet Zeit | Websuche, Seitenabruf, Dokumentabfrage und Bildgenerierung laufen als Werkzeuge des Chat-Modells |
+| Externe KI-Dienste sind datenschutzrechtlich und operativ heikel | Alle Modelle und Endpunkte laufen intern; der Betrieb bleibt unter eigener Kontrolle |
 
-## Inhaltsverzeichnis
+**Für wen:** IT- und Plattform-Teams, die mehr als einen LLM-Server betreiben und ihn gemeinsam nutzbar machen wollen – von Bildungseinrichtungen und KMU über Forschungs- und Innovationsteams bis zu Organisationen mit strengen Datenschutzanforderungen. Eine nicht-technische Erläuterung für Entscheider und Fachbereiche steht in [`Demo.md`](Demo.md).
 
-- [Funktionen](#funktionen)
-- [Architektur](#architektur)
-- [Repository-Struktur](#repository-struktur)
-- [Modellrouting und Entscheidungsfindung](#modellrouting-und-entscheidungsfindung)
-- [Intelligence Upgrade](#intelligence-upgrade)
-- [Intelligenzgruppe direkt ansprechen](#intelligenzgruppe-direkt-ansprechen)
-- [Reasoning per Prompt aktivieren](#reasoning-per-prompt-aktivieren)
-- [Prompt-Funktionen per Präfix aktivieren](#prompt-funktionen-per-präfix-aktivieren)
-- [Lastverteilung](#lastverteilung)
-- [Voraussetzungen](#voraussetzungen)
-- [Schnellstart mit Docker](#schnellstart-mit-docker)
-- [Klassische Installation](#klassische-installation)
-- [Betrieb hinter lanpa](#betrieb-hinter-lanpa)
-- [Erstkonfiguration](#erstkonfiguration)
-- [Hybrid-RAG](#hybrid-rag)
-- [Prompt Security](#prompt-security)
-- [Spracherkennung und Diktat](#spracherkennung-und-diktat)
-- [Bildgenerierung (ImageInt)](#bildgenerierung-imageint)
-- [API](#api)
-- [Datenmodell](#datenmodell)
-- [Entwicklung](#entwicklung)
-- [Betrieb und Sicherheit](#betrieb-und-sicherheit)
-- [Troubleshooting](#troubleshooting)
-- [Lizenz](#lizenz)
+## Kernfunktionen
 
-## Funktionen
+**Automatisches Modellrouting – die Anfrage landet dort, wo sie hingehört.**
+Ein konfigurierbares Entscheidungsmodell ordnet die letzte Nutzernachricht einer Kategorie zu (etwa Programmierung, Mathematik oder Bildanalyse); eine Routing-Regel bildet sie auf ein Zielmodell ab. Kategorien, Prioritäten und Zuordnungen werden im Adminbereich gepflegt, ohne Codeänderung. Ist das Entscheidungsmodell ausgelastet oder uneindeutig, bleibt es einfach beim gewählten Modell – es entsteht kein Fehler.
 
-- **Chat mit Streaming:** Server-Sent Events und persistente Chat-Sitzungen pro Benutzer.
-- **Routing und Lastverteilung:** optionale semantische Klassifikation, kategoriebasierte Modellwahl und konfigurierbare Fallback-Ketten; gesunde Endpunkte werden anhand von Auslastung, Kapazität und Fair-Share ausgewählt.
-- **Direkte Modellwahl:** angemeldete Benutzer sprechen mit dem Präfix `@@35b` eine Intelligenzgruppe direkt an; die Auswahl überschreibt Benutzer- und Standardmodelle und bleibt im Chat aktiv.
-- **Reasoning auf Abruf:** Thinking/Reasoning ist standardmäßig deaktiviert und wird mit dem Präfix `!!` für den jeweiligen Prompt eingeschaltet (Anzeige als 💡-Pille in der Eingabezeile).
-- **Prompt-Funktionen:** Präfixe wie `/table`, `/tldr` oder `/eli5` schalten für den jeweiligen Prompt eine feste Systemprompt-Ergänzung frei (z. B. Tabellenformat, Kurz-Zusammenfassung, kindgerechte Erklärung); Anzeige als eigene Pille je aktiver Funktion, mehrere Funktionen lassen sich kombinieren.
-- **Intelligence Upgrade:** beantwortet einfache Anfragen zunächst ressourcenschonend und bietet bei freier Kapazität optional ein leistungsfähigeres Modell für eine erneute Bearbeitung an.
-- **Hybrid-RAG:** privater Dokument-Upload (Office, PDF, Text, Bilder) mit Text-Extraktion, Chunking, BM25-Suche, optionalen Embeddings, Reciprocal Rank Fusion und Reranking.
-- **Zentrale Wissensdatenbank:** teamweites Wissen aus [docvecwizard](https://github.com/dareinelt/docvecwizard) – wahlweise live über dessen REST-API/Milvus oder per Export-Import in eine eigene Milvus-Instanz im Compose-Stack; wird bei jeder Chat-Anfrage herangezogen und im Admin-Dashboard visualisiert.
-- **Chat-Tools:** Websuche mit SearXNG (`search_web`) inklusive Nachladen ganzer Seiteninhalte (`web_fetch`), Dokumentabfrage sowie Bildgenerierung mit AUTOMATIC1111 oder ComfyUI.
-- **Authentifizierung:** lokale Konten, Selbstregistrierung und E-Mail-Verifikation, Passwort-Reset, LDAP/Active Directory sowie optionales Kerberos-basiertes Windows-SSO – direkt im Container oder über den `auth`-Container von lanpa.
-- **Betrieb hinter lanpa:** optional unter `https://<lanpa-host>/ki/` mit dem zentral in lanpa verwalteten Zertifikat (siehe [Betrieb hinter lanpa](#betrieb-hinter-lanpa)).
-- **OpenAI-kompatible API:** externe Applikationen nutzen LLMInt als Reverse-Proxy (Chat Completions, wahlweise mit den Chat-Tools); sie verhalten sich wie nicht angemeldete Benutzer, durchlaufen Routing und Lastverteilung wie ein direkter Zugriff und werden im Log mit `[API]` gekennzeichnet.
-- **Monitoring:** Endpunktlast, Tokenverbrauch, aktive Clients (als 3D-Wolke mit Hostname bzw. IP-Adresse um den Clients-Knoten), Aufrufe über die OpenAI-kompatible API (als eigene Wolke je API-Schlüssel), Such- und Generierungsjobs sowie optionale SSH-Systemmetriken – dargestellt als Nachrichtenflow-Topologie (siehe [Admin-Dashboard](#admin-dashboard)). Ein Klick auf einen Endpunkt, einen Dienst oder eine Gruppe öffnet die Detailkarte mit Modell, Auslastung, Slots und Systemwerten. Die Ansicht lässt sich per **⛶ Vollbild** auf die volle Browserfenstergröße vergrößern (kein Browser-Vollbild, Beenden per Button oder Esc).
-- **Endpunkte technische Verwaltung:** jeder LLM-Endpunkt lässt sich mit einer [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz koppeln (Server-URL + API-Schlüssel der Management-Board-API). Die Seite `admin/endpoint_tech.php` zeigt je Endpunkt in einer Zeile Modell, Ø Token/s, CPU-/GPU-Last, CPU-/GPU-Temperatur (mit 24h-Min./Max.) sowie RAM-/VRAM-Auslastung; ein Klick auf die Zeile öffnet quickinfo im neuen Tab.
-- **Nutzungsstatistik:** Liniendiagramm im Adminbereich (retinatauglich, umschaltbar auf 3, 7, 14, 30, 90, 180 Tage oder ein Jahr) mit Clients, angemeldeten Nutzern, durchgeführten Tasks, Websuchen und fehlgeschlagenen Tasks je Tag.
-- **Prompt Security:** mehrstufige Prüfung von Chat-Eingaben mit konfigurierbaren Regeln, Bewertung und Protokollierung.
-- **Spracherkennung und Diktat:** Diktat per Mikrofon-Button direkt in das Eingabefeld – ein [SpeechInt](https://github.com/dareinelt/SpeechInt)-Dienst transkribiert die Segmente mit whisper.cpp und formuliert die Fragmente mit einem Qwen3.5-2B aus; gesprochene Diktatbefehle („Punkt", „Neue Zeile", „Lösche letztes Wort") werden in Zeichen und Formatierung umgewandelt. Nach dem Sprechen schlägt die Oberfläche passende Befehle als Pillen zur Korrektur vor. Die rechenintensiven Modelle laufen nicht mehr in diesem Stack, sondern auf einem oder mehreren separaten SpeechInt-Hosts.
+**Lastverteilung mit echter Ausfallsicherheit – gleichmäßig, auch wenn ein Server wegbricht.**
+Der Balancer wählt unter gesunden Endpunkten einer Modellgruppe den am wenigsten ausgelasteten; bei Gleichstand entscheidet ein Fair-Share-Fenster und als Tie-Breaker Round-Robin. Fällt ein Endpunkt aus, öffnet ein Circuit Breaker, Retries laufen mit exponentiellem Backoff, und bei fehlender Kapazität greifen konfigurierte Fallback-Modelle der Reihe nach. Slots werden atomar reserviert, verwaiste Tasks automatisch beendet.
 
-### Admin-Dashboard
+**Dokumentwissen und zentrale Wissensdatenbank – Antworten mit Kontext.**
+Eigene Dateien lassen sich im Chat hochladen und werden über eine Hybrid-Suche aus BM25-Treffern, Embedding-Ähnlichkeit, Reciprocal Rank Fusion und optionalem Reranking ausgewertet. Teamweites Wissen kommt aus einer zentralen Milvus-Vektordatenbank, die LLMInt bei jeder Anfrage abfragt – über die REST-API von [docvecwizard](https://github.com/dareinelt/docvecwizard) oder über einen Import in die mitlaufende Milvus-Instanz.
 
-Der Adminbereich ist in eine Seite je Eintrag der linken Navigation aufgeteilt: `admin/index.php`
-ist das hier beschriebene Dashboard, daneben gibt es eigene Seiten für Nutzungsstatistik
-(`admin/usage.php`), Endpunkte (`admin/endpoints.php`), SMTP (`admin/smtp.php`) und alle
-weiteren Einträge. Die Knoten der Topologie verlinken direkt auf die Seite mit der
-passenden Karte.
+**Werkzeuge direkt im Chat – recherchieren, nachlesen, Bilder erzeugen.**
+Das Chat-Modell kann im Web suchen (`search_web`), ganze Seiten nachladen (`web_fetch`), das Dokumentwissen abfragen (`query_documents`) und Bilder generieren (`generate_image`). Werkzeuge werden nur an Endpunkte geschickt, die als Tool-Calling-fähig markiert sind. Fehlt ein Dienst, bleibt der Chat vollständig nutzbar – dann fehlt nur dieses Angebot.
 
-Erklärungen, die nicht zur unmittelbaren Bedienung nötig sind – wofür ein Feld steht, welche
-Werte erlaubt sind, welcher Hintergrund gilt –, stehen auf jeder Seite hinter einem
-**?**-Symbol neben der Karte oder dem Feld. Der Klick öffnet ein Overlay mit allen
-Beschreibungen dieser Karte; die Oberfläche selbst bleibt auf Beschriftungen, Felder und
-Zustandsmeldungen beschränkt. Die Texte registriert jede Seite mit `admin_help_text()`, den
-Knopf setzt `admin_help_button()`, das Overlay rendert `admin_help_overlay()` aus
-`admin/partials/help.php` einmal je Seite.
+**Diktat statt Tippen – sprechen und weiterarbeiten.**
+Ein Mikrofon-Button im Eingabefeld nimmt Sprache auf, ein [SpeechInt](https://github.com/dareinelt/SpeechInt)-Dienst transkribiert sie mit whisper.cpp und formuliert die Fragmente mit einem kleinen Qwen-Modell aus. Gesprochene Befehle wie „Punkt", „Neue Zeile" oder „Lösche letztes Wort" werden in Zeichen und Formatierung umgewandelt.
 
-Das Dashboard im Adminbereich zeigt die Betriebsdaten als Nachrichtenflow-Topologie. **LLMInt** steht im Zentrum; darum liegen die direkten Kinder **LLM**, **SpeechInt**, **ImageInt**, **SearXNG**, **Wissensdatenbank**, **Clients** und **API**. Unter LLM hängen die Intelligenzgruppen (je Modell), unter diesen die einzelnen LLM-Endpunkte; ImageInt und SpeechInt bündeln ihre Endpunkte jeweils direkt. Die aktiven Clients erscheinen als 3D-Wolke aus Hostnamen beziehungsweise IP-Adressen um ihren Knoten, die Aufrufe über die OpenAI-kompatible API als zweite Wolke: ein Eintrag je API-Schlüssel mit Aufrufen heute, Aufrufen gesamt und dem zuletzt genutzten Modell, dazu ein Sammeleintrag „ohne Key" für Aufrufe ohne gültigen Schlüssel. Animierte Linien und Partikel verbinden die Bausteine und machen Richtung und Auslastung sichtbar; Farbe und Strichart folgen dem Zustand des Knotens (in Ordnung, eingeschränkt, Störung, nicht aktiv).
+**OpenAI-kompatible API – bestehende Anwendungen andocken ohne Umbau.**
+Externe Applikationen nutzen LLMInt als Reverse-Proxy unter `/api/openai/v1` (wahlweise mit Tools unter `/api/openai-tools/v1`). Sie verhalten sich wie nicht angemeldete Benutzer, durchlaufen aber Prompt Security, Routing, Balancer und Fallback genau wie ein direkter Zugriff; Aufrufe werden je API-Key gezählt und protokolliert.
 
-Ein Klick auf einen Endpunkt öffnet die Detailkarte direkt im Netz: LLM-Endpunkte zeigen Modell, Status, belegte Slots, laufende Tasks und – sofern eine [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz gekoppelt ist – CPU-/GPU-Werte, SearXNG und die übrigen Dienste ihre Erreichbarkeit. Gleichzeitig hebt das Dashboard den kompletten Weg dieses Bausteins hervor: vom Endpunkt über seine Intelligenzgruppe und LLM hinauf zu LLMInt und von dort hinüber in die Zweige der Aufrufer – in die Clients-Wolke bis zu den einzelnen Client-Hostnamen und in den API-Zweig bis zu den einzelnen API-Schlüsseln. Umgekehrt funktioniert es genauso: Ein Klick auf einen Client-Hostnamen oder einen API-Schlüssel markiert den Weg von diesem Aufrufer über seinen Wolken-Knoten und LLMInt bis hinunter in die Endpunkt-Zweige; die Detailkarte eines Endpunkts öffnet sich dabei nicht, es erscheint allein die des Aufrufers. Läuft auf einem Client gerade eine Anfrage, bleibt der Weg auf genau deren Zweig beschränkt – vom Client über LLMInt und die Intelligenzgruppe bis zu dem Endpunkt, der sie beantwortet – und wird als laufender Weg mit einem hellen, wandernden Strichmuster gekennzeichnet; ist der Client untätig, ist sein Weg unbekannt und es wird keiner markiert, der Klick wählt dann nur die Sitzung aus. Welche Anfrage gerade läuft, meldet der Browser selbst: Die Chat-Seite schickt im Heartbeat zur Anwesenheit zusätzlich Endpunktart, Modell und Endpunkt-ID mit, beim Start einer Anfrage und – nach der Antwort – wieder als leer. Der Adminbereich zeigt das als Zeile „Laufende Anfrage" am Client-Knoten und nach spätestens 15 s auch in der Topologie. Alles daneben tritt zurück, die Kanten des Weges werden breiter und heller gezeichnet und führen als einzige noch Partikel. Die Karte sucht sich dafür eine freie Stelle neben dem angeklickten Knoten, statt ihn zu verdecken, und bleibt über eine gestrichelte Linie mit ihm verbunden. Gruppen, die beiden Wolken und Übersichtsknoten öffnen stattdessen das ausführliche Panel am Rand mit Mitglieder- und Nachbarlisten.
+**Betrieb im Blick – ein Dashboard für die ganze Landschaft.**
+Das Admin-Dashboard zeigt LLMInt, Modellgruppen, Endpunkte, SpeechInt, ImageInt, SearXNG, Wissensdatenbank, Clients und API als animierte Nachrichtenflow-Topologie mit Endpunktlast, Zustand, Tokenverbrauch, aktiven Clients, Aufrufen je API-Schlüssel, Such- und Generierungsjobs sowie optionalen SSH-Systemmetriken. Ein Klick auf einen Baustein öffnet seine Detailkarte mit Modell, Auslastung, Slots und Systemwerten und hebt den Weg der Anfrage vom Aufrufer bis zum antwortenden Endpunkt hervor. Die Ansicht lässt sich per **⛶ Vollbild** auf die volle Browserfenstergröße vergrößern (kein Browser-Vollbild, Beenden per Button oder Esc).
+
+**Technische Werte der Endpunkte – direkt neben dem Routing.**
+Jeder LLM-Endpunkt lässt sich mit einer [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz koppeln (Server-URL und API-Schlüssel der Management-Board-API). Die Seite `admin/endpoint_tech.php` zeigt je Endpunkt in einer Zeile Modell, Ø Token/s, CPU-/GPU-Last, CPU-/GPU-Temperatur mit 24-Stunden-Minimum und -Maximum sowie RAM-/VRAM-Auslastung; ein Klick auf die Zeile öffnet quickinfo im neuen Tab. Dazu eine Nutzungsstatistik als Liniendiagramm (umschaltbar auf 3, 7, 14, 30, 90, 180 Tage oder ein Jahr) mit Clients, angemeldeten Nutzern, durchgeführten Tasks, Websuchen und fehlgeschlagenen Tasks je Tag.
+
+**Anmeldung, wie sie zur Organisation passt.**
+Lokale Konten mit Selbstregistrierung, E-Mail-Verifikation und Passwort-Reset, LDAP/Active Directory sowie optional Kerberos-basiertes Windows-SSO – direkt im Container oder über den `auth`-Container von [lanpa](https://github.com/dareinelt/lanpa).
+
+## LLMInt in Aktion
+
+**Der Chat.** Antworten streamen per Server-Sent Events, jede Chat-Sitzung bleibt pro Benutzer erhalten und lässt sich in der Seitenleiste wieder aufrufen. Die Antwortdetails zeigen Endpunkt, Dauer, Quellen und Kontextauslastung – nachvollziehbar, welches System geantwortet hat.
+
+**Bilder aus einer Beschreibung.** Sagen Sie dem Modell, was Sie sehen wollen – es ruft `generate_image` auf. Weil eine CPU-Generierung Minuten dauert, kann man sich per E-Mail benachrichtigen lassen; die Mail verschickt ein Worker, damit sie auch bei geschlossenem Browser ankommt.
+
+![Zustimmungsfrage im Chat nach einem laufenden Bildauftrag](docs/images/bildgenerierung-zustimmung.png)
+
+![Fertiges Bild im Chat mit Abmessungen und Dauer](docs/images/bildgenerierung-ergebnis.png)
+
+![Deep-Link aus der Mail: hervorgehobenes Bild im Chat](docs/images/bildgenerierung-deeplink.png)
+
+**Diktieren.** Der Mikrofon-Button erscheint, sobald die Spracherkennung aktiviert ist; erkannte Fragmente landen direkt im Eingabefeld.
+
+![Mikrofon-Button im Eingabefeld](docs/images/sprach-diktat-mikrofon.png)
+
+**Betreiben.** Das Dashboard macht die Landschaft und ihren Zustand auf einen Blick sichtbar.
 
 ![Admin-Dashboard mit der Nachrichtenflow-Topologie](docs/images/admin-dashboard-topologie-kachel.png)
 
-## Architektur
+Aufbau, Knoten, Wege, Farben und Layout der Topologie beschreibt [`topologie-referenz.md`](topologie-referenz.md).
 
-| Ebene | Komponenten |
+## Mehr Kontrolle direkt in der Eingabezeile
+
+Drei Präfixe erlauben es, die Automatik für einen einzelnen Prompt zu übersteuern. Jedes erkannte Präfix wird sofort durch eine Pille ersetzt, die sich mit `×` wieder entfernen lässt.
+
+| Präfix | Wirkung |
 |---|---|
-| Web | `index.php`, Anmeldung und Registrierung |
-| API | `api/chat.php`, Routing, RAG, Uploads, Bildgenerierung und OpenAI-Endpunkte |
-| Administration | `admin/` für Endpunkte, Benutzer, Einstellungen, API-Keys und Statistik |
-| Persistenz | MySQL oder MariaDB; das Schema wird idempotent durch `setup.php` und `db.php` erweitert |
-| Externe Dienste | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP, SMTP; für das Diktat ein oder mehrere [SpeechInt](https://github.com/dareinelt/SpeechInt)-Dienste (whisper.cpp + Qwen3.5-2B) und für die Bildgenerierung ein oder mehrere [ImageInt](https://github.com/dareinelt/ImageInt)-Dienste (Qwen-Image-2.1), die jeweils auf einem separaten Docker-Host laufen |
+| `@@35b` | Spricht eine Intelligenzgruppe (Gesamtparameterzahl im Modellnamen) direkt an und überschreibt Benutzer-, Standard- und Routing-Modell für die aktuelle Chat-Sitzung. Ohne passendes Modell auf einem aktiven Endpunkt wird die Anfrage mit einem Hinweis auf die verfügbaren Gruppen abgewiesen. Abschaltbar unter **Anfragenhandling → Direkte Modellwahl über Intelligenzgruppen aktivieren** (Standard: aktiviert). |
+| `!!` | Schaltet Thinking/Reasoning für genau diesen Prompt ein (Anzeige als 💡-Pille). Standardmäßig ist Reasoning aus: `reasoning_effort` wird nicht übertragen, hybride Chat-Templates erhalten `chat_template_kwargs.enable_thinking = false`, und gelieferte Reasoning-Tokens werden nicht angezeigt. |
+| `/kommando` | Aktiviert eine feste Systemprompt-Ergänzung für diesen Prompt. Mehrere Präfixe lassen sich kombinieren, z. B. `/tldr /list Fasse den Text zusammen.` |
 
-Wichtige Komponenten:
+Nach dem Absenden werden `!!` und alle `/kommando`-Präfixe automatisch zurückgesetzt; die Präfixe selbst erreichen das Modell nie.
 
-- `api/balancer.php` wählt LLM-Endpunkte und erfasst deren Task-Lifecycle.
-- `lib/balancer_engine.php` bündelt Circuit Breaker, Backoff, Fallback-Ketten, verwaiste Tasks und die konfigurierbaren Balancer-Einstellungen.
-- `api/embedding.php` erstellt Embeddings, führt Ähnlichkeitssuche und optionales Reranking aus.
-- `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an; `api/doc_convert.php`, `api/pdf_render.php` und `api/vision.php` kapseln Konverter-Dienst, PDF-Rendering und Vision-Analyse.
-- `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
-- `lib/speech_dictation.php` kapselt das Diktat als HTTP-Client eines
-  SpeechInt-Dienstes: Transkription, Nachbearbeitung, Diktatbefehle und Befehls-Pillen,
-  Prompt für das Diktat-Modell, Health-/Konfigurationsabfragen und der deterministische
-  Regel-Fallback, wenn kein Dienst erreichbar ist.
-- `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
-
-Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Build-Schritt: Jede URL entspricht einer PHP-Datei, Abhängigkeiten werden über `require_once` geladen, und Frontend-CSS/-JavaScript liegen inline in `index.php` beziehungsweise in den Adminseiten unter `admin/` (gemeinsame Hülle: `admin/partials/`). Eine vollständige technische Referenz mit Funktions-, Tabellen- und Einstellungsnamen enthält [`description.md`](description.md); eine grafisch aufbereitete Architekturübersicht mit Diagrammen bietet [`docs/architecture.md`](docs/architecture.md), eine vollständige Funktionsreferenz [`docs/functions.md`](docs/functions.md) und eine kompakte Navigationshilfe für Coding-Agenten [`docs/agent_index.md`](docs/agent_index.md).
-
-## Repository-Struktur
-
-| Pfad | Inhalt |
-|---|---|
-| `index.php` | Chat-Oberfläche mit Streaming, Sitzungsliste, Upload-Dialog und Bildanhängen |
-| `login.php`, `register.php`, `logout.php` | Anmeldung, Selbstregistrierung mit E-Mail-Verifikation, Abmeldung |
-| `sso.php`, `sso_fallback.php` | Windows-SSO über den Reverse-Proxy von lanpa und Rückfallseite ohne Domänenanmeldung |
-| `db.php` | Datenbankverbindung, idempotentes Laufzeitschema, Einstellungen, Logging, Chat-Sitzungen, Intelligenzgruppen |
-| `config.php` | leitet `LMSTUDIO_BASE_URL` und `LMSTUDIO_TIMEOUT` aus Endpunkten beziehungsweise Einstellungen ab |
-| `setup.php` | Erstinstallation: Tabellen, Migrationen, Standardeinstellungen, Standardadministrator |
-| `api/` | JSON- und SSE-Endpunkte sowie die Bibliotheken für Balancer und Embeddings |
-| `lib/` | Balancer-Engine, Prompt Security, Spracherkennung/Diktat (`speech_dictation.php`), OpenAI-Hilfsfunktionen, LDAP-Anbindung, SMTP-Client, Routing-Prompt, Reverse-Proxy-Unterstützung |
-| `admin/` | Administration als eine Seite je Navigationseintrag (`admin/<seite>.php`, z. B. `index.php`, `usage.php`, `smtp.php`, `api_keys.php`) über der gemeinsamen Hülle `admin/partials/` (Bootstrap, POST-Verarbeitung, Livedaten, Navigation, Layout); dazu Dashboard-Livedaten, Nutzungsstatistik, SSH-Systemmetriken, Prompt Security |
-| `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth |
-| `docker-compose.test.yml` | Compose-Override für einen schnellen lokalen Stack beim Testen des Diktats (siehe [Spracherkennung und Diktat](#spracherkennung-und-diktat)) |
-| `docker-compose.lanpa.yml` | optionaler Override für den Betrieb hinter dem `auth`-Container von lanpa |
-| `tests/` | abhängigkeitsfreie PHP- und JavaScript-Tests für Topologie und Canvas-Renderer (siehe [`tests/README.md`](tests/README.md)) |
-| `docconvert/` | Python/FastAPI-Container zur Konvertierung von Office- und Textdateien in strukturierte Chunks |
-| `doc_uploads/`, `sd_output/`, `image_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
-| `assets/`, `docs/`, `ressources/` | Bilder der Oberfläche, Diagramme der Dokumentation, Beispiel-Systemprompt |
-
-## Modellrouting und Entscheidungsfindung
-
-Das Routing arbeitet in zwei Stufen: Zuerst bestimmt LLMInt die passende Modellgruppe, danach wählt der Balancer innerhalb dieser Gruppe einen geeigneten Endpunkt. Ist ein Entscheidungsmodell konfiguriert, bewertet es die letzte Nutzernachricht anhand der konfigurierten Kategorien und priorisierten Entscheidungsregeln. Eine Routing-Regel ordnet die erkannte Kategorie einem Zielmodell zu. Fehlt eine Zuordnung, ist das Entscheidungsmodell nicht verfügbar oder kann keine Nachricht klassifiziert werden, bleibt die ursprünglich angeforderte Modellauswahl erhalten.
-
-![Übersicht der Routing- und Loadbalancing-Stufen](docs/images/routing-overview.svg)
-
-```mermaid
-flowchart TD
-    A[Benutzeranfrage mit ausgewähltem Modell] --> B{Entscheidungsmodell<br/>konfiguriert?}
-    B -- Nein --> H[Ursprüngliches Modell beibehalten]
-    B -- Ja --> C[Letzte Nutzernachricht extrahieren]
-    C --> D{Nachricht und<br/>Klassifikationsprompt vorhanden?}
-    D -- Nein --> H
-    D -- Ja --> E{Freier Endpunkt für<br/>Entscheidungsmodell verfügbar?}
-    E -- Nein --> H
-    E -- Ja --> F[Entscheidungsmodell ordnet<br/>genau eine Kategorie zu]
-    F --> G{Routing-Regel für<br/>Kategorie vorhanden?}
-    G -- Nein --> H
-    G -- Ja --> I[Zugeordnetes Zielmodell auswählen]
-    H --> J[Gesunden Endpunkt des Modells<br/>nach Kapazität und Fair-Share wählen]
-    I --> J
-    J --> K{Verarbeitung erfolgreich?}
-    K -- Ja --> L[Antwort ausgeben]
-    K -- Nein --> M[Backoff mit Jitter<br/>und anderen Endpunkt versuchen]
-    M --> N{Endpunkt derselben<br/>Modellgruppe verfügbar?}
-    N -- Ja --> K
-    N -- Nein --> O[Konfigurierte Fallback-Modelle<br/>der Reihe nach prüfen]
-    O --> P{Fallback verfügbar?}
-    P -- Ja --> K
-    P -- Nein --> Q[Fehler zurückgeben]
+```text
+@@35b Fasse den Text zusammen.      → immer die 35B-Intelligenzgruppe
+!! Wie viele Möglichkeiten gibt es? → Reasoning nur für diese eine Frage
+/tldr /list Was steht in der Datei? → Kurzfassung als Aufzählung
 ```
 
-**Vorteile**
-
-- **Passende Modellwahl:** Fachliche, kreative oder allgemeine Anfragen können an jeweils geeignete Modellgruppen geleitet werden.
-- **Effizienter Ressourceneinsatz:** Leistungsfähige oder spezialisierte Modelle werden gezielt genutzt, statt jede Anfrage gleich zu behandeln.
-- **Konfigurierbare Entscheidungen:** Kategorien, Prioritäten und Modellzuordnungen werden im Admin-Bereich gepflegt und lassen sich ohne Codeänderung anpassen.
-- **Robuster Betrieb:** Bei fehlender Klassifikation oder Kapazität wird die Benutzeranfrage weiterhin mit dem ursprünglich gewählten Modell verarbeitet.
-- **Geordnete Fallbacks:** Schlägt ein Endpunkt fehl und ist kein weiterer Endpunkt derselben Modellgruppe frei, werden konfigurierte Ersatzmodelle in der vorgegebenen Reihenfolge geprüft.
-- **Fähigkeits- und Spezialisierungsdaten:** Endpunkte können für Tool Calling und Kategorien gekennzeichnet werden; Upgrade-Vorschläge berücksichtigen die fachliche Spezialisierung.
-- **Faire Auslastung:** Nach der Modellentscheidung verteilt der Balancer Anfragen auf freie, gesunde Endpunkte und bevorzugt bei Gleichstand lange nicht genutzte Endpunkte.
-
-## Intelligence Upgrade
-
-Das Intelligence Upgrade verbindet angemessenen Ressourceneinsatz mit der Möglichkeit, bei anspruchsvolleren Aufgaben mehr Modellleistung zu nutzen. Eine Anfrage wird zunächst mit dem ausgewählten Modell beantwortet. Ist ein leistungsfähigeres Modell mit freier Kapazität verfügbar, erhält der Benutzer anschließend ein optionales Upgrade-Angebot. Nach Zustimmung wird dieselbe Anfrage mit dem vorgeschlagenen Modell erneut ausgeführt; die Auswahl gilt anschließend 20 Minuten lang für die aktuelle Chat-Sitzung.
-
-```mermaid
-flowchart TD
-    A[Benutzeranfrage] --> B[Ausgewähltes Modell<br/>beantwortet Anfrage]
-    B --> C{Leistungsfähigeres Modell<br/>mit freier Kapazität verfügbar?}
-    C -- Nein --> D[Antwort anzeigen]
-    C -- Ja --> E[Antwort anzeigen und<br/>Upgrade anbieten]
-    E --> F{Upgrade zustimmen?}
-    F -- Nein --> D
-    F -- Ja --> G[Anfrage erneut mit<br/>leistungsfähigerem Modell ausführen]
-    G --> H[Upgrade-Modell für<br/>Chat-Sitzung speichern]
-    H --> I[Verbesserte Antwort anzeigen]
-```
-
-**Vorteile**
-
-- **Ressourcenschonend:** Für einfache Fragen reicht ein kleines Modell; leistungsfähige Modelle bleiben für komplexe Aufgaben verfügbar.
-- **Bessere Antwortqualität bei Bedarf:** Benutzer können bei anspruchsvollen Fragen gezielt eine erneute Bearbeitung mit höherer Modellintelligenz anfordern.
-- **Transparente Entscheidung:** Das Upgrade erfolgt nur nach Zustimmung und nur, wenn ein geeigneter Endpunkt Kapazität hat.
-- **Passende Spezialisierung:** Bei erkannter Kategorie werden nur allgemeine oder zur Kategorie passende Upgrade-Modelle vorgeschlagen.
-
-Damit ein Modell berücksichtigt wird, muss seine Modellbezeichnung eine Intelligenzstufe wie `8b` oder `70b` enthalten, beispielsweise `modell-8b` oder `modell 70b`. In der Administration kann bei **Systemmeldungen** der Text des Upgrade-Angebots angepasst werden.
-
-## Intelligenzgruppe direkt ansprechen
-
-Angemeldete Benutzer können in der Chat-Eingabezeile mit dem Präfix `@@` eine Intelligenzgruppe direkt ansprechen, zum Beispiel `@@35b Fasse den Text zusammen.` Die Gruppe entspricht der Allgemeindefinition der Modellintelligenz (Gesamtparameterzahl im Modellnamen, etwa `35b`) und wird auf ein Modell abgebildet, das von einem aktiven Endpunkt bereitgestellt wird.
-
-- Wird eine gültige Gruppe eingegeben, ersetzt die Eingabezeile das Präfix sofort durch eine Pille, die sich mit `×` wieder entfernen lässt.
-- Die gewählte Gruppe überschreibt Benutzer-Standardmodelle, das Standardmodell und die regelbasierte Modellauswahl.
-- Die Gruppe bleibt für den aktuellen Chat aktiv, bis sie entfernt oder ein neuer Chat gestartet wird.
-- Existiert zur angegebenen Gruppe kein Modell auf einem aktiven Endpunkt, wird die Anfrage mit einem Hinweis auf die verfügbaren Gruppen abgewiesen.
-- Das Feature lässt sich in der Administration unter **Anfragenhandling** mit der Option **Direkte Modellwahl über Intelligenzgruppen aktivieren** ein- und ausschalten (Standard: aktiviert). Ist es deaktiviert, wird das Präfix nicht ausgewertet und bleibt Teil der Nachricht.
-
-## Reasoning per Prompt aktivieren
-
-Thinking/Reasoning ist standardmäßig deaktiviert: Anfragen werden ohne Denkschritte an das Modell geschickt (der am Endpunkt konfigurierte `reasoning_effort` wird nicht übertragen, hybride Chat-Templates erhalten `chat_template_kwargs.enable_thinking = false`), und eventuell dennoch gelieferte Reasoning-Tokens werden nicht angezeigt.
-
-- Beginnt ein Prompt mit `!!`, wird das Reasoning für genau diesen Prompt aktiviert, zum Beispiel `!! Wie viele Möglichkeiten gibt es?`.
-- Das Präfix wird – analog zur direkten Modellwahl per `@@` – sofort durch eine Pille mit dem Symbol einer eingeschalteten Glühlampe (💡) ersetzt, die sich mit `×` wieder entfernen lässt.
-- Nach dem Absenden wird die Aktivierung automatisch zurückgesetzt; der nächste Prompt läuft wieder ohne Reasoning.
-- Das Präfix wird serverseitig aus der Nachricht entfernt und erreicht das Modell nicht.
-
-## Prompt-Funktionen per Präfix aktivieren
-
-Analog zur direkten Modellwahl per `@@` und zum Reasoning per `!!` lassen sich häufig gebrauchte Anweisungen für Format, Länge, Stil oder Vorgehensweise über ein `/kommando`-Präfix am Anfang des Prompts aktivieren. Jedes erkannte Präfix wird sofort durch eine eigene, mit `×` entfernbare Pille ersetzt; mehrere Präfixe lassen sich hintereinander eingeben (z. B. `/tldr /list Fasse den Text zusammen.`), um mehrere Funktionen gleichzeitig zu kombinieren. Nach dem Absenden werden die aktiven Funktionen automatisch zurückgesetzt.
-
-Technisch ergänzt jede aktive Funktion den Systemprompt der laufenden Anfrage um eine feste Anweisung (siehe Tabelle); die Präfixe selbst werden serverseitig nie an das Modell übertragen.
+<details>
+<summary><strong>Alle verfügbaren <code>/kommando</code>-Funktionen</strong></summary>
 
 | Präfix | Wirkung |
 | --- | --- |
@@ -249,85 +140,7 @@ Technisch ergänzt jede aktive Funktion den Systemprompt der laufenden Anfrage u
 | `/factcheck` | Prüft eine Behauptung im Text auf ihren Wahrheitsgehalt. |
 | `/critic` | Sucht gezielt nach Schwachstellen und logischen Fehlern in einer Argumentation. |
 
-## Lastverteilung
-
-Die LLM-, AUTOMATIC1111- und ComfyUI-Balancer verwenden die gemeinsame Engine aus `lib/balancer_engine.php`. Die maximale Anzahl paralleler Tasks je Endpunkt ist über `balancer_max_concurrent` konfigurierbar und beträgt standardmäßig vier.
-
-Die Auswahl erfolgt in einer festen Prioritätsfolge:
-
-1. Nur aktive Endpunkte der benötigten Modellgruppe beziehungsweise Bild-Engine werden berücksichtigt.
-2. Endpunkte mit offenem Circuit Breaker oder ohne freien Task-Slot werden ausgeschlossen.
-3. Die laufenden Tasks je Endpunkt werden verglichen; weniger ausgelastete Endpunkte werden bevorzugt.
-4. Bei gleicher Auslastung entscheidet der Fair-Share: Der Endpunkt mit den wenigsten Zuweisungen innerhalb des Fairness-Fensters (`balancer_fairness_window_seconds`, Standard 15 Minuten) erhält die Aufgabe.
-5. Bei Gleichstand entsteht durch die älteste letzte Zuweisung ein Round-Robin-Effekt; noch nie verwendete Endpunkte kommen zuerst.
-
-Die gemessene Latenz fließt bewusst **nicht** in die Auswahl ein: Alle Endpunkte liegen im selben Subnetz, `avg_latency_ms` ist daher ein rein statistischer Wert für Monitoring und Admin-Ansicht.
-
-![Faktoren der Endpunkt-Auswahl](docs/images/load-balancing-factors.svg)
-
-```mermaid
-flowchart TD
-    A[Anfrage mit Modell] --> B[DB-Transaktion starten]
-    B --> C[Aktive Kandidaten mit passendem Modell,<br/>geschlossenem Circuit und freiem Slot ermitteln]
-    C --> D{Kandidat vorhanden?}
-    D -- Nein --> E[Transaktion zurückrollen<br/>Kein Endpunkt verfügbar]
-    D -- Ja --> F[Nach laufender Last und Fair-Share<br/>im Fairness-Fenster priorisieren]
-    F --> G[Round-Robin als Tie-Breaker:<br/>älteste Zuweisung zuerst]
-    G --> H[Kandidatenzeile sperren<br/>und freie Kapazität erneut prüfen]
-    H --> I{Slot weiterhin frei?}
-    I -- Nein --> J[Nächsten Kandidaten prüfen]
-    J --> H
-    I -- Ja --> K[Task mit Status running anlegen]
-    K --> L[Transaktion bestätigen]
-    L --> M[Endpunkt und Task-ID zurückgeben]
-    M --> N[Nach Verarbeitung Task als<br/>done oder error markieren]
-```
-
-### Ausfallsicherheit
-
-- **Circuit Breaker:** Nach standardmäßig drei aufeinanderfolgenden Fehlern wird ein Endpunkt für 30 Sekunden aus dem Routing genommen. Danach prüft eine einzelne Half-Open-Anfrage die Erholung. Erfolg schließt den Circuit, ein weiterer Fehler öffnet ihn erneut. In den Endpunkt-Details des Dashboards lässt sich der Circuit Breaker über die Schaltfläche **♻ Circuit zurücksetzen** manuell schließen, ohne den Cooldown abzuwarten.
-- **Endpunkt pausieren:** In den Endpunkt-Details des Dashboards lässt sich ein Endpunkt über die Schaltfläche **⏸ Pausieren** aus dem Routing nehmen; laufende Aufgaben bleiben davon unberührt. **▶ Fortsetzen** gibt ihn wieder frei und setzt dabei den Circuit Breaker zurück.
-- **Retry und Backoff:** Ein fehlgeschlagener LLM-Aufruf kann auf bis zu zwei weiteren Endpunkten wiederholt werden. Exponentielles Backoff mit optionalem Full Jitter verhindert gleichzeitige Retry-Spitzen.
-- **Fallback-Ketten:** Ist beim Retry kein Endpunkt derselben Modellgruppe verfügbar, prüft LLMInt die unter `balancer_fallback_chains` hinterlegten Ersatzmodelle der Reihe nach.
-- **Verwaiste Tasks:** Lange im Status `running` verbliebene Tasks werden nach einem konfigurierbaren Timeout als Fehler abgeschlossen und blockieren keinen Slot dauerhaft.
-- **Atomare Reservierung:** `SELECT ... FOR UPDATE` und eine erneute Kapazitätsprüfung unter der Datenbanksperre verhindern die Doppelbelegung eines Slots.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Closed
-    Closed --> Closed: Erfolg / Fehlerzähler zurücksetzen
-    Closed --> Open: Fehlerschwelle erreicht
-    Open --> HalfOpen: Cooldown abgelaufen
-    HalfOpen --> Closed: Testanfrage erfolgreich
-    HalfOpen --> Open: Testanfrage fehlgeschlagen
-```
-
-Die Parameter werden unter **Administration → Balancer & Routing** gepflegt:
-
-| Einstellung | Standard | Zweck |
-|---|---:|---|
-| `balancer_max_concurrent` | `4` | parallele Tasks je Endpunkt |
-| `balancer_circuit_fail_threshold` | `3` | Fehler bis zum Öffnen des Circuit Breakers |
-| `balancer_circuit_cooldown_seconds` | `30` | Wartezeit bis zur Half-Open-Testanfrage |
-| `balancer_backoff_base_ms` / `balancer_backoff_max_ms` | `200` / `8000` | Grenzen des exponentiellen Backoffs |
-| `balancer_backoff_jitter` | aktiv | zufällige Verteilung der Retry-Verzögerung |
-| `balancer_orphan_timeout_seconds` | `300` | Timeout für verwaiste Tasks |
-| `balancer_fairness_window_seconds` | `900` | Zeitfenster für den Fair-Share-Vergleich je Endpunkt |
-| `balancer_fallback_chains` | `{}` | geordnete Ersatzmodelle als JSON-Objekt |
-
-## Voraussetzungen
-
-| Komponente | Erforderlich für |
-|---|---|
-| PHP 8.0+ mit `curl`, `pdo_mysql`, `mbstring` und `fileinfo` | klassische Installation |
-| MySQL oder MariaDB mit `utf8mb4` | Persistenz |
-| OpenAI-/LM-Studio-kompatibler Chat-Endpunkt | Chat |
-| Docker und Docker Compose | Docker-Installation |
-| `pdftotext` (Poppler) | PDF-Extraktion für RAG |
-| Embedding-Endpunkt | semantische Suche |
-| SearXNG, AUTOMATIC1111, ComfyUI, LDAP, SMTP | jeweilige optionale Integration |
-
-Das Docker-Image enthält zusätzlich LDAP-, XML-, ZIP- und Internationalisierungs-Unterstützung sowie Poppler und Kerberos/GSSAPI-Komponenten.
+</details>
 
 ## Schnellstart mit Docker
 
@@ -357,7 +170,7 @@ Das Docker-Image enthält zusätzlich LDAP-, XML-, ZIP- und Internationalisierun
    docker compose up -d --build
    ```
 
-   Der Web-Container wartet auf MySQL und führt anschließend `setup.php` aus. Das Setup ist idempotent und kann deshalb bei Containerstarts erneut laufen.
+   Der Web-Container wartet auf MySQL und führt anschließend `setup.php` aus. Das Setup ist idempotent und kann deshalb bei Containerstarts erneut laufen. Bei leerer Datenbank entsteht der Benutzer `admin` mit dem Passwort `admin` – sofort ändern.
 
 4. Anwendung öffnen:
 
@@ -425,49 +238,6 @@ docker compose down -v # entfernt auch Volumes und damit Daten
 
    Bei einer leeren Datenbank wird der Benutzer `admin` mit dem Passwort `admin` angelegt. Das Passwort sofort ändern und `setup.php` nach der Einrichtung absichern oder entfernen.
 
-## Betrieb hinter lanpa
-
-LLMInt lässt sich hinter den `auth`-Container von [lanpa](https://github.com/dareinelt/lanpa) stellen und ist dann unter `https://<lanpa-host>/ki/` erreichbar. Vorteile:
-
-- **Zentrale Zertifikatverwaltung:** HTTPS terminiert der `auth`-Container mit dem unter lanpa → Admin → **Zertifikate (HTTPS)** verwalteten Zertifikat; LLMInt braucht weder eigenes Zertifikat noch eigenen DNS-Namen.
-- **Windows-SSO ohne eigene Keytab:** Die Kerberos/NTLM-Anmeldung übernimmt der domänenverbundene `auth`-Container. Er verlangt sie nur für `/ki/sso.php` und reicht den erkannten Benutzer im Header `X-Remote-User` weiter.
-
-Ablauf der Anmeldung: Beim ersten Aufruf je Sitzung leitet `index.php` (bzw. `admin/login.php`) einmalig auf `sso.php`. Mit Domänenanmeldung wird der Benutzer wie bisher über LDAP-SSO angelegt bzw. angemeldet; ohne liefert lanpa `sso_fallback.php`, die zurück zur Zielseite führt (Gastzugang bzw. Anmeldeformular). Nach dem Abmelden erfolgt keine automatische Neuanmeldung; über **🪟 Mit Windows-Anmeldung anmelden** auf den Anmeldeseiten lässt sie sich erneut auslösen. Benutzer weiterer Identitätsquellen von lanpa (`X-Remote-Source`) werden nicht übernommen.
-
-**Einrichtung auf demselben Docker-Host:**
-
-1. Gemeinsames Netz einmalig anlegen:
-
-   ```bash
-   docker network create --subnet 172.30.251.0/24 llmint-proxy
-   ```
-
-2. LLMInt mit dem Override starten (hängt `web` mit dem Alias `llmint-web` an das Netz und setzt `TRUSTED_PROXIES=172.30.251.0/24` sowie `PROXY_SSO_HEADER=X-Remote-User`). Den direkten Port auf localhost beschränken, damit TLS nicht umgangen wird:
-
-   ```bash
-   # .env
-   HTTP_PORT=127.0.0.1:8080
-   COMPOSE_FILE=docker-compose.yml:docker-compose.lanpa.yml
-
-   docker compose up -d
-   ```
-
-3. In lanpa `LLMINT_ENABLED=true` und `LLMINT_UPSTREAM=http://llmint-web` setzen (optional `LLMINT_PATH`, Standard `/ki`) und `docker-compose.llmint.yml` in `COMPOSE_FILE` aufnehmen, damit der `auth`-Container an `llmint-proxy` hängt (Details in `docs/llmint.md` von lanpa).
-4. Für SSO in LLMInt unter **Einstellungen → LDAP** LDAP aktivieren und **Windows-SSO** einschalten.
-5. Optional in lanpa eine Kachel auf `/ki/` anlegen.
-
-**LLMInt auf einem anderen Host:** `LLMINT_UPSTREAM=http://<llmint-host>:8080` in lanpa, in LLMInt `TRUSTED_PROXIES=<IP des lanpa-Hosts>` und `PROXY_SSO_HEADER=X-Remote-User`; den Port per Firewall nur für den lanpa-Host freigeben.
-
-| Variable | Bedeutung |
-|---|---|
-| `TRUSTED_PROXIES` | IP-Adressen, CIDR-Bereiche oder Hostnamen der Reverse-Proxys (kommagetrennt). Nur von dort werden `X-Forwarded-For/-Proto/-Host/-Prefix` und der SSO-Header übernommen, von allen anderen Absendern verworfen. Leer = bisheriges Verhalten. |
-| `PROXY_SSO_HEADER` | Header mit dem vom Proxy angemeldeten Benutzer (lanpa: `X-Remote-User`); wird als `REMOTE_USER` an die vorhandene LDAP-SSO-Logik übergeben. Leer = aus. |
-| `LLMINT_PROXY_NETWORK` | Name des gemeinsamen Docker-Netzes in `docker-compose.lanpa.yml` (Standard `llmint-proxy`). |
-
-Technik: `lib/reverse_proxy.php` wird im Container per `auto_prepend_file` (`docker/php.ini`) vor jedem Skript geladen und zusätzlich von `db.php` eingebunden. Es ermittelt die Client-IP aus `X-Forwarded-For` (von rechts, vertrauenswürdige Hops übersprungen), setzt `HTTPS` und das `secure`-Flag des Sitzungscookies und bildet absolute Links (E-Mail-Verifikation, Passwort-Reset, OpenAI-Basis-URL) mit dem Präfix aus `X-Forwarded-Prefix`. Alle übrigen Links der Oberfläche sind relativ und funktionieren unter `/ki/` ohne Anpassung; den Cookie-Pfad schreibt lanpa auf `/ki/` um. Bei klassischer Installation `auto_prepend_file` auf `lib/reverse_proxy.php` setzen, damit das `secure`-Flag greift.
-
-Hinweis: LLMInt läuft unter `/ki/` im selben Origin wie lanpa. Beide Anwendungen verwenden unterschiedliche, `HttpOnly`-gesetzte Sitzungscookies (`PHPSESSID` bzw. `INTRANETSESSID`); generierte Bilder in `sd_output/` und `image_output/` werden nur als PNG mit `X-Content-Type-Options: nosniff` ausgeliefert, Dokument-Uploads gar nicht.
-
 ## Erstkonfiguration
 
 Nach der Anmeldung unter `/admin/login.php`:
@@ -476,13 +246,238 @@ Nach der Anmeldung unter `/admin/login.php`:
 2. Mindestens einen LLM-Endpunkt mit Basis-URL, Timeout und `default_model` anlegen.
 3. Das globale Standardmodell konfigurieren.
 4. Optional Routing, Vision-Modell, SearXNG, SMTP und LDAP einrichten.
-5. Optional Endpunkte für AUTOMATIC1111, ComfyUI und Embeddings hinzufügen.
+5. Optional Endpunkte für ImageInt und Embeddings hinzufügen.
 6. Optional Hybrid-Suche, Reranker und Prompt Security aktivieren.
 7. Verbindungs- und Funktionstests im Admin-Bereich ausführen.
 
 Endpunkte mit demselben `default_model` bilden einen Pool. Das Routing kann eine Nutzeranfrage zuerst einer Kategorie zuordnen und diese über `routing_rules` auf ein Zielmodell abbilden. Ist die Klassifikation nicht verfügbar, wird die ursprüngliche Modellauswahl verwendet. Unter **Balancer & Routing** lassen sich außerdem Kapazitätsgrenzen, Circuit Breaker, Retry-Verhalten und Fallback-Ketten konfigurieren.
 
-## Hybrid-RAG
+## Voraussetzungen
+
+| Komponente | Erforderlich für |
+|---|---|
+| PHP 8.0+ mit `curl`, `pdo_mysql`, `mbstring` und `fileinfo` | klassische Installation |
+| MySQL oder MariaDB mit `utf8mb4` | Persistenz |
+| OpenAI-/LM-Studio-kompatibler Chat-Endpunkt | Chat |
+| Docker und Docker Compose | Docker-Installation |
+| `pdftotext` (Poppler) | PDF-Extraktion für RAG |
+| Embedding-Endpunkt | semantische Suche |
+| SearXNG, ImageInt, LDAP, SMTP | jeweilige optionale Integration |
+
+Das Docker-Image enthält zusätzlich LDAP-, XML-, ZIP- und Internationalisierungs-Unterstützung sowie Poppler und Kerberos/GSSAPI-Komponenten.
+
+## Anwendungsfälle
+
+- **Wissensarbeit und Fachabteilungen:** interne Leitlinien, Protokolle und Dokumentationen direkt im Chat abfragen – die Antwort kommt mit Quellen aus der eigenen Wissensdatenbank.
+- **Programmierung und IT-Support:** Code-Fragen landen automatisch beim spezialisierten Coding-Modell.
+- **Recherche und Aufbereitung:** aktuelle Informationen per Websuche einbinden und strukturiert zusammenfassen.
+- **Bildanalyse und Visualisierung:** Diagramme, Fotos oder Screenshots im Chat beschreiben lassen – das Vision-Modell wird automatisch gewählt.
+- **Kreativ- und Kommunikationsaufgaben:** Bildideen per Text erzeugen und direkt weiterverwenden.
+- **KI-Betrieb im Team:** mehrere KI-Server gemeinsam nutzen statt Inseln zu betreiben, mit zentraler Steuerung, wer was nutzen darf.
+
+## Weiterführende Dokumentation
+
+| Dokument | Zielgruppe |
+|---|---|
+| [`README.md`](README.md) | Betrieb, Installation, Konfiguration und Funktionsüberblick |
+| [`Demo.md`](Demo.md) | nicht-technische Erklärung für Entscheider und Fachbereiche |
+| [`description.md`](description.md) | detaillierte Architektur- und Funktionsreferenz für Entwicklung und Coding-Agenten |
+| [`docs/architecture.md`](docs/architecture.md) | Systemarchitektur, Datenflüsse und Diagramme (ergänzt `description.md`) |
+| [`docs/functions.md`](docs/functions.md) | vollständige Funktionsreferenz je Datei |
+| [`docs/agent_index.md`](docs/agent_index.md) | kompakte Navigationshilfe für Coding-Agenten |
+| [`topologie-referenz.md`](topologie-referenz.md) | Aufbau, Funktionsweise und Anpassung der Dashboard-Topologie |
+| [`tests/README.md`](tests/README.md) | Aufbau und Ausführung der Test-Suiten |
+
+## Technische Referenz
+
+### Architektur
+
+| Ebene | Komponenten |
+|---|---|
+| Web | `index.php`, Anmeldung und Registrierung |
+| API | `api/chat.php`, Routing, RAG, Uploads, Bildgenerierung und OpenAI-Endpunkte |
+| Administration | `admin/` für Endpunkte, Benutzer, Einstellungen, API-Keys und Statistik |
+| Persistenz | MySQL oder MariaDB; das Schema wird idempotent durch `setup.php` und `db.php` erweitert |
+| Externe Dienste | OpenAI-kompatible LLM-/Embedding-Endpunkte, optional SearXNG, LDAP, SMTP; für das Diktat ein oder mehrere [SpeechInt](https://github.com/dareinelt/SpeechInt)-Dienste (whisper.cpp + Qwen3.5-2B) und für die Bildgenerierung ein oder mehrere [ImageInt](https://github.com/dareinelt/ImageInt)-Dienste (Qwen-Image-2.1), die jeweils auf einem separaten Docker-Host laufen |
+
+Wichtige Komponenten:
+
+- `api/balancer.php` wählt LLM-Endpunkte und erfasst deren Task-Lifecycle.
+- `lib/balancer_engine.php` bündelt Circuit Breaker, Backoff, Fallback-Ketten, verwaiste Tasks und die konfigurierbaren Balancer-Einstellungen.
+- `api/embedding.php` erstellt Embeddings, führt Ähnlichkeitssuche und optionales Reranking aus.
+- `api/upload_document.php` verarbeitet Uploads und legt Dokument-Chunks an; `api/doc_convert.php`, `api/pdf_render.php` und `api/vision.php` kapseln Konverter-Dienst, PDF-Rendering und Vision-Analyse.
+- `lib/prompt_security.php` prüft Chat-Anfragen vor der Weiterleitung an das LLM.
+- `lib/speech_dictation.php` kapselt das Diktat als HTTP-Client eines SpeechInt-Dienstes: Transkription, Nachbearbeitung, Diktatbefehle und Befehls-Pillen, Prompt für das Diktat-Modell, Health-/Konfigurationsabfragen und der deterministische Regel-Fallback, wenn kein Dienst erreichbar ist.
+- `setup.php` richtet die initialen Tabellen ein und erstellt bei einer leeren Datenbank den Standardadministrator.
+
+Es gibt bewusst kein Framework, keinen Router, keinen Paketmanager und keinen Build-Schritt: Jede URL entspricht einer PHP-Datei, Abhängigkeiten werden über `require_once` geladen, und Frontend-CSS/-JavaScript liegen inline in `index.php` beziehungsweise in den Adminseiten unter `admin/` (gemeinsame Hülle: `admin/partials/`).
+
+### Repository-Struktur
+
+| Pfad | Inhalt |
+|---|---|
+| `index.php` | Chat-Oberfläche mit Streaming, Sitzungsliste, Upload-Dialog und Bildanhängen |
+| `login.php`, `register.php`, `logout.php` | Anmeldung, Selbstregistrierung mit E-Mail-Verifikation, Abmeldung |
+| `sso.php`, `sso_fallback.php` | Windows-SSO über den Reverse-Proxy von lanpa und Rückfallseite ohne Domänenanmeldung |
+| `db.php` | Datenbankverbindung, idempotentes Laufzeitschema, Einstellungen, Logging, Chat-Sitzungen, Intelligenzgruppen |
+| `config.php` | leitet `LMSTUDIO_BASE_URL` und `LMSTUDIO_TIMEOUT` aus Endpunkten beziehungsweise Einstellungen ab |
+| `setup.php` | Erstinstallation: Tabellen, Migrationen, Standardeinstellungen, Standardadministrator |
+| `api/` | JSON- und SSE-Endpunkte sowie die Bibliotheken für Balancer und Embeddings |
+| `lib/` | Balancer-Engine, Prompt Security, Spracherkennung/Diktat (`speech_dictation.php`), OpenAI-Hilfsfunktionen, LDAP-Anbindung, SMTP-Client, Routing-Prompt, Reverse-Proxy-Unterstützung |
+| `admin/` | Administration als eine Seite je Navigationseintrag (`admin/<seite>.php`, z. B. `index.php`, `usage.php`, `smtp.php`, `api_keys.php`) über der gemeinsamen Hülle `admin/partials/` (Bootstrap, POST-Verarbeitung, Livedaten, Navigation, Layout); dazu Dashboard-Livedaten, Nutzungsstatistik, SSH-Systemmetriken, Prompt Security |
+| `docker/`, `Dockerfile`, `docker-compose.yml` | Container-Setup inklusive phpMyAdmin mit HTTP Basic Auth |
+| `docker-compose.test.yml` | Compose-Override für einen schnellen lokalen Stack beim Testen des Diktats (siehe [Spracherkennung und Diktat](#spracherkennung-und-diktat)) |
+| `docker-compose.lanpa.yml` | optionaler Override für den Betrieb hinter dem `auth`-Container von lanpa |
+| `tests/` | abhängigkeitsfreie PHP- und JavaScript-Tests für Topologie und Canvas-Renderer (siehe [`tests/README.md`](tests/README.md)) |
+| `docconvert/` | Python/FastAPI-Container zur Konvertierung von Office- und Textdateien in strukturierte Chunks |
+| `doc_uploads/`, `sd_output/`, `image_output/` | Laufzeitdaten für hochgeladene Dokumente und generierte Bilder |
+| `assets/`, `docs/`, `ressources/` | Bilder der Oberfläche, Diagramme der Dokumentation, Beispiel-Systemprompt |
+
+### Admin-Dashboard
+
+Der Adminbereich ist in eine Seite je Eintrag der linken Navigation aufgeteilt: `admin/index.php` ist das Dashboard, daneben gibt es eigene Seiten für Nutzungsstatistik (`admin/usage.php`), Endpunkte (`admin/endpoints.php`), die technische Endpunktverwaltung (`admin/endpoint_tech.php`), SMTP (`admin/smtp.php`) und alle weiteren Einträge. Die Knoten der Topologie verlinken direkt auf die Seite mit der passenden Karte. In der Detailkarte eines Endpunkts stehen Modell, Status, belegte Slots, laufende Tasks und – sofern eine [quickinfo](https://github.com/dareinelt/quickinfo)-Instanz gekoppelt ist – CPU-/GPU-Werte; die übrigen Dienste zeigen ihre Erreichbarkeit.
+
+Erklärungen, die nicht zur unmittelbaren Bedienung nötig sind, stehen auf jeder Seite hinter einem **?**-Symbol neben der Karte oder dem Feld. Der Klick öffnet ein Overlay mit allen Beschreibungen dieser Karte; die Oberfläche selbst bleibt auf Beschriftungen, Felder und Zustandsmeldungen beschränkt. Die Texte registriert jede Seite mit `admin_help_text()`, den Knopf setzt `admin_help_button()`, das Overlay rendert `admin_help_overlay()` aus `admin/partials/help.php` einmal je Seite.
+
+Die Topologie zeigt **LLMInt** im Zentrum; darum liegen die direkten Kinder **LLM**, **SpeechInt**, **ImageInt**, **SearXNG**, **Wissensdatenbank**, **Clients** und **API**. Unter LLM hängen die Intelligenzgruppen (je Modell), unter diesen die einzelnen LLM-Endpunkte; ImageInt und SpeechInt bündeln ihre Endpunkte jeweils direkt. Aktive Clients erscheinen als 3D-Wolke aus Hostnamen beziehungsweise IP-Adressen um ihren Knoten, die Aufrufe über die OpenAI-kompatible API als zweite Wolke (ein Eintrag je API-Schlüssel mit Aufrufen heute, Aufrufen gesamt und zuletzt genutztem Modell, dazu ein Sammeleintrag „ohne Key"). Animierte Linien und Partikel machen Richtung und Auslastung sichtbar; Farbe und Strichart folgen dem Knotenzustand (in Ordnung, eingeschränkt, Störung, nicht aktiv).
+
+Ein Klick auf einen Endpunkt öffnet seine Detailkarte direkt im Netz und hebt gleichzeitig den kompletten Weg dieses Bausteins hervor: vom Endpunkt über seine Intelligenzgruppe und LLM hinauf zu LLMInt und von dort in die Zweige der Aufrufer – bis zu einzelnen Client-Hostnamen beziehungsweise API-Schlüsseln. Umgekehrt markiert ein Klick auf einen Aufrufer den Weg von dort bis hinunter in die Endpunkt-Zweige. Läuft auf einem Client gerade eine Anfrage, bleibt der Weg auf genau deren Zweig beschränkt und wird als laufender Weg mit wanderndem Strichmuster gekennzeichnet; ist der Client untätig, wird kein Weg markiert. Welche Anfrage läuft, meldet der Browser im Heartbeat mit (Endpunktart, Modell, Endpunkt-ID), der Adminbereich zeigt sie als Zeile „Laufende Anfrage" am Client-Knoten und nach spätestens 15 s auch in der Topologie. Gruppen, die beiden Wolken und Übersichtsknoten öffnen stattdessen das ausführliche Panel am Rand mit Mitglieder- und Nachbarlisten. Die Ansicht lässt sich per **⛶ Vollbild** auf die volle Browserfenstergröße vergrößern (kein Browser-Vollbild, Beenden per Button oder Esc).
+
+### Modellrouting und Entscheidungsfindung
+
+Das Routing arbeitet in zwei Stufen: Zuerst bestimmt LLMInt die passende Modellgruppe, danach wählt der Balancer innerhalb dieser Gruppe einen geeigneten Endpunkt. Ist ein Entscheidungsmodell konfiguriert, bewertet es die letzte Nutzernachricht anhand der konfigurierten Kategorien und priorisierten Entscheidungsregeln. Eine Routing-Regel ordnet die erkannte Kategorie einem Zielmodell zu. Fehlt eine Zuordnung, ist das Entscheidungsmodell nicht verfügbar oder kann keine Nachricht klassifiziert werden, bleibt die ursprünglich angeforderte Modellauswahl erhalten.
+
+![Übersicht der Routing- und Loadbalancing-Stufen](docs/images/routing-overview.svg)
+
+```mermaid
+flowchart TD
+    A[Benutzeranfrage mit ausgewähltem Modell] --> B{Entscheidungsmodell<br/>konfiguriert?}
+    B -- Nein --> H[Ursprüngliches Modell beibehalten]
+    B -- Ja --> C[Letzte Nutzernachricht extrahieren]
+    C --> D{Nachricht und<br/>Klassifikationsprompt vorhanden?}
+    D -- Nein --> H
+    D -- Ja --> E{Freier Endpunkt für<br/>Entscheidungsmodell verfügbar?}
+    E -- Nein --> H
+    E -- Ja --> F[Entscheidungsmodell ordnet<br/>genau eine Kategorie zu]
+    F --> G{Routing-Regel für<br/>Kategorie vorhanden?}
+    G -- Nein --> H
+    G -- Ja --> I[Zugeordnetes Zielmodell auswählen]
+    H --> J[Gesunden Endpunkt des Modells<br/>nach Kapazität und Fair-Share wählen]
+    I --> J
+    J --> K{Verarbeitung erfolgreich?}
+    K -- Ja --> L[Antwort ausgeben]
+    K -- Nein --> M[Backoff mit Jitter<br/>und anderen Endpunkt versuchen]
+    M --> N{Endpunkt derselben<br/>Modellgruppe verfügbar?}
+    N -- Ja --> K
+    N -- Nein --> O[Konfigurierte Fallback-Modelle<br/>der Reihe nach prüfen]
+    O --> P{Fallback verfügbar?}
+    P -- Ja --> K
+    P -- Nein --> Q[Fehler zurückgeben]
+```
+
+**Vorteile**
+
+- **Passende Modellwahl:** Fachliche, kreative oder allgemeine Anfragen können an jeweils geeignete Modellgruppen geleitet werden.
+- **Effizienter Ressourceneinsatz:** Leistungsfähige oder spezialisierte Modelle werden gezielt genutzt, statt jede Anfrage gleich zu behandeln.
+- **Konfigurierbare Entscheidungen:** Kategorien, Prioritäten und Modellzuordnungen werden im Admin-Bereich gepflegt und lassen sich ohne Codeänderung anpassen.
+- **Robuster Betrieb:** Bei fehlender Klassifikation oder Kapazität wird die Benutzeranfrage weiterhin mit dem ursprünglich gewählten Modell verarbeitet.
+- **Geordnete Fallbacks:** Schlägt ein Endpunkt fehl und ist kein weiterer Endpunkt derselben Modellgruppe frei, werden konfigurierte Ersatzmodelle in der vorgegebenen Reihenfolge geprüft.
+- **Fähigkeits- und Spezialisierungsdaten:** Endpunkte können für Tool Calling und Kategorien gekennzeichnet werden; Upgrade-Vorschläge berücksichtigen die fachliche Spezialisierung.
+- **Faire Auslastung:** Nach der Modellentscheidung verteilt der Balancer Anfragen auf freie, gesunde Endpunkte und bevorzugt bei Gleichstand lange nicht genutzte Endpunkte.
+
+### Intelligence Upgrade
+
+Das Intelligence Upgrade verbindet angemessenen Ressourceneinsatz mit der Möglichkeit, bei anspruchsvolleren Aufgaben mehr Modellleistung zu nutzen. Eine Anfrage wird zunächst mit dem ausgewählten Modell beantwortet. Ist ein leistungsfähigeres Modell mit freier Kapazität verfügbar, erhält der Benutzer anschließend ein optionales Upgrade-Angebot. Nach Zustimmung wird dieselbe Anfrage mit dem vorgeschlagenen Modell erneut ausgeführt; die Auswahl gilt anschließend 20 Minuten lang für die aktuelle Chat-Sitzung.
+
+```mermaid
+flowchart TD
+    A[Benutzeranfrage] --> B[Ausgewähltes Modell<br/>beantwortet Anfrage]
+    B --> C{Leistungsfähigeres Modell<br/>mit freier Kapazität verfügbar?}
+    C -- Nein --> D[Antwort anzeigen]
+    C -- Ja --> E[Antwort anzeigen und<br/>Upgrade anbieten]
+    E --> F{Upgrade zustimmen?}
+    F -- Nein --> D
+    F -- Ja --> G[Anfrage erneut mit<br/>leistungsfähigerem Modell ausführen]
+    G --> H[Upgrade-Modell für<br/>Chat-Sitzung speichern]
+    H --> I[Verbesserte Antwort anzeigen]
+```
+
+**Vorteile**
+
+- **Ressourcenschonend:** Für einfache Fragen reicht ein kleines Modell; leistungsfähige Modelle bleiben für komplexe Aufgaben verfügbar.
+- **Bessere Antwortqualität bei Bedarf:** Benutzer können bei anspruchsvollen Fragen gezielt eine erneute Bearbeitung mit höherer Modellintelligenz anfordern.
+- **Transparente Entscheidung:** Das Upgrade erfolgt nur nach Zustimmung und nur, wenn ein geeigneter Endpunkt Kapazität hat.
+- **Passende Spezialisierung:** Bei erkannter Kategorie werden nur allgemeine oder passende Modelle vorgeschlagen.
+
+Damit ein Modell berücksichtigt wird, muss seine Modellbezeichnung eine Intelligenzstufe wie `8b` oder `70b` enthalten, beispielsweise `modell-8b` oder `modell 70b`. In der Administration kann bei **Systemmeldungen** der Text des Upgrade-Angebots angepasst werden.
+
+### Lastverteilung
+
+Die Endpunktauswahl für LLM-Anfragen läuft über die gemeinsame Engine aus `lib/balancer_engine.php`; die Tabellen der früheren AUTOMATIC1111-/ComfyUI-Integrationen kennt sie nur noch lesend. Die maximale Anzahl paralleler Tasks je Endpunkt ist über `balancer_max_concurrent` konfigurierbar und beträgt standardmäßig vier.
+
+Die Auswahl erfolgt in einer festen Prioritätsfolge:
+
+1. Nur aktive Endpunkte der benötigten Modellgruppe beziehungsweise Bild-Engine werden berücksichtigt.
+2. Endpunkte mit offenem Circuit Breaker oder ohne freien Task-Slot werden ausgeschlossen.
+3. Die laufenden Tasks je Endpunkt werden verglichen; weniger ausgelastete Endpunkte werden bevorzugt.
+4. Bei gleicher Auslastung entscheidet der Fair-Share: Der Endpunkt mit den wenigsten Zuweisungen innerhalb des Fairness-Fensters (`balancer_fairness_window_seconds`, Standard 15 Minuten) erhält die Aufgabe.
+5. Bei Gleichstand entsteht durch die älteste letzte Zuweisung ein Round-Robin-Effekt; noch nie verwendete Endpunkte kommen zuerst.
+
+Die gemessene Latenz fließt bewusst **nicht** in die Auswahl ein: Alle Endpunkte liegen im selben Subnetz, `avg_latency_ms` ist daher ein rein statistischer Wert für Monitoring und Admin-Ansicht.
+
+![Faktoren der Endpunkt-Auswahl](docs/images/load-balancing-factors.svg)
+
+```mermaid
+flowchart TD
+    A[Anfrage mit Modell] --> B[DB-Transaktion starten]
+    B --> C[Aktive Kandidaten mit passendem Modell,<br/>geschlossenem Circuit und freiem Slot ermitteln]
+    C --> D{Kandidat vorhanden?}
+    D -- Nein --> E[Transaktion zurückrollen<br/>Kein Endpunkt verfügbar]
+    D -- Ja --> F[Nach laufender Last und Fair-Share<br/>im Fairness-Fenster priorisieren]
+    F --> G[Round-Robin als Tie-Breaker:<br/>älteste Zuweisung zuerst]
+    G --> H[Kandidatenzeile sperren<br/>und freie Kapazität erneut prüfen]
+    H --> I{Slot weiterhin frei?}
+    I -- Nein --> J[Nächsten Kandidaten prüfen]
+    J --> H
+    I -- Ja --> K[Task mit Status running anlegen]
+    K --> L[Transaktion bestätigen]
+    L --> M[Endpunkt und Task-ID zurückgeben]
+    M --> N[Nach Verarbeitung Task als<br/>done oder error markieren]
+```
+
+#### Ausfallsicherheit
+
+- **Circuit Breaker:** Nach standardmäßig drei aufeinanderfolgenden Fehlern wird ein Endpunkt für 30 Sekunden aus dem Routing genommen. Danach prüft eine einzelne Half-Open-Anfrage die Erholung. Erfolg schließt den Circuit, ein weiterer Fehler öffnet ihn erneut. In den Endpunkt-Details des Dashboards lässt sich der Circuit Breaker über die Schaltfläche **♻ Circuit zurücksetzen** manuell schließen, ohne den Cooldown abzuwarten.
+- **Endpunkt pausieren:** In den Endpunkt-Details des Dashboards lässt sich ein Endpunkt über die Schaltfläche **⏸ Pausieren** aus dem Routing nehmen; laufende Aufgaben bleiben davon unberührt. **▶ Fortsetzen** gibt ihn wieder frei und setzt dabei den Circuit Breaker zurück.
+- **Retry und Backoff:** Ein fehlgeschlagener LLM-Aufruf kann auf bis zu zwei weiteren Endpunkten wiederholt werden. Exponentielles Backoff mit optionalem Full Jitter verhindert gleichzeitige Retry-Spitzen.
+- **Fallback-Ketten:** Ist beim Retry kein Endpunkt derselben Modellgruppe verfügbar, prüft LLMInt die unter `balancer_fallback_chains` hinterlegten Ersatzmodelle der Reihe nach.
+- **Verwaiste Tasks:** Lange im Status `running` verbliebene Tasks werden nach einem konfigurierbaren Timeout als Fehler abgeschlossen und blockieren keinen Slot dauerhaft.
+- **Atomare Reservierung:** `SELECT ... FOR UPDATE` und eine erneute Kapazitätsprüfung unter der Datenbanksperre verhindern die Doppelbelegung eines Slots.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Closed: Erfolg / Fehlerzähler zurücksetzen
+    Closed --> Open: Fehlerschwelle erreicht
+    Open --> HalfOpen: Cooldown abgelaufen
+    HalfOpen --> Closed: Testanfrage erfolgreich
+    HalfOpen --> Open: Testanfrage fehlgeschlagen
+```
+
+Die Parameter werden unter **Administration → Balancer & Routing** gepflegt:
+
+| Einstellung | Standard | Zweck |
+|---|---:|---|
+| `balancer_max_concurrent` | `4` | parallele Tasks je Endpunkt |
+| `balancer_circuit_fail_threshold` | `3` | Fehler bis zum Öffnen des Circuit Breakers |
+| `balancer_circuit_cooldown_seconds` | `30` | Wartezeit bis zur Half-Open-Testanfrage |
+| `balancer_backoff_base_ms` / `balancer_backoff_max_ms` | `200` / `8000` | Grenzen des exponentiellen Backoffs |
+| `balancer_backoff_jitter` | aktiv | zufällige Verteilung der Retry-Verzögerung |
+| `balancer_orphan_timeout_seconds` | `300` | Timeout für verwaiste Tasks |
+| `balancer_fairness_window_seconds` | `900` | Zeitfenster für den Fair-Share-Vergleich je Endpunkt |
+| `balancer_fallback_chains` | `{}` | geordnete Ersatzmodelle als JSON-Objekt |
+
+### Hybrid-RAG
 
 Dokumente werden über `api/upload_document.php` hochgeladen – entweder über den Upload-Dialog oder direkt im Chat über das Büroklammer-Symbol neben dem Bild-Upload. Unterstützt werden:
 
@@ -493,7 +488,7 @@ Dokumente werden über `api/upload_document.php` hochgeladen – entweder über 
 
 Office- und Textdateien konvertiert der separate Container `docconvert` (Python/FastAPI). Er liefert strukturierten Text und strukturbewusste Chunks mit Quellenangabe (Kapitel, Tabellenblatt und Zeilenbereich, Foliennummer) und hält Ergebnisse per Content-Hash in einem temporären TTL-Cache vor. Ist der Dienst nicht erreichbar, verarbeitet ein PHP-Fallback zumindest die reinen Textformate.
 
-Im Chat hochgeladene Dateien werden an die Chat-Sitzung gebunden, als Chip über dem Eingabefeld angezeigt und bei der RAG-Suche bevorzugt. Sie werden standardmäßig **nicht** dauerhaft aufbewahrt: Die Datei wird nur im Rahmen der Chat-Sitzung verarbeitet, die hochgeladene Datei nach der Analyse vom Server gelöscht und außerhalb dieser Sitzung nicht für RAG verwendet. Ein Klick auf den Chip öffnet ein Overlay mit der standardmäßig deaktivierten Option „Diese Datei in meine Wissensdatenbank aufnehmen und für spätere Informationssuche aufbewahren“ (`api/document_retention.php`). Aufbewahrte Dateien listet das Bibliotheks-Overlay (📚 im Kopfbereich) auf; dort lassen sich eigene Dateien löschen. **Alle Nutzer-Uploads sind ausschließlich privat** – eine Freigabe „für alle Nutzer“ gibt es nicht mehr; gemeinsames Wissen kommt aus der zentralen Vektordatenbank (siehe unten). Uploads über den Upload-Dialog (RAG-Workflow) werden wie bisher dauerhaft (privat) gespeichert. Ein Fortschrittsbalken zeigt Upload und anschließende Verarbeitung an. Große Zwischenablage-Inhalte (mehr als 100 Zeilen) werden beim Einfügen mit Strg+V automatisch als Datei „Eingefügter Text“ angehängt, damit nichts verloren geht. Datei- und Bildanhänge stehen ausschließlich angemeldeten Benutzern zur Verfügung.
+Im Chat hochgeladene Dateien werden an die Chat-Sitzung gebunden, als Chip über dem Eingabefeld angezeigt und bei der RAG-Suche bevorzugt. Sie werden standardmäßig **nicht** dauerhaft aufbewahrt: Die Datei wird nur im Rahmen der Chat-Sitzung verarbeitet, die hochgeladene Datei nach der Analyse vom Server gelöscht und außerhalb dieser Sitzung nicht für RAG verwendet. Ein Klick auf den Chip öffnet ein Overlay mit der standardmäßig deaktivierten Option „Diese Datei in meine Wissensdatenbank aufnehmen und für spätere Informationssuche aufbewahren" (`api/document_retention.php`). Aufbewahrte Dateien listet das Bibliotheks-Overlay (📚 im Kopfbereich) auf; dort lassen sich eigene Dateien löschen. **Alle Nutzer-Uploads sind ausschließlich privat** – eine Freigabe „für alle Nutzer" gibt es nicht mehr; gemeinsames Wissen kommt aus der zentralen Vektordatenbank (siehe unten). Uploads über den Upload-Dialog (RAG-Workflow) werden wie bisher dauerhaft (privat) gespeichert. Ein Fortschrittsbalken zeigt Upload und anschließende Verarbeitung an. Große Zwischenablage-Inhalte (mehr als 100 Zeilen) werden beim Einfügen mit Strg+V automatisch als Datei „Eingefügter Text" angehängt, damit nichts verloren geht. Datei- und Bildanhänge stehen ausschließlich angemeldeten Benutzern zur Verfügung.
 
 Die Pipeline speichert Chunks in `document_chunks`. Bei aktivierten Embeddings wird nach dem Chunking eine OpenAI-kompatible Embedding-API aufgerufen. Die Suche kombiniert dann:
 
@@ -504,9 +499,9 @@ Die Pipeline speichert Chunks in `document_chunks`. Bei aktivierten Embeddings w
 
 Ist ein Embedding-Endpunkt oder Reranker nicht erreichbar, fällt die Anwendung auf die vorherige Suchstufe zurück. Relevante Einstellungen sind `embedding_enabled`, `hybrid_search_enabled`, `bm25_weight`, `embedding_weight`, `embedding_cache_enabled`, `reranker_enabled`, `reranker_endpoint` und `reranker_top_k`. Für den Upload selbst kommen `vision_model`, `pdf_vision_enabled`, `pdf_vision_dpi`, `pdf_vision_max_pages` und `upload_max_mb` hinzu.
 
-### Zentrale Wissensdatenbank (docvecwizard / Milvus)
+#### Zentrale Wissensdatenbank (docvecwizard / Milvus)
 
-Teamweites Wissen wird nicht mehr von Nutzern hochgeladen, sondern zentral mit [docvecwizard](https://github.com/dareinelt/docvecwizard) aufbereitet und in einer Milvus-Vektordatenbank gehalten. LLMInt bindet diese Wissensbasis über `api/vector_store.php` in **einem von zwei Modi** ein (Admin → „🧠 Wissensdatenbank“, Einstellung `vector_store_mode`):
+Teamweites Wissen wird nicht mehr von Nutzern hochgeladen, sondern zentral mit [docvecwizard](https://github.com/dareinelt/docvecwizard) aufbereitet und in einer Milvus-Vektordatenbank gehalten. LLMInt bindet diese Wissensbasis über `api/vector_store.php` in **einem von zwei Modi** ein (Admin → „🧠 Wissensdatenbank", Einstellung `vector_store_mode`):
 
 | Modus | Beschreibung |
 |-------|--------------|
@@ -516,21 +511,19 @@ Teamweites Wissen wird nicht mehr von Nutzern hochgeladen, sondern zentral mit [
 
 Ist ein Modus aktiv, zieht `api/chat.php` **bei jeder Anfrage** die `vector_top_k` besten Treffer (Mindest-Score `vector_min_score`) aus der Vektordatenbank, injiziert sie als Kontext-Systemnachricht und stellt sie zusätzlich dem Tool `query_documents` zur Verfügung. Jede Abfrage wird in `vector_query_logs` protokolliert. Status (online/offline, Dokumente, Vektoren, Abfragen heute, Ø Antwortzeit) erscheint am Knoten „Wissensdatenbank" der Dashboard-Topologie – bei `remote` mit der URL des API-Endpunkts, bei `local` mit der Milvus-URL. Beide Modi lassen sich in der Admin-Oberfläche vor dem Speichern testen (`api/test_vector_store.php`).
 
-## Prompt Security
+### Prompt Security
 
 Vor dem LLM-Aufruf wertet `api/chat.php` die letzte Nutzernachricht mit `lib/prompt_security.php` aus. Das Modul unterstützt regelbasierte Erkennung, konfigurierbare Schwellwerte, passive oder aktive Entscheidungen und optional einen KI-Klassifikator. Ereignisse werden in `prompt_security_logs` gespeichert, sofern die Protokollierung aktiviert ist.
 
 Die Verwaltung ist unter `admin/prompt_security.php` verfügbar. Dort lassen sich Regeln, Schwellwerte, Protokollierung und das Verhalten bei Fehlern konfigurieren.
 
-## Spracherkennung und Diktat
+### Spracherkennung und Diktat
 
 Der Mikrofon-Button im Eingabefeld (`🎙`) startet das Diktat: Das Mikrofon wird im Browser aufgezeichnet, die Aufnahme in Segmente zerlegt, an den Server geschickt und das Ergebnis direkt in das Eingabefeld geschrieben.
 
-![Mikrofon-Button im Eingabefeld](docs/images/sprach-diktat-mikrofon.png)
-
 Der Button erscheint nur, wenn die Spracherkennung aktiviert ist. Der rote Rahmen im Screenshot ist keine Oberflächenfunktion, sondern markiert für diese Dokumentation den Button.
 
-### Ablauf
+#### Ablauf
 
 1. **Aufnahme:** Der Browser sammelt Sprache und schneidet ein Segment ab, sobald eine konfigurierte Anzahl Wörter im Puffer liegt oder die Stille größer als das Stopp-Timeout ist. Sehr lange Segmente werden an der Segmentgrenze geteilt, zu große anhand der Byte-Grenze verworfen.
 2. **Transkription:** `api/speech_transcribe.php` schickt das Segment als `multipart/form-data` an `POST /v1/audio/transcriptions` des aktiven SpeechInt-Endpunkts. Der Dienst transkribiert mit whisper.cpp und liefert den Rohtext des Fragments.
@@ -539,7 +532,7 @@ Der Button erscheint nur, wenn die Spracherkennung aktiviert ist. Der rote Rahme
 
 Die erkannten Texte werden nicht gespeichert und verlassen den Server nicht; im Log steht nur eine Längenangabe (`speechDictationLogText()`).
 
-### Lade-Feedback
+#### Lade-Feedback
 
 Nach einem Neustart lädt SpeechInt erst die Modelle (whisper.cpp das GGML-Modell, llama.cpp die GGUF-Gewichte). Solange antwortet der Dienst mit `503` und `{"error":"service_loading"}` samt deutschem Hinweistext und `Retry-After`. LLMInt behandelt das **nicht** als Fehler und weicht auch **nicht** auf den Regel-Fallback aus: Der Diktat-Knopf zeigt in der Statuszeile „Spracheingabe wird verarbeitet …", behält das bereits erkannte Fragment und fragt nach der von `Retry-After` vorgegebenen Zeit erneut an (maximal 60 Versuche). Erst wenn ein Endpunkt nicht erreichbar ist oder einen echten Fehler meldet (`unreachable`, `error`, `unconfigured`, `502`, `504`), greift der Regel-Fallback.
 
@@ -549,7 +542,7 @@ Die Statuszeile nennt damit das, was aus Sicht der bedienenden Person passiert: 
 
 Im Screenshot ist der Fall direkt nach dem Start eines Diktats zu sehen: Die Statuszeile meldet, dass die Spracheingabe verarbeitet wird, im Puffer stehen die bereits erkannten vier Wörter – sie werden nicht verworfen, sondern nach Ablauf von `Retry-After` an denselben Endpunkt erneut geschickt.
 
-### Diktatbefehle
+#### Diktatbefehle
 
 Standardmäßig sind diese Phrasen belegt und im Adminbereich erweiterbar:
 
@@ -563,7 +556,7 @@ Standardmäßig sind diese Phrasen belegt und im Adminbereich erweiterbar:
 
 Die Umwandlung übernimmt das Diktat-Modell anhand des konfigurierten Prompts; die Befehlsliste wird dabei aus den Einstellungen in den Prompt injiziert. Nur wenn das Modell nicht erreichbar ist, greift `speechDictationApplyCommands()` als deterministischer Regel-Fallback, damit kein erkannter Text verloren geht. Die Antwort enthält in diesem Fall `fallback: true` und einen Hinweis, der im Adminbereich als Warnung protokolliert wird.
 
-### Diktat-Modell
+#### Diktat-Modell
 
 Das Diktat nutzt bewusst ein kleines Modell (Qwen3.5-2B Q4) statt eines großen Chat-Modells: Die Aufgabe ist eng umrissen, die Latenz soll niedrig bleiben und der Text verlässt den eigenen Server nicht. Das Modell läuft in SpeechInt, der Aufruf ist ein einzelner JSON-POST an `/v1/dictate/process`; LLMInt sendet Prompt, Befehlsliste, Kontext und Modellnamen mit, der Dienst ist damit zustandslos. Vier Punkte sind dafür entscheidend:
 
@@ -574,18 +567,15 @@ Das Diktat nutzt bewusst ein kleines Modell (Qwen3.5-2B Q4) statt eines großen 
 
 Der Systemprompt und die Befehlsliste sind unter **Verwaltung → 🎙️ Spracherkennung / Diktat** editierbar (`speech_dictation_prompt`, `speech_dictation_commands`); beide werden bei jeder Anfrage an SpeechInt mitgeschickt. Ist das Feld `speech_dictation_prompt` leer, gilt der Standardprompt des Dienstes (`speechDictationDefaultPrompt()`).
 
-### Administration
+#### Administration
 
-Die Seite **Verwaltung → 🎙️ Spracherkennung / Diktat** (`admin/speech.php`) bündelt
-Aktivierung, aktiven Endpunkt, Sprache, die Puffer- und Segmentgrenzen sowie den Prompt und die Befehlsliste. Darunter lassen sich die SpeechInt-Endpunkte verwalten.
+Die Seite **Verwaltung → 🎙️ Spracherkennung / Diktat** (`admin/speech.php`) bündelt Aktivierung, aktiven Endpunkt, Sprache, die Puffer- und Segmentgrenzen sowie den Prompt und die Befehlsliste. Darunter lassen sich die SpeechInt-Endpunkte verwalten.
 
 ![Spracherkennung-Karte im Adminbereich](docs/images/sprach-diktat-admin.png)
 
 Über **Verbindung testen** lässt sich der Endpunkt direkt prüfen (`api/speech_health.php`); die Antwort zeigt Zustand, Modellnamen, Antwortzeit und die Dimensionierung des Hosts:
 
 ![Verbindungstest für einen SpeechInt-Endpunkt](docs/images/sprach-diktat-verbindungstest.png)
-
-#### Speech-Endpunkte
 
 Ein Endpunkt besteht aus Adresse (`base_url`), optionalem Token und Timeout. Ein Endpunkt pro Anfrage: LLMInt verwaltet beliebig viele Endpunkte und nutzt den aktiven; die Reihenfolge in der Tabelle bestimmt die Vorschlagsliste. Der Token wird nur maskiert angezeigt und nie im Log ausgegeben.
 
@@ -603,7 +593,7 @@ Ein Endpunkt besteht aus Adresse (`base_url`), optionalem Token und Timeout. Ein
 
 Die Tabelle `speech_endpoints` speichert `alias`, `base_url`, `token`, `timeout`, `is_active` und `sort_order`. Die Umgebungsvariablen `SPEECHINT_URL`, `SPEECHINT_TOKEN` und `SPEECHINT_TIMEOUT` belegen den Standard-Endpunkt vor und haben – wie bei docconvert – Vorrang vor der Datenbank; die Karte zeigt unter „Aktuell wirksam" an, woher der Wert stammt. Zusätzlich veröffentlicht die Admin-Oberfläche die konfigurierten Endpunkte als Knoten unter der Gruppe „SpeechInt" in der Dashboard-Topologie.
 
-### SpeechInt-Dienst
+#### SpeechInt-Dienst
 
 Die rechenintensiven Bestandteile des Diktats – whisper.cpp mit dem `small`-Modell und llama.cpp mit Qwen3.5-2B Q4 – wurden in das Projekt [SpeechInt](https://github.com/dareinelt/SpeechInt) extrahiert. LLMInt startet sie nicht mehr selbst, sondern spricht einen oder mehrere SpeechInt-Endpunkte über HTTP an:
 
@@ -624,13 +614,13 @@ Ohne erreichbaren Endpunkt bleibt der Chat vollständig nutzbar; das Diktat ist 
 SPEECHINT_URL=http://speech-host:8080 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
 ```
 
-## Bildgenerierung (ImageInt)
+### Bildgenerierung (ImageInt)
 
 Bilder erzeugt der separate Dienst [ImageInt](https://github.com/dareinelt/ImageInt): ein Prompt-Enhancer und ein Renderer auf Basis von **Qwen-Image-2.1**, hinter einem gemeinsamen HTTP-Service. LLMInt startet keine Bildmodelle selbst, sondern präsentiert dem laufenden Text-LLM das Tool `generate_image` und schickt den Bildwunsch per HTTP an einen ImageInt-Endpunkt. Ist kein Endpunkt konfiguriert oder erreichbar, bleibt der Chat vollständig nutzbar – nur das Tool fehlt dann im Angebot.
 
 ImageInt ersetzt die früheren Integrationen **AUTOMATIC1111** und **ComfyUI**. Das Tool heißt weiterhin `generate_image`; `generate_image_comfy` ist entfallen. Die Admin-Karten der alten Integrationen sind nur noch ausgeblendet, ihre Tabellen und Einstellungen bleiben erhalten.
 
-### Ablauf
+#### Ablauf
 
 1. **Erkennung:** Der Systemprompt enthält die Auslöse-Formulierungen aus `image_prompt_trigger_text` (Standard: „Generiere ein Bild …", „Erstelle eine Grafik …", „Zeige mir ein Bild von …"). Genauso wichtig ist die Gegenregel aus `image_prompt_anti_trigger_text`: eine Frage *über* Bilder („Wie funktioniert Bildgenerierung?") darf das Tool nicht auslösen. Beide Texte sind in der Admin-Karte editierbar, damit sie ohne Deployment erweitert werden können.
 2. **Aufruf:** `api/chat.php` schickt `POST /v1/images/generations` mit `prompt`, optional `negative_prompt` und `size` (z. B. `16:9`, `1:1`, `4:3`) – und immer mit `wait: false`. Der Dienst antwortet sofort mit **202** und einer `job_id`; ein PHP-Request bleibt damit nicht minutenlang offen.
@@ -639,17 +629,15 @@ ImageInt ersetzt die früheren Integrationen **AUTOMATIC1111** und **ComfyUI**. 
 
 Die `image_url` aus dem Job-Dokument zeigt auf den ImageInt-Host, den ein Browser in der Regel nicht erreichen kann. LLMInt spiegelt das PNG deshalb lokal und verwendet für Chat und Mail die lokale Adresse.
 
-### Lade-Feedback
+#### Lade-Feedback
 
 Nach einem Neustart lädt ImageInt erst den Enhancer und den Renderer. Solange antwortet `/v1/ready` und `POST /v1/images/generations` mit **503** und `transient: true` samt deutschem Hinweistext und `Retry-After`. LLMInt behandelt das **nicht** als Fehler: Der Chat zeigt eine Wartemeldung und fragt nach der von `Retry-After` vorgegebenen Zeit erneut an. Erst wenn der Host die Hardwareanforderung nicht erfüllt (`503 host_unsupported`, AVX2 fehlt), meldet der Verbindungstest einen echten Fehler – Warten hilft dort nicht.
 
-### Zustimmung und Benachrichtigungsmail
+#### Zustimmung und Benachrichtigungsmail
 
 Eine CPU-Generierung dauert Minuten. Läuft der Auftrag nach `IMAGEINT_SYNC_TIMEOUT` noch, blendet der Chat die Zustimmungsfrage aus `image_notify_consent_text` ein:
 
 > Das Generieren dieser Antwort kann einige Zeit in Anspruch nehmen. Möchten Sie per E-Mail über die Fertigstellung benachrichtigt werden?
-
-![Zustimmungsfrage im Chat nach einem laufenden Bildauftrag](docs/images/bildgenerierung-zustimmung.png)
 
 Darunter stehen „Ja, per E-Mail benachrichtigen" und „Nein, ich warte hier". Ein „Ja" legt über `api/image_notify.php` genau eine Zeile in `image_notifications` an; ein zweiter Klick oder ein Neuladen erzeugt dank `UNIQUE KEY uniq_job_user` keine zweite Mail. Ein „Nein" erzeugt keine Zeile und keine Mail.
 
@@ -661,7 +649,7 @@ Die Mail verschickt **nicht** der Browser, sondern `api/image_notify_worker.php`
 
 Der Worker fragt den Auftragsstatus ab und schickt die Mail, sobald das Bild fertig ist – auch bei geschlossenem Browser. Er läuft nur einmal gleichzeitig (Dateisperre), damit zwei überlappende Cron-Läufe nicht doppelt zustellen. ImageInt bewahrt fertige Bilder nur `IMAGEINT_JOB_RETENTION_SECONDS` lang auf (Standard 24 h); ist der Auftrag danach weg, antwortet der Dienst mit `404 not_found` und die Zeile wird als `expired` markiert, statt einen toten Link zu verschicken.
 
-### Platzhalter
+#### Platzhalter
 
 Beide Texte – Zustimmungsfrage und Mail – sind vollständig templatisiert. Alle Platzhalter werden über `str_replace()` aufgelöst; unbekannte bleiben unverändert stehen.
 
@@ -679,14 +667,9 @@ Beide Texte – Zustimmungsfrage und Mail – sind vollständig templatisiert. A
 
 Der Deep-Link hat die Form `index.php?session=<session_id>&job=<job_id>`. `index.php` übernimmt die Sitzung aus der URL **nur**, wenn sie dem angemeldeten Benutzer gehört; ein Link aus einer fremden Mail öffnet keine fremde Sitzung. Danach wird zum Bild gescrollt, das Ergebnis kurz hervorgehoben und die Parameter werden per `history.replaceState()` aus der Adresszeile entfernt.
 
-![Fertiges Bild im Chat mit Abmessungen und Dauer](docs/images/bildgenerierung-ergebnis.png)
+#### Administration
 
-![Deep-Link aus der Mail: hervorgehobenes Bild im Chat](docs/images/bildgenerierung-deeplink.png)
-
-### Administration
-
-Die Seite **Verwaltung → 🖼️ Bildgenerierung** (`admin/image.php`) bündelt Aktivierung, aktiven
-Endpunkt, die Zustimmungs- und Mailtexte, die Basis-URL für die Links sowie Auslöse- und Gegenregel. Darunter lassen sich die Image-Endpunkte verwalten; der Verbindungstest fragt `/v1/ready` ab und zeigt bei Erfolg zusätzlich die beiden Modellserver und die Dimensionierung des Hosts.
+Die Seite **Verwaltung → 🖼️ Bildgenerierung** (`admin/image.php`) bündelt Aktivierung, aktiven Endpunkt, die Zustimmungs- und Mailtexte, die Basis-URL für die Links sowie Auslöse- und Gegenregel. Darunter lassen sich die Image-Endpunkte verwalten; der Verbindungstest fragt `/v1/ready` ab und zeigt bei Erfolg zusätzlich die beiden Modellserver und die Dimensionierung des Hosts.
 
 ![Karte „Bildgenerierung" im Adminbereich](docs/images/bildgenerierung-admin.png)
 
@@ -702,7 +685,7 @@ Die Tabelle `image_endpoints` speichert `alias`, `base_url`, `token`, `timeout`,
 | `image_notify_base_url` | Präfix für `{chat_url}` und `{image_url}` |
 | `image_prompt_trigger_text`, `image_prompt_anti_trigger_text` | Systemprompt-Regeln |
 
-### ImageInt-Dienst
+#### ImageInt-Dienst
 
 Die rechenintensiven Bestandteile wurden in das Projekt [ImageInt](https://github.com/dareinelt/ImageInt) extrahiert. LLMInt spricht einen oder mehrere ImageInt-Endpunkte über HTTP an:
 
@@ -747,14 +730,14 @@ LLMInt arbeitet für externe Applikationen als Reverse-Proxy vor den LLM-Endpunk
 - Es wird keine PHP-Sitzung verwendet; ein mitgesendetes Session-Cookie wird ignoriert. Bildanhänge, Intelligenzgruppen (`@@…`) und benutzerbezogene Dokumente stehen daher – wie für Gäste – nicht zur Verfügung.
 - Das Feld `model` der Anfrage wird ignoriert. Jede Anfrage startet mit dem am API-Key hinterlegten Modell (siehe Admin-Bereich → **Verwaltung → 🗝️ API-Keys**); ist dort keines gesetzt oder wird die Anfrage ohne gültigen Key gestellt, gilt das Gast-Standardmodell (Einstellung `default_model`). Ein am Key hinterlegtes Modell wird nur verwendet, solange es von einem aktiven Endpunkt angeboten wird – sonst greift das Standardmodell. Danach greifen Prompt Security, Entscheidungsmodell/Routing, Balancer, Fallback und Warteschlange genau wie bei einem direkten Zugriff. Reasoning lässt sich per `!!`-Präfix oder `reasoning_effort` aktivieren.
 - Ein API-Key im Header `Authorization: Bearer <key>` ist optional. Unbekannte, deaktivierte oder abgelaufene Keys (z. B. Platzhalter, die manche Clients zwingend senden) werden wie ein Zugriff ohne Key behandelt; ein gültiger Key dient der Zuordnung im Log und kann optional ein festes Modell festlegen, nicht der Anmeldung als Key-Besitzer.
-- Alle Log-Einträge einer API-Anfrage tragen das Präfix `[API]` bzw. `[API · Key „Name“]` und werden im Log-Viewer als Badge hervorgehoben; ein Eintrag „Zugriff über OpenAI-kompatible API …“ protokolliert Client-IP, Tool-Modus, angefordertes und verwendetes Modell sowie die Herkunft des Modells (API-Key-Modell oder Standardmodell).
+- Alle Log-Einträge einer API-Anfrage tragen das Präfix `[API]` bzw. `[API · Key „Name“]` und werden im Log-Viewer als Badge hervorgehoben; ein Eintrag „Zugriff über OpenAI-kompatible API …" protokolliert Client-IP, Tool-Modus, angefordertes und verwendetes Modell sowie die Herkunft des Modells (API-Key-Modell oder Standardmodell).
 - Jede Anfrage an `chat/completions` zählt für den zugehörigen Key mit (Aufrufe heute, Aufrufe gesamt, zuletzt genutztes Modell); ohne gültigen Key landen die Aufrufe im Sammeleintrag „ohne Key". Beides erscheint als Wolke am Knoten **API** der Dashboard-Topologie. Das Auflisten der Modelle (`/v1/models`) wird nicht gezählt.
 
-Die Basis-URLs zum Kopieren zeigt der Admin-Bereich unter **Verwaltung → 🔌 OpenAI-API**, die Keys verwaltet die Seite **Verwaltung → 🗝️ API-Keys**. Seit der Aufteilung des Admin-One-Pagers hat jeder Navigationseintrag seine eigene Seite (`admin/api_keys.php`). API-Keys werden als Hash gespeichert; beim Erstellen lässt sich das zu verwendende Modell aus den Modellen der aktiven Endpunkte auswählen.
+Die Basis-URLs zum Kopieren zeigt der Admin-Bereich unter **Verwaltung → 🔌 OpenAI-API**, die Keys verwaltet die Seite **Verwaltung → 🗝️ API-Keys**. API-Keys werden als Hash gespeichert; beim Erstellen lässt sich das zu verwendende Modell aus den Modellen der aktiven Endpunkte auswählen.
 
 ![API-Key anlegen mit Modellauswahl im Dropdown](docs/images/api-keys-modell-dropdown.png)
 
-Im Screenshot zeigt das Formular „OpenAI API-Key erstellen“ in der Dashboard-Karte **🗝️ API-Keys** das Dropdown **Modell (optional)** – zur Auswahl stehen die Standard-Modelle aller aktiven Endpunkte; die Option „Standardmodell verwenden“ lässt den Key ohne feste Modellbindung. Darunter listet „Vorhandene API-Keys“ in der Spalte **Modell** das fest gebundene Modell bzw. den Hinweis „Standardmodell“.
+Im Screenshot zeigt das Formular „OpenAI API-Key erstellen" in der Dashboard-Karte **🗝️ API-Keys** das Dropdown **Modell (optional)** – zur Auswahl stehen die Standard-Modelle aller aktiven Endpunkte; die Option „Standardmodell verwenden" lässt den Key ohne feste Modellbindung. Darunter listet „Vorhandene API-Keys" in der Spalte **Modell** das fest gebundene Modell bzw. den Hinweis „Standardmodell".
 
 ```python
 from openai import OpenAI
@@ -809,12 +792,7 @@ Beim Streaming werden zusätzlich zu den OpenAI-Chunks folgende Frames gesendet:
 
 Tools werden nur an Endpunkte gesendet, die als Tool-Calling-fähig markiert sind.
 
-`generate_image` ist das einzige Bild-Tool: die früheren Integrationen AUTOMATIC1111
-(`generate_image` mit `width`/`height`) und ComfyUI (`generate_image_comfy`) sind
-entfallen. Die Seitenverhältnisse wählt ImageInt selbst über seinen Prompt-Enhancer;
-`size` bleibt als Notausgang. Da eine CPU-Generierung mehrere Minuten dauert, kann
-sich der Nutzer per E-Mail benachrichtigen lassen; die Mail schickt
-`api/image_notify_worker.php`, damit sie auch bei geschlossenem Browser ankommt.
+`generate_image` ist das einzige Bild-Tool: die früheren Integrationen AUTOMATIC1111 (`generate_image` mit `width`/`height`) und ComfyUI (`generate_image_comfy`) sind entfallen. Die Seitenverhältnisse wählt ImageInt selbst über seinen Prompt-Enhancer; `size` bleibt als Notausgang. Da eine CPU-Generierung mehrere Minuten dauert, kann sich der Nutzer per E-Mail benachrichtigen lassen; die Mail schickt `api/image_notify_worker.php`, damit sie auch bei geschlossenem Browser ankommt.
 
 ## Datenmodell
 
@@ -831,29 +809,48 @@ Das Schema wird idempotent angelegt: `setup.php` führt die Erstinstallation ink
 | Monitoring | `active_clients`, `client_count_log`, `client_count_daily`, `user_login_log` |
 | Sicherheit | `prompt_security_rules`, `prompt_security_logs` |
 
-## Entwicklung
+## Betrieb hinter lanpa
 
-- Voraussetzung ist lediglich PHP mit den genannten Erweiterungen sowie eine Datenbank; Composer, npm oder ein Build-Schritt werden nicht benötigt.
-- Änderungen am Schema gehören nach `ensureRuntimeSchema()` in `db.php`, damit bestehende Installationen automatisch migrieren; die Erstinstallation wird in `setup.php` ergänzt.
-- Neue Einstellungen erhalten ein Formular mit `action`-Wert auf der zuständigen Adminseite `admin/<seite>.php` (POST-Zweig in `admin/partials/actions.php`) und werden über `getSetting()` beziehungsweise `setSetting()` verwendet.
-- Neue HTTP-Endpunkte werden als eigene Datei unter `api/` angelegt, binden `db.php` ein und prüfen Sitzung, Rolle und CSRF-Token wie die bestehenden Endpunkte.
-- Neue Chat-Tools benötigen eine Definition, eine Verfügbarkeitsprüfung und einen Zweig in der Tool-Schleife von `api/chat.php`.
-- Datenbankzugriffe erfolgen ausschließlich über vorbereitete PDO-Statements, Ausgaben werden mit `htmlspecialchars()` maskiert, Meldungen sind auf Deutsch, Protokollierung erfolgt über `writeLog()`.
-- Vor dem Commit sollten geänderte Dateien mit `php -l` geprüft werden. Details zu Funktionen, Tabellen und Einstellungsschlüsseln stehen in [`description.md`](description.md), [`docs/architecture.md`](docs/architecture.md) und [`docs/functions.md`](docs/functions.md).
+LLMInt lässt sich hinter den `auth`-Container von [lanpa](https://github.com/dareinelt/lanpa) stellen und ist dann unter `https://<lanpa-host>/ki/` erreichbar. Vorteile:
 
-### Tests
+- **Zentrale Zertifikatverwaltung:** HTTPS terminiert der `auth`-Container mit dem unter lanpa → Admin → **Zertifikate (HTTPS)** verwalteten Zertifikat; LLMInt braucht weder eigenes Zertifikat noch eigenen DNS-Namen.
+- **Windows-SSO ohne eigene Keytab:** Die Kerberos/NTLM-Anmeldung übernimmt der domänenverbundene `auth`-Container. Er verlangt sie nur für `/ki/sso.php` und reicht den erkannten Benutzer im Header `X-Remote-User` weiter.
 
-Die Übersetzungsschicht der Topologie (`lib/topology.php`) und der Canvas-Renderer (`assets/js/flow-topology.js`) sind durch abhängigkeitsfreie Tests abgesichert – kein Composer, kein PHPUnit, kein npm-Paket:
+Ablauf der Anmeldung: Beim ersten Aufruf je Sitzung leitet `index.php` (bzw. `admin/login.php`) einmalig auf `sso.php`. Mit Domänenanmeldung wird der Benutzer wie bisher über LDAP-SSO angelegt bzw. angemeldet; ohne liefert lanpa `sso_fallback.php`, die zurück zur Zielseite führt (Gastzugang bzw. Anmeldeformular). Nach dem Abmelden erfolgt keine automatische Neuanmeldung; über **🪟 Mit Windows-Anmeldung anmelden** auf den Anmeldeseiten lässt sie sich erneut auslösen. Benutzer weiterer Identitätsquellen von lanpa (`X-Remote-Source`) werden nicht übernommen.
 
-```sh
-./tests/run.sh        # PHP- und JavaScript-Tests
-./tests/run.sh php    # nur tests/php/test_*.php
-./tests/run.sh js     # nur tests/js/*.test.js
-```
+**Einrichtung auf demselben Docker-Host:**
 
-Ohne lokale PHP-/Node-Installation laufen dieselben Tests per Docker; die genauen Befehle und der Aufbau der Suiten stehen in [`tests/README.md`](tests/README.md). Der Workflow `.github/workflows/tests.yml` führt sie bei jedem Pull Request aus.
+1. Gemeinsames Netz einmalig anlegen:
 
-Aufbau, Funktionsweise und Anpassung der Topologie (Knoten, Wolken, Wege, Farben, Layout) beschreibt [`topologie-referenz.md`](topologie-referenz.md).
+   ```bash
+   docker network create --subnet 172.30.251.0/24 llmint-proxy
+   ```
+
+2. LLMInt mit dem Override starten (hängt `web` mit dem Alias `llmint-web` an das Netz und setzt `TRUSTED_PROXIES=172.30.251.0/24` sowie `PROXY_SSO_HEADER=X-Remote-User`). Den direkten Port auf localhost beschränken, damit TLS nicht umgangen wird:
+
+   ```bash
+   # .env
+   HTTP_PORT=127.0.0.1:8080
+   COMPOSE_FILE=docker-compose.yml:docker-compose.lanpa.yml
+
+   docker compose up -d
+   ```
+
+3. In lanpa `LLMINT_ENABLED=true` und `LLMINT_UPSTREAM=http://llmint-web` setzen (optional `LLMINT_PATH`, Standard `/ki`) und `docker-compose.llmint.yml` in `COMPOSE_FILE` aufnehmen, damit der `auth`-Container an `llmint-proxy` hängt (Details in `docs/llmint.md` von lanpa).
+4. Für SSO in LLMInt unter **Einstellungen → LDAP** LDAP aktivieren und **Windows-SSO** einschalten.
+5. Optional in lanpa eine Kachel auf `/ki/` anlegen.
+
+**LLMInt auf einem anderen Host:** `LLMINT_UPSTREAM=http://<llmint-host>:8080` in lanpa, in LLMInt `TRUSTED_PROXIES=<IP des lanpa-Hosts>` und `PROXY_SSO_HEADER=X-Remote-User`; den Port per Firewall nur für den lanpa-Host freigeben.
+
+| Variable | Bedeutung |
+|---|---|
+| `TRUSTED_PROXIES` | IP-Adressen, CIDR-Bereiche oder Hostnamen der Reverse-Proxys (kommagetrennt). Nur von dort werden `X-Forwarded-For/-Proto/-Host/-Prefix` und der SSO-Header übernommen, von allen anderen Absendern verworfen. Leer = bisheriges Verhalten. |
+| `PROXY_SSO_HEADER` | Header mit dem vom Proxy angemeldeten Benutzer (lanpa: `X-Remote-User`); wird als `REMOTE_USER` an die vorhandene LDAP-SSO-Logik übergeben. Leer = aus. |
+| `LLMINT_PROXY_NETWORK` | Name des gemeinsamen Docker-Netzes in `docker-compose.lanpa.yml` (Standard `llmint-proxy`). |
+
+Technik: `lib/reverse_proxy.php` wird im Container per `auto_prepend_file` (`docker/php.ini`) vor jedem Skript geladen und zusätzlich von `db.php` eingebunden. Es ermittelt die Client-IP aus `X-Forwarded-For` (von rechts, vertrauenswürdige Hops übersprungen), setzt `HTTPS` und das `secure`-Flag des Sitzungscookies und bildet absolute Links (E-Mail-Verifikation, Passwort-Reset, OpenAI-Basis-URL) mit dem Präfix aus `X-Forwarded-Prefix`. Alle übrigen Links der Oberfläche sind relativ und funktionieren unter `/ki/` ohne Anpassung; den Cookie-Pfad schreibt lanpa auf `/ki/` um. Bei klassischer Installation `auto_prepend_file` auf `lib/reverse_proxy.php` setzen, damit das `secure`-Flag greift.
+
+Hinweis: LLMInt läuft unter `/ki/` im selben Origin wie lanpa. Beide Anwendungen verwenden unterschiedliche, `HttpOnly`-gesetzte Sitzungscookies (`PHPSESSID` bzw. `INTRANETSESSID`); generierte Bilder in `sd_output/` und `image_output/` werden nur als PNG mit `X-Content-Type-Options: nosniff` ausgeliefert, Dokument-Uploads gar nicht.
 
 ## Betrieb und Sicherheit
 
@@ -865,6 +862,9 @@ Aufbau, Funktionsweise und Anpassung der Topologie (Knoten, Wolken, Wege, Farben
 - Nach einem Wechsel des Embedding-Modells fehlende Embeddings über den Admin-Bereich neu berechnen und bei Bedarf den Embedding-Cache leeren.
 
 ## Troubleshooting
+
+<details>
+<summary><strong>Häufige Probleme und ihre Prüfpunkte</strong></summary>
 
 | Problem | Prüfen |
 |---|---|
@@ -883,6 +883,28 @@ Aufbau, Funktionsweise und Anpassung der Topologie (Knoten, Wolken, Wege, Farben
 | SpeechInt-Endpunkt meldet `whisper_unreachable` oder `model_unreachable` | Im SpeechInt-Container läuft der jeweilige Modellprozess nicht; Logs des Dienstes prüfen |
 | SpeechInt-Host wird als zu klein gemeldet | `host.warnings` im Verbindungstest beachten – Mindestanforderung sind 6 CPU-Kerne mit AVX2 und 16 GB RAM |
 | Erkennung schneidet mitten im Satz ab | `speech_dictation_buffer_words` und `speech_dictation_stop_timeout_seconds` erhöhen; `max_segment_seconds` prüfen |
+
+</details>
+
+## Entwicklung und Tests
+
+- Voraussetzung ist lediglich PHP mit den genannten Erweiterungen sowie eine Datenbank; Composer, npm oder ein Build-Schritt werden nicht benötigt.
+- Änderungen am Schema gehören nach `ensureRuntimeSchema()` in `db.php`, damit bestehende Installationen automatisch migrieren; die Erstinstallation wird in `setup.php` ergänzt.
+- Neue Einstellungen erhalten ein Formular mit `action`-Wert auf der zuständigen Adminseite `admin/<seite>.php` (POST-Zweig in `admin/partials/actions.php`) und werden über `getSetting()` beziehungsweise `setSetting()` verwendet.
+- Neue HTTP-Endpunkte werden als eigene Datei unter `api/` angelegt, binden `db.php` ein und prüfen Sitzung, Rolle und CSRF-Token wie die bestehenden Endpunkte.
+- Neue Chat-Tools benötigen eine Definition, eine Verfügbarkeitsprüfung und einen Zweig in der Tool-Schleife von `api/chat.php`.
+- Datenbankzugriffe erfolgen ausschließlich über vorbereitete PDO-Statements, Ausgaben werden mit `htmlspecialchars()` maskiert, Meldungen sind auf Deutsch, Protokollierung erfolgt über `writeLog()`.
+- Vor dem Commit sollten geänderte Dateien mit `php -l` geprüft werden.
+
+Die Übersetzungsschicht der Topologie (`lib/topology.php`) und der Canvas-Renderer (`assets/js/flow-topology.js`) sind durch abhängigkeitsfreie Tests abgesichert – kein Composer, kein PHPUnit, kein npm-Paket:
+
+```sh
+./tests/run.sh        # PHP- und JavaScript-Tests
+./tests/run.sh php    # nur tests/php/test_*.php
+./tests/run.sh js     # nur tests/js/*.test.js
+```
+
+Ohne lokale PHP-/Node-Installation laufen dieselben Tests per Docker; die genauen Befehle und der Aufbau der Suiten stehen in [`tests/README.md`](tests/README.md). Der Workflow `.github/workflows/tests.yml` führt sie bei jedem Pull Request aus.
 
 ## Lizenz
 
