@@ -15,6 +15,7 @@ require_once __DIR__ . '/../lib/balancer_engine.php';
 require_once __DIR__ . '/../lib/openai_api.php';
 require_once __DIR__ . '/../lib/speech_dictation.php';
 require_once __DIR__ . '/../lib/image_generation.php';
+require_once __DIR__ . '/../lib/topology.php';
 
 requireAdminOrRedirect('login.php');
 
@@ -678,58 +679,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     : 'Active-Directory-Integration deaktiviert.';
             }
 
-        // ── Add SD endpoint ───────────────────────────────────────────────────
-        } elseif ($action === 'add_sd_endpoint') {
-            $newUrl     = trim($_POST['sd_ep_base_url'] ?? '');
-            $newTimeout = (int) ($_POST['sd_ep_timeout'] ?? 120);
-            $isActive   = isset($_POST['sd_ep_is_active']) ? 1 : 0;
-
-            if ($newUrl === '') {
-                $flashError = 'URL darf nicht leer sein.';
-            } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
-                $flashError = 'Bitte eine gültige URL eingeben.';
-            } elseif ($newTimeout < 1 || $newTimeout > 600) {
-                $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
-            } else {
-                $maxOrder = (int) $db->query(
-                    'SELECT COALESCE(MAX(sort_order), -1) FROM sd_endpoints'
-                )->fetchColumn();
-                $db->prepare(
-                    'INSERT INTO sd_endpoints (base_url, timeout, is_active, sort_order) VALUES (?, ?, ?, ?)'
-                )->execute([rtrim($newUrl, '/'), $newTimeout, $isActive, $maxOrder + 1]);
-                $flashOk = 'SD-Endpunkt hinzugefügt.';
-            }
-
-        // ── Update SD endpoint ────────────────────────────────────────────────
-        } elseif ($action === 'update_sd_endpoint') {
-            $epId       = (int) ($_POST['sd_ep_id'] ?? 0);
-            $newUrl     = trim($_POST['sd_ep_base_url'] ?? '');
-            $newTimeout = (int) ($_POST['sd_ep_timeout'] ?? 120);
-            $isActive   = isset($_POST['sd_ep_is_active']) ? 1 : 0;
-
-            if ($epId <= 0) {
-                $flashError = 'Ungültige SD-Endpunkt-ID.';
-            } elseif ($newUrl === '') {
-                $flashError = 'URL darf nicht leer sein.';
-            } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
-                $flashError = 'Bitte eine gültige URL eingeben.';
-            } elseif ($newTimeout < 1 || $newTimeout > 600) {
-                $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
-            } else {
-                $db->prepare(
-                    'UPDATE sd_endpoints SET base_url = ?, timeout = ?, is_active = ? WHERE id = ?'
-                )->execute([rtrim($newUrl, '/'), $newTimeout, $isActive, $epId]);
-                $flashOk = 'SD-Endpunkt gespeichert.';
-            }
-
-        // ── Delete SD endpoint ────────────────────────────────────────────────
-        } elseif ($action === 'delete_sd_endpoint') {
-            $epId = (int) ($_POST['sd_ep_id'] ?? 0);
-            if ($epId > 0) {
-                $db->prepare('DELETE FROM sd_endpoints WHERE id = ?')->execute([$epId]);
-                $flashOk = 'SD-Endpunkt gelöscht.';
-            }
-
         // ── Add SpeechInt endpoint ────────────────────────────────────────────
         } elseif ($action === 'add_speech_endpoint') {
             $newAlias   = trim($_POST['speech_ep_alias'] ?? '');
@@ -983,60 +932,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $stmt->execute([$position, (int) $id]);
                 }
                 $flashOk = 'Reihenfolge der Image-Endpunkte gespeichert.';
-            }
-
-        // ── Add ComfyUI endpoint ──────────────────────────────────────────────
-        } elseif ($action === 'add_comfy_endpoint') {
-            $newUrl        = trim($_POST['comfy_ep_base_url'] ?? '');
-            $newTimeout    = (int) ($_POST['comfy_ep_timeout'] ?? 120);
-            $newCheckpoint = trim($_POST['comfy_ep_default_checkpoint'] ?? '');
-            $isActive      = isset($_POST['comfy_ep_is_active']) ? 1 : 0;
-
-            if ($newUrl === '') {
-                $flashError = 'URL darf nicht leer sein.';
-            } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
-                $flashError = 'Bitte eine gültige URL eingeben.';
-            } elseif ($newTimeout < 1 || $newTimeout > 600) {
-                $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
-            } else {
-                $maxOrder = (int) $db->query(
-                    'SELECT COALESCE(MAX(sort_order), -1) FROM comfy_endpoints'
-                )->fetchColumn();
-                $db->prepare(
-                    'INSERT INTO comfy_endpoints (base_url, timeout, default_checkpoint, is_active, sort_order) VALUES (?, ?, ?, ?, ?)'
-                )->execute([rtrim($newUrl, '/'), $newTimeout, $newCheckpoint, $isActive, $maxOrder + 1]);
-                $flashOk = 'ComfyUI-Endpunkt hinzugefügt.';
-            }
-
-        // ── Update ComfyUI endpoint ───────────────────────────────────────────
-        } elseif ($action === 'update_comfy_endpoint') {
-            $epId          = (int) ($_POST['comfy_ep_id'] ?? 0);
-            $newUrl        = trim($_POST['comfy_ep_base_url'] ?? '');
-            $newTimeout    = (int) ($_POST['comfy_ep_timeout'] ?? 120);
-            $newCheckpoint = trim($_POST['comfy_ep_default_checkpoint'] ?? '');
-            $isActive      = isset($_POST['comfy_ep_is_active']) ? 1 : 0;
-
-            if ($epId <= 0) {
-                $flashError = 'Ungültige ComfyUI-Endpunkt-ID.';
-            } elseif ($newUrl === '') {
-                $flashError = 'URL darf nicht leer sein.';
-            } elseif (filter_var($newUrl, FILTER_VALIDATE_URL) === false) {
-                $flashError = 'Bitte eine gültige URL eingeben.';
-            } elseif ($newTimeout < 1 || $newTimeout > 600) {
-                $flashError = 'Timeout muss zwischen 1 und 600 Sekunden liegen.';
-            } else {
-                $db->prepare(
-                    'UPDATE comfy_endpoints SET base_url = ?, timeout = ?, default_checkpoint = ?, is_active = ? WHERE id = ?'
-                )->execute([rtrim($newUrl, '/'), $newTimeout, $newCheckpoint, $isActive, $epId]);
-                $flashOk = 'ComfyUI-Endpunkt gespeichert.';
-            }
-
-        // ── Delete ComfyUI endpoint ───────────────────────────────────────────
-        } elseif ($action === 'delete_comfy_endpoint') {
-            $epId = (int) ($_POST['comfy_ep_id'] ?? 0);
-            if ($epId > 0) {
-                $db->prepare('DELETE FROM comfy_endpoints WHERE id = ?')->execute([$epId]);
-                $flashOk = 'ComfyUI-Endpunkt gelöscht.';
             }
 
         // ── Save routing settings ─────────────────────────────────────────────
@@ -1710,138 +1605,6 @@ try {
     // Tables may not exist yet
 }
 
-// ── SD endpoints and statistics ───────────────────────────────────────────────
-
-$sdEndpoints = [];
-$sdStats     = [];
-$sdTotals    = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
-$editSdEp    = null;
-
-try {
-    $sdEndpoints = $db->query(
-        'SELECT * FROM sd_endpoints ORDER BY sort_order ASC, id ASC'
-    )->fetchAll();
-} catch (PDOException $e) {
-    // Table may not exist yet
-}
-
-try {
-    $sdStats = $db->query("
-        SELECT
-            e.id,
-            e.base_url,
-            e.is_active,
-            COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0) AS cnt_running,
-            COALESCE(SUM(CASE WHEN t.status = 'done'    THEN 1 ELSE 0 END), 0) AS cnt_done,
-            COALESCE(SUM(CASE WHEN t.status = 'error'   THEN 1 ELSE 0 END), 0) AS cnt_error,
-            COALESCE(SUM(CASE WHEN t.status = 'done'
-                              AND t.started_at >= NOW() - INTERVAL 24 HOUR
-                         THEN 1 ELSE 0 END), 0) AS cnt_done_24h,
-            COALESCE(SUM(CASE WHEN t.status = 'done'
-                              AND DATE(t.started_at) = CURDATE()
-                         THEN 1 ELSE 0 END), 0) AS today_jobs,
-            COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE() THEN 1 ELSE 0 END), 0) AS today_tasks
-        FROM sd_endpoints e
-        LEFT JOIN sd_tasks t ON t.endpoint_id = e.id
-        GROUP BY e.id, e.base_url, e.is_active
-        ORDER BY e.sort_order ASC, e.id ASC
-    ")->fetchAll();
-
-    $sdTotalsRow = $db->query("
-        SELECT
-            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
-            COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
-            COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
-            COALESCE(SUM(CASE WHEN status = 'done'
-                              AND started_at >= NOW() - INTERVAL 24 HOUR
-                         THEN 1 ELSE 0 END), 0) AS total_done_24h
-        FROM sd_tasks
-    ")->fetch();
-
-    if ($sdTotalsRow) {
-        $sdTotals = $sdTotalsRow;
-    }
-} catch (PDOException $e) {
-    // Tables may not exist yet
-}
-
-// Populate $editSdEp if the URL requests editing a specific SD endpoint.
-if (isset($_GET['edit_sd']) && (int) $_GET['edit_sd'] > 0) {
-    $editSdId = (int) $_GET['edit_sd'];
-    foreach ($sdEndpoints as $sdEp) {
-        if ((int) $sdEp['id'] === $editSdId) {
-            $editSdEp = $sdEp;
-            break;
-        }
-    }
-}
-
-// ── ComfyUI endpoints and statistics ─────────────────────────────────────────
-
-$comfyEndpoints = [];
-$comfyStats     = [];
-$comfyTotals    = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
-$editComfyEp    = null;
-
-try {
-    $comfyEndpoints = $db->query(
-        'SELECT * FROM comfy_endpoints ORDER BY sort_order ASC, id ASC'
-    )->fetchAll();
-} catch (PDOException $e) {
-    // Table may not exist yet
-}
-
-try {
-    $comfyStats = $db->query("
-        SELECT
-            e.id,
-            e.base_url,
-            e.is_active,
-            COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0) AS cnt_running,
-            COALESCE(SUM(CASE WHEN t.status = 'done'    THEN 1 ELSE 0 END), 0) AS cnt_done,
-            COALESCE(SUM(CASE WHEN t.status = 'error'   THEN 1 ELSE 0 END), 0) AS cnt_error,
-            COALESCE(SUM(CASE WHEN t.status = 'done'
-                              AND t.started_at >= NOW() - INTERVAL 24 HOUR
-                         THEN 1 ELSE 0 END), 0) AS cnt_done_24h,
-            COALESCE(SUM(CASE WHEN t.status = 'done'
-                              AND DATE(t.started_at) = CURDATE()
-                         THEN 1 ELSE 0 END), 0) AS today_jobs,
-            COALESCE(SUM(CASE WHEN DATE(t.started_at) = CURDATE() THEN 1 ELSE 0 END), 0) AS today_tasks
-        FROM comfy_endpoints e
-        LEFT JOIN comfy_tasks t ON t.endpoint_id = e.id
-        GROUP BY e.id, e.base_url, e.is_active
-        ORDER BY e.sort_order ASC, e.id ASC
-    ")->fetchAll();
-
-    $comfyTotalsRow = $db->query("
-        SELECT
-            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
-            COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
-            COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
-            COALESCE(SUM(CASE WHEN status = 'done'
-                              AND started_at >= NOW() - INTERVAL 24 HOUR
-                         THEN 1 ELSE 0 END), 0) AS total_done_24h
-        FROM comfy_tasks
-    ")->fetch();
-
-    if ($comfyTotalsRow) {
-        $comfyTotals = $comfyTotalsRow;
-    }
-} catch (PDOException $e) {
-    // Tables may not exist yet
-}
-
-// Populate $editComfyEp if the URL requests editing a specific ComfyUI endpoint.
-if (isset($_GET['edit_comfy']) && (int) $_GET['edit_comfy'] > 0) {
-    $editComfyId = (int) $_GET['edit_comfy'];
-    foreach ($comfyEndpoints as $comfyEp) {
-        if ((int) $comfyEp['id'] === $editComfyId) {
-            $editComfyEp = $comfyEp;
-            break;
-        }
-    }
-}
-
 // ── Embedding endpoints and statistics ────────────────────────────────────────
 
 $embeddingEndpoints = [];
@@ -1992,6 +1755,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin</title>
+    <link rel="stylesheet" href="../assets/css/flow-topology.css">
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -2146,8 +1910,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         #config-request-handling-card { order: 7; }
         #config-global-system-prompt-card { order: 8; }
         #config-balancer-card { order: 9; }
-        #config-sd-card { order: 10; }
-        #config-comfy-card { order: 11; }
+        #config-image-card { order: 10; }
         #config-routing-card { order: 12; }
         #config-vector-store-card { order: 13; }
         #config-embedding-card { order: 14; }
@@ -2507,37 +2270,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         /* ── Separator ───────────────────────────────────────────── */
         .sep { color: var(--text-muted); }
 
-        /* ── Load-distribution tree ──────────────────────────────── */
-        #load-tree-container {
-            position: relative;
-            width: 100%;
-            height: 480px;
-            overflow: hidden;
-            cursor: grab;
-            border-radius: 10px;
-            background: rgba(0,0,0,.15);
-            user-select: none;
-        }
-
-        #load-tree-container.dragging { cursor: grabbing; }
-
-        #tree-maximize-exit {
-            display: none;
-            position: absolute;
-            top: 10px;
-            right: 12px;
-            z-index: 1;
-        }
-
-        #load-tree-container.tree-maximized #tree-maximize-exit { display: block; }
-
-        #load-tree-svg {
-            display: block;
-            width: 100%;
-            height: 100%;
-            touch-action: none;
-        }
-
+        /* ── Dashboard header (title, topology toolbar, live indicator) ── */
         .tree-header-row {
             display: flex;
             align-items: center;
@@ -2572,73 +2305,6 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             height: 7px;
             border-radius: 50%;
             background: var(--success);
-        }
-
-        .tree-reset-btn {
-            padding: 3px 10px;
-            background: var(--surface-alt);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-muted);
-            font-size: .75rem;
-            cursor: pointer;
-            line-height: 1.5;
-            transition: color .12s, background .12s;
-        }
-        .tree-reset-btn:hover { background: #464646; color: var(--text); }
-
-        /* ── Diagramm auf volle Fenstergröße ─────────────────────── */
-        #load-tree-container.tree-maximized {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            z-index: 9999;
-            border-radius: 0;
-            background: var(--surface);
-        }
-
-        body.tree-maximized-open {
-            overflow: hidden;
-        }
-
-        @keyframes tree-pulse {
-            0%,100% { transform: scale(1); opacity: 1; }
-            50%      { transform: scale(1.8); opacity: .35; }
-        }
-
-        .pulse-dot {
-            animation: tree-pulse 1.4s ease-in-out infinite;
-            transform-origin: center;
-        }
-
-        @keyframes tree-fade-in {
-            from { opacity: 0; }
-            to   { opacity: 1; }
-        }
-
-        .tree-refresh-spin {
-            display: inline-block;
-            animation: spin .8s linear infinite;
-        }
-
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        /* ── Animated data-flow connectors ───────────────────────── */
-        @keyframes dash-flow {
-            to { stroke-dashoffset: -22; }
-        }
-        @keyframes dash-flow-fast {
-            to { stroke-dashoffset: -22; }
-        }
-        .conn-idle {
-            stroke-dasharray: 6 5;
-            animation: dash-flow 2.5s linear infinite;
-        }
-        .conn-active {
-            stroke-dasharray: 8 3;
-            animation: dash-flow-fast .65s linear infinite;
         }
 
         /* ── Stat-box flash on live update ───────────────────────── */
@@ -2749,8 +2415,6 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         <div class="tree-header-row">
             <h2 style="margin:0;padding:0;border:none">🚀 Dashboard</h2>
             <div class="tree-header-controls">
-                <button class="tree-reset-btn" id="tree-reset-btn" title="Ansicht zurücksetzen">⊡ Ansicht zurücksetzen</button>
-                <button class="tree-reset-btn" id="tree-fullscreen-btn" title="Diagramm auf volle Fenstergröße vergrößern">⛶ Vollbild</button>
                 <div class="tree-refresh-info">
                     <span class="tree-refresh-dot" id="tree-live-dot"></span>
                     <span id="tree-status">Initialisierung …</span>
@@ -2812,44 +2476,209 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 <div class="stat-lbl">Vektoren</div>
             </div>
             <?php endif; ?>
-            <?php if (!empty($sdEndpoints)): ?>
+            <?php if (!empty($imageEndpoints)): ?>
             <div class="stat-box">
-                <div class="stat-val stat-running" id="db-sd-running"><?= number_format((int) $sdTotals['total_running']) ?></div>
-                <div class="stat-lbl">SD laufend</div>
+                <div class="stat-val <?= !empty($imageStatus['reachable']) ? 'stat-done' : 'stat-error' ?>" id="db-image-status"><?= !empty($imageStatus['reachable']) ? 'online' : 'offline' ?></div>
+                <div class="stat-lbl">ImageInt</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-done" id="db-sd-done24"><?= number_format((int) $sdTotals['total_done_24h']) ?></div>
-                <div class="stat-lbl">SD Bilder (24 h)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done" id="db-sd-done"><?= number_format((int) $sdTotals['total_done']) ?></div>
-                <div class="stat-lbl">SD Bilder (gesamt)</div>
+                <div class="stat-val stat-tokens" id="db-image-endpoints"><?= number_format(count($imageEndpoints)) ?></div>
+                <div class="stat-lbl">Bild-Endpunkte</div>
             </div>
             <?php endif; ?>
-            <?php if (!empty($comfyEndpoints)): ?>
+            <?php if (!empty($speechEndpoints)): ?>
             <div class="stat-box">
-                <div class="stat-val stat-running" id="db-comfy-running"><?= number_format((int) $comfyTotals['total_running']) ?></div>
-                <div class="stat-lbl">ComfyUI laufend</div>
+                <div class="stat-val <?= !empty($speechStatus['reachable']) ? 'stat-done' : 'stat-error' ?>" id="db-speech-status"><?= !empty($speechStatus['reachable']) ? 'online' : 'offline' ?></div>
+                <div class="stat-lbl">SpeechInt</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val stat-done" id="db-comfy-done24"><?= number_format((int) $comfyTotals['total_done_24h']) ?></div>
-                <div class="stat-lbl">ComfyUI (24 h)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val stat-done" id="db-comfy-done"><?= number_format((int) $comfyTotals['total_done']) ?></div>
-                <div class="stat-lbl">ComfyUI (gesamt)</div>
+                <div class="stat-val stat-tokens" id="db-speech-endpoints"><?= number_format(count($speechEndpoints)) ?></div>
+                <div class="stat-lbl">Dictation-Endpunkte</div>
             </div>
             <?php endif; ?>
         </div>
 
-        <!-- Live load-distribution visualization -->
-        <div id="load-tree-container">
-            <button type="button" class="tree-reset-btn" id="tree-maximize-exit" title="Vollbild beenden">⛶ Vollbild beenden</button>
-            <svg id="load-tree-svg"
-                 xmlns="http://www.w3.org/2000/svg"
-                 preserveAspectRatio="xMinYMin meet"
-                 aria-label="Horizontale Lastverteilung der Endpunkte">
-            </svg>
+        <!-- Live message-flow topology (canvas, drawn by assets/js/flow-topology.js) -->
+        <?php
+        $topologyInitial = topology_build([
+            'ts'               => time(),
+            'endpoints'        => array_map(static function ($s) {
+                return [
+                    'id'                          => (int) $s['id'],
+                    'alias'                       => (string) ($s['alias'] ?? ''),
+                    'base_url'                    => (string) $s['base_url'],
+                    'default_model'               => (string) $s['default_model'],
+                    'is_active'                   => (int) $s['is_active'],
+                    'running'                     => (int) $s['cnt_running'],
+                    'today_jobs'                  => (int) $s['today_jobs'],
+                    'today_prompt_tokens'         => (int) $s['today_prompt_tokens'],
+                    'today_completion_tokens'     => (int) $s['today_completion_tokens'],
+                    'today_tokens'                => (int) $s['today_tokens'],
+                    'today_avg_tokens_per_second' => (float) $s['today_avg_tokens_per_second'],
+                    'ssh_configured'              => (bool) ($s['ssh_configured'] ?? false),
+                    'sys_stats'                   => $s['sys_stats'] ?? null,
+                ];
+            }, $epStats),
+            'searxng'          => [
+                'enabled'              => $searxngBaseUrl !== '',
+                'base_url'             => $searxngBaseUrl,
+                'running'              => (int) $searxngStats['running'],
+                'today_jobs'           => (int) $searxngStats['today_jobs'],
+                'avg_duration_seconds' => $searxngStats['avg_duration_seconds'],
+            ],
+            'image_endpoints'  => array_map(static function ($s) {
+                return [
+                    'id'        => (int) $s['id'],
+                    'alias'     => (string) ($s['alias'] ?? ''),
+                    'base_url'  => (string) $s['base_url'],
+                    'timeout'   => (int) $s['timeout'],
+                    'is_active' => (int) $s['is_active'],
+                ];
+            }, $imageEndpoints),
+            'image_status'     => $imageStatus,
+            'clients'          => $clientStats,
+            'totals'           => $totals,
+            'vector_store'     => $vectorStatus,
+            'speech_endpoints' => array_map(static function ($s) {
+                return [
+                    'id'        => (int) $s['id'],
+                    'alias'     => (string) ($s['alias'] ?? ''),
+                    'base_url'  => (string) $s['base_url'],
+                    'timeout'   => (int) $s['timeout'],
+                    'is_active' => (int) $s['is_active'],
+                ];
+            }, $speechEndpoints),
+            'speech_status'    => $speechStatus,
+        ], ['base_url' => '', 'slot_limit' => 4]);
+
+        $hasSshEndpoints = false;
+        foreach ($epStats as $epRow) {
+            if (!empty($epRow['ssh_configured'])) {
+                $hasSshEndpoints = true;
+                break;
+            }
+        }
+        ?>
+
+        <div class="topo" data-flow-topology
+             data-refresh-url="load_stats.php?topology=1"
+             data-refresh-interval="15"
+             data-overall-state="<?= htmlspecialchars($topologyInitial['overall']['state'] ?? 'ok') ?>">
+
+            <!-- Status line: overall state, counters, live indicator -->
+            <div class="topo-head">
+                <div class="topo-head-left">
+                    <div class="topo-metrics">
+                        <div class="topo-metric topo-metric--state">
+                            <span class="topo-metric-value" data-topo-field="overall-label">Lade …</span>
+                            <span class="topo-metric-label">Gesamtzustand</span>
+                        </div>
+                        <div class="topo-metric topo-metric--errors">
+                            <span class="topo-metric-value" data-topo-field="overall-errors">0</span>
+                            <span class="topo-metric-label">Störungen</span>
+                        </div>
+                        <div class="topo-metric topo-metric--warnings">
+                            <span class="topo-metric-value" data-topo-field="overall-warnings">0</span>
+                            <span class="topo-metric-label">Einschränkungen</span>
+                        </div>
+                        <div class="topo-metric">
+                            <span class="topo-metric-value" data-topo-field="node-count">0</span>
+                            <span class="topo-metric-label">Bausteine</span>
+                        </div>
+                        <div class="topo-metric">
+                            <span class="topo-metric-value" data-topo-field="generated">–</span>
+                            <span class="topo-metric-label">Stand</span>
+                        </div>
+                    </div>
+                    <div class="topo-subtitle" data-topo-field="overall-message"></div>
+                </div>
+
+                <div class="topo-head-right">
+                    <div class="topo-toolbar" role="toolbar" aria-label="Topologie-Werkzeuge">
+                        <button type="button" class="topo-btn" data-topo-action="mode-3d" aria-pressed="true">3D</button>
+                        <button type="button" class="topo-btn" data-topo-action="mode-2d" aria-pressed="false">2D</button>
+                        <button type="button" class="topo-btn" data-topo-action="rotate" aria-pressed="true">⟳ Drehen</button>
+                        <button type="button" class="topo-btn" data-topo-action="particles" aria-pressed="true">✦ Partikel</button>
+                        <button type="button" class="topo-btn" data-topo-action="labels" aria-pressed="true">🏷 Labels</button>
+                        <span class="topo-toolbar-sep" aria-hidden="true"></span>
+                        <button type="button" class="topo-btn" data-topo-action="zoom-in" title="Vergrößern">＋</button>
+                        <button type="button" class="topo-btn" data-topo-action="zoom-out" title="Verkleinern">－</button>
+                        <button type="button" class="topo-btn" data-topo-action="fit">⊡ Einpassen</button>
+                        <button type="button" class="topo-btn" data-topo-action="reset">↺ Ansicht zurücksetzen</button>
+                        <span class="topo-toolbar-sep" aria-hidden="true"></span>
+                        <button type="button" class="topo-btn" data-topo-action="focus-problems" aria-pressed="false">⚠ Nur Auffälligkeiten</button>
+                        <a class="topo-btn topo-btn--primary" href="topology.php" target="_blank" rel="noopener"
+                           title="Nachrichtenfluss-Topologie in eigenem Tab öffnen">⛶ Vollbild-Topologie</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Graph -->
+            <div class="topo-stage topo-stage--card">
+                <canvas data-topo-canvas tabindex="0" role="application"
+                        aria-label="Nachrichtenfluss der LLMInt-Bausteine: Clients, Kern, Modellgruppen, LLM-Endpunkte und Zusatzdienste"></canvas>
+
+                <div class="topo-hint" data-topo-hint>
+                    Ziehen dreht die Ansicht · Mausrad zoomt · Klick öffnet Details ·
+                    <kbd>F</kbd> einpassen · <kbd>R</kbd> zurücksetzen · <kbd>Tab</kbd> nächster Baustein
+                </div>
+
+                <div class="topo-tooltip" data-topo-tooltip hidden>
+                    <strong class="topo-tooltip-title" data-topo-field="tooltip-title"></strong>
+                    <span class="badge topo-tooltip-state" data-topo-tooltip-state></span>
+                    <div class="topo-tooltip-message" data-topo-field="tooltip-message"></div>
+                </div>
+
+                <!-- Detail panel (filled by the renderer on selection) -->
+                <aside class="topo-panel" data-topo-panel hidden aria-live="polite">
+                    <div class="topo-panel-head">
+                        <div>
+                            <div class="topo-panel-kind" data-topo-field="panel-kind"></div>
+                            <h2 class="topo-panel-title" data-topo-field="panel-title"></h2>
+                        </div>
+                        <button type="button" class="topo-panel-close" data-topo-action="close-panel" title="Details schließen">✕</button>
+                    </div>
+                    <span class="badge" data-topo-field="panel-badge"></span>
+                    <div class="topo-panel-subtitle" data-topo-field="panel-subtitle"></div>
+                    <div class="topo-panel-message" data-topo-field="panel-message"></div>
+
+                    <div class="topo-facts" data-topo-field="panel-facts"></div>
+
+                    <div class="topo-panel-block" data-topo-field="panel-cloud" hidden>
+                        <div class="topo-panel-block-title" data-topo-field="panel-cloud-title"></div>
+                        <ul class="topo-members" data-topo-field="panel-cloud-list"></ul>
+                        <div class="topo-panel-empty" data-topo-field="panel-cloud-empty"></div>
+                    </div>
+
+                    <div class="topo-panel-block" data-topo-field="panel-members" hidden>
+                        <div class="topo-panel-block-title" data-topo-field="panel-members-title"></div>
+                        <ul class="topo-members" data-topo-field="panel-members-list"></ul>
+                        <div class="topo-panel-empty" data-topo-field="panel-members-empty"></div>
+                    </div>
+
+                    <div class="topo-panel-block" data-topo-field="panel-neighbours">
+                        <div class="topo-panel-block-title">Verbundene Bausteine</div>
+                        <div class="topo-chips" data-topo-field="panel-neighbours-list"></div>
+                    </div>
+
+                    <a class="topo-panel-link" data-topo-field="panel-link" hidden>In der Konfiguration öffnen →</a>
+                </aside>
+            </div>
+
+            <!-- Legend + kind filters -->
+            <div class="topo-legend" data-topo-kinds></div>
+
+            <!-- Incident band -->
+            <section class="topo-incidents" aria-label="Störungen und Einschränkungen">
+                <div class="topo-incidents-head">
+                    <span>Störungsband</span>
+                    <span class="badge badge--muted" data-topo-field="incident-count">0</span>
+                </div>
+                <ul class="topo-incidents-list" data-topo-incidents-list></ul>
+                <div class="topo-incidents-empty" data-topo-incidents-empty>Keine Auffälligkeiten – alle Bausteine melden einen unauffälligen Zustand.</div>
+            </section>
+
+            <?= topology_initial_script($topologyInitial) ?>
         </div>
 
         <!-- Collapsible endpoint detail tables -->
@@ -2950,60 +2779,82 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
         <?php endif; ?>
 
-        <?php if (!empty($sdStats)): ?>
-        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🎨 Bildgenerierung (AUTOMATIC1111)</h3>
+        <?php if (!empty($imageEndpoints)): ?>
+        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🖼️ Bildgenerierung (ImageInt)</h3>
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>SD-Endpunkt</th>
-                    <th style="text-align:right">Laufend</th>
-                    <th style="text-align:right">Erledigt (24 h)</th>
-                    <th style="text-align:right">Erledigt (gesamt)</th>
-                    <th style="text-align:right">Fehler</th>
+                    <th>Bild-Endpunkt</th>
+                    <th>Alias</th>
+                    <th style="text-align:right">Timeout</th>
+                    <th style="text-align:right">Status</th>
                 </tr>
             </thead>
             <tbody>
-                <?php foreach ($sdStats as $s): ?>
+                <?php foreach ($imageEndpoints as $imageEp): ?>
+                <?php
+                $imageEpEffective = !empty($imageStatus['configured'])
+                    && rtrim((string) $imageStatus['url'], '/') === rtrim((string) $imageEp['base_url'], '/');
+                if (!$imageEpEffective) {
+                    $imageEpState = '–';
+                } elseif (!empty($imageStatus['ready'])) {
+                    $imageEpState = 'bereit';
+                } elseif (!empty($imageStatus['reachable'])) {
+                    $imageEpState = 'erreichbar';
+                } else {
+                    $imageEpState = 'nicht erreichbar';
+                }
+                ?>
                 <tr>
                     <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($s['base_url']) ?>">
-                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= htmlspecialchars($s['base_url']) ?>
+                        title="<?= htmlspecialchars($imageEp['base_url']) ?>">
+                        <span class="dot <?= $imageEp['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= htmlspecialchars($imageEp['base_url']) ?>
                     </td>
-                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
-                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
-                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
-                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
+                    <td><?= htmlspecialchars((string) ($imageEp['alias'] ?? '')) ?></td>
+                    <td style="text-align:right"><?= (int) $imageEp['timeout'] ?> s</td>
+                    <td style="text-align:right"><?= htmlspecialchars($imageEpState) ?></td>
                 </tr>
                 <?php endforeach; ?>
             </tbody>
         </table>
         <?php endif; ?>
 
-        <?php if (!empty($comfyStats)): ?>
-        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🖼️ Bildgenerierung (ComfyUI)</h3>
+        <?php if (!empty($speechEndpoints)): ?>
+        <h3 style="margin-top:24px;margin-bottom:12px;font-size:.9rem;font-weight:600;">🎙️ Diktat (SpeechInt)</h3>
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>ComfyUI-Endpunkt</th>
-                    <th style="text-align:right">Laufend</th>
-                    <th style="text-align:right">Erledigt (24 h)</th>
-                    <th style="text-align:right">Erledigt (gesamt)</th>
-                    <th style="text-align:right">Fehler</th>
+                    <th>Dictation-Endpunkt</th>
+                    <th>Alias</th>
+                    <th style="text-align:right">Timeout</th>
+                    <th style="text-align:right">Status</th>
                 </tr>
             </thead>
             <tbody>
-                <?php foreach ($comfyStats as $s): ?>
+                <?php foreach ($speechEndpoints as $speechEp): ?>
+                <?php
+                $speechEpEffective = !empty($speechStatus['configured'])
+                    && rtrim((string) $speechStatus['url'], '/') === rtrim((string) $speechEp['base_url'], '/');
+                if (!$speechEpEffective) {
+                    $speechEpState = '–';
+                } elseif (!empty($speechStatus['ready'])) {
+                    $speechEpState = 'bereit';
+                } elseif (!empty($speechStatus['reachable'])) {
+                    $speechEpState = 'erreichbar';
+                } else {
+                    $speechEpState = 'nicht erreichbar';
+                }
+                ?>
                 <tr>
                     <td style="font-family:monospace;font-size:.78rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($s['base_url']) ?>">
-                        <span class="dot <?= $s['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= htmlspecialchars($s['base_url']) ?>
+                        title="<?= htmlspecialchars($speechEp['base_url']) ?>">
+                        <span class="dot <?= $speechEp['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
+                        <?= htmlspecialchars($speechEp['base_url']) ?>
                     </td>
-                    <td style="text-align:right;color:var(--warning)"><?= number_format((int) $s['cnt_running']) ?></td>
-                    <td style="text-align:right"><?= number_format((int) $s['cnt_done_24h']) ?></td>
-                    <td style="text-align:right;color:var(--success)"><?= number_format((int) $s['cnt_done']) ?></td>
-                    <td style="text-align:right;color:var(--error)"><?= number_format((int) $s['cnt_error']) ?></td>
+                    <td><?= htmlspecialchars((string) ($speechEp['alias'] ?? '')) ?></td>
+                    <td style="text-align:right"><?= (int) $speechEp['timeout'] ?> s</td>
+                    <td style="text-align:right"><?= htmlspecialchars($speechEpState) ?></td>
                 </tr>
                 <?php endforeach; ?>
             </tbody>
@@ -4215,227 +4066,6 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-        SD / AUTOMATIC1111 Endpoint Management
-
-        Seit der Umstellung auf ImageInt wird diese Integration nicht mehr
-        angesprochen. Karte und Einstellungen bleiben absichtlich erhalten (und
-        die Tabellen `sd_endpoints` / `sd_tasks` in der Datenbank liegen
-        unangetastet), damit vorhandene Konfiguration nicht verloren geht –
-        nur ausgeblendet.
-    ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card" id="config-sd-card" hidden>
-        <details class="config-panel" id="config-sd" open>
-        <summary>🎨 Bildgenerierung (AUTOMATIC1111)</summary>
-
-        <?php if (empty($sdEndpoints)): ?>
-            <p style="color:var(--text-muted);margin-bottom:16px;">Noch keine SD-Endpunkte konfiguriert. Füge unten einen hinzu.</p>
-        <?php else: ?>
-
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>URL</th>
-                    <th>Timeout</th>
-                    <th>Status</th>
-                    <th>Aktionen</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($sdEndpoints as $sdEp): ?>
-                <tr>
-                    <td style="color:var(--text-muted)"><?= (int) $sdEp['id'] ?></td>
-                    <td style="font-family:monospace;font-size:.8rem;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($sdEp['base_url']) ?>">
-                        <?= htmlspecialchars($sdEp['base_url']) ?>
-                    </td>
-                    <td><?= (int) $sdEp['timeout'] ?>s</td>
-                    <td>
-                        <span class="dot <?= $sdEp['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= $sdEp['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
-                    </td>
-                    <td>
-                        <form method="POST" style="display:inline"
-                              onsubmit="return confirm('SD-Endpunkt #<?= (int) $sdEp['id'] ?> wirklich löschen?')">
-                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
-                            <input type="hidden" name="action"     value="delete_sd_endpoint">
-                            <input type="hidden" name="sd_ep_id"   value="<?= (int) $sdEp['id'] ?>">
-                            <button type="submit" class="btn btn-sm btn-danger">🗑 Löschen</button>
-                        </form>
-                    </td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-
-        <?php endif; ?>
-
-        <!-- ── Add / Edit form ─────────────────────────────────────────────── -->
-        <div class="ep-form-section">
-            <h3 id="sd-ep-form-title">➕ SD-Endpunkt hinzufügen</h3>
-
-            <form method="POST" id="sd-ep-form">
-                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
-                <input type="hidden" name="action"     id="sd-ep-action" value="add_sd_endpoint">
-                <input type="hidden" name="sd_ep_id"   id="sd-ep-id"     value="">
-
-                <div class="form-row">
-                    <div class="form-group" style="flex:4">
-                        <label for="sd-ep-url">AUTOMATIC1111 Base URL *</label>
-                        <input type="url" id="sd-ep-url" name="sd_ep_base_url"
-                               placeholder="http://192.168.1.10:7860" required
-                               value="<?= $editSdEp ? htmlspecialchars($editSdEp['base_url']) : '' ?>">
-                        <p class="hint">
-                            Basis-URL der AUTOMATIC1111 Web-UI. Die API-Pfade (<code>/sdapi/v1/…</code>) werden automatisch ergänzt.
-                        </p>
-                    </div>
-                    <div class="form-group" style="flex:1;min-width:140px">
-                        <label for="sd-ep-timeout">Timeout (Sekunden) *</label>
-                        <input type="number" id="sd-ep-timeout" name="sd_ep_timeout"
-                               min="1" max="600" required
-                               value="<?= $editSdEp ? (int) $editSdEp['timeout'] : 120 ?>">
-                        <p class="hint">1 – 600 s</p>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="inline">
-                        <input type="checkbox" id="sd-ep-active" name="sd_ep_is_active"
-                               <?= (!$editSdEp || $editSdEp['is_active']) ? 'checked' : '' ?>>
-                        Endpunkt aktiv (nimmt Bildgenerierungsanfragen entgegen)
-                    </label>
-                </div>
-
-                <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
-                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
-                </div>
-            </form>
-        </div>
-        </details>
-    </div>
-
-    <!-- ═══════════════════════════════════════════════════════════════════════
-         ComfyUI Endpoint Management
-
-         Wie oben: von ImageInt ersetzt, nur ausgeblendet – Tabelle
-         `comfy_endpoints` / `comfy_tasks` und Einstellungen bleiben bestehen.
-    ═══════════════════════════════════════════════════════════════════════ -->
-    <div class="card" id="config-comfy-card" hidden>
-        <details class="config-panel" id="config-comfy" open>
-        <summary>🖼️ Bildgenerierung (ComfyUI)</summary>
-
-        <?php if (empty($comfyEndpoints)): ?>
-            <p style="color:var(--text-muted);margin-bottom:16px;">Noch keine ComfyUI-Endpunkte konfiguriert. Füge unten einen hinzu.</p>
-        <?php else: ?>
-
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>URL</th>
-                    <th>Timeout</th>
-                    <th>Default Checkpoint</th>
-                    <th>Status</th>
-                    <th>Aktionen</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($comfyEndpoints as $comfyEp): ?>
-                <tr>
-                    <td style="color:var(--text-muted)"><?= (int) $comfyEp['id'] ?></td>
-                    <td style="font-family:monospace;font-size:.8rem;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($comfyEp['base_url']) ?>">
-                        <?= htmlspecialchars($comfyEp['base_url']) ?>
-                    </td>
-                    <td><?= (int) $comfyEp['timeout'] ?>s</td>
-                    <td style="font-size:.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title="<?= htmlspecialchars($comfyEp['default_checkpoint']) ?>">
-                        <?php if ($comfyEp['default_checkpoint'] !== ''): ?>
-                            <?= htmlspecialchars($comfyEp['default_checkpoint']) ?>
-                        <?php else: ?>
-                            <span style="color:var(--text-muted)">–</span>
-                        <?php endif; ?>
-                    </td>
-                    <td>
-                        <span class="dot <?= $comfyEp['is_active'] ? 'dot-on' : 'dot-off' ?>"></span>
-                        <?= $comfyEp['is_active'] ? 'Aktiv' : 'Inaktiv' ?>
-                    </td>
-                    <td>
-                        <form method="POST" style="display:inline"
-                              onsubmit="return confirm('ComfyUI-Endpunkt #<?= (int) $comfyEp['id'] ?> wirklich löschen?')">
-                            <input type="hidden" name="csrf_token"   value="<?= htmlspecialchars($csrfToken) ?>">
-                            <input type="hidden" name="action"       value="delete_comfy_endpoint">
-                            <input type="hidden" name="comfy_ep_id"  value="<?= (int) $comfyEp['id'] ?>">
-                            <button type="submit" class="btn btn-sm btn-danger">🗑 Löschen</button>
-                        </form>
-                    </td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-
-        <?php endif; ?>
-
-        <!-- ── Add / Edit form ─────────────────────────────────────────────── -->
-        <div class="ep-form-section">
-            <h3 id="comfy-ep-form-title">➕ ComfyUI-Endpunkt hinzufügen</h3>
-
-            <form method="POST" id="comfy-ep-form">
-                <input type="hidden" name="csrf_token"  value="<?= htmlspecialchars($csrfToken) ?>">
-                <input type="hidden" name="action"      id="comfy-ep-action" value="add_comfy_endpoint">
-                <input type="hidden" name="comfy_ep_id" id="comfy-ep-id"     value="">
-
-                <div class="form-row">
-                    <div class="form-group" style="flex:4">
-                        <label for="comfy-ep-url">ComfyUI Base URL *</label>
-                        <input type="url" id="comfy-ep-url" name="comfy_ep_base_url"
-                               placeholder="http://192.168.1.10:8188" required
-                               value="<?= $editComfyEp ? htmlspecialchars($editComfyEp['base_url']) : '' ?>">
-                        <p class="hint">
-                            Basis-URL der ComfyUI-Instanz (Standard-Port: 8188). API-Pfade werden automatisch ergänzt.
-                        </p>
-                    </div>
-                    <div class="form-group" style="flex:1;min-width:140px">
-                        <label for="comfy-ep-timeout">Timeout (Sekunden) *</label>
-                        <input type="number" id="comfy-ep-timeout" name="comfy_ep_timeout"
-                               min="1" max="600" required
-                               value="<?= $editComfyEp ? (int) $editComfyEp['timeout'] : 120 ?>">
-                        <p class="hint">1 – 600 s</p>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="comfy-ep-checkpoint-input">Default Checkpoint</label>
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                        <input type="text" id="comfy-ep-checkpoint-input"
-                               name="comfy_ep_default_checkpoint"
-                               placeholder="z. B. v1-5-pruned-emaonly.safetensors"
-                               style="flex:1 1 260px"
-                               value="<?= $editComfyEp ? htmlspecialchars($editComfyEp['default_checkpoint']) : '' ?>">
-                    </div>
-                    <p class="hint">
-                        Dateiname des Checkpoints, das für txt2img verwendet werden soll.
-                        Leer lassen, um beim ersten Aufruf automatisch den ersten verfügbaren Checkpoint zu verwenden.
-                    </p>
-                </div>
-
-                <div class="form-group">
-                    <label class="inline">
-                        <input type="checkbox" id="comfy-ep-active" name="comfy_ep_is_active"
-                               <?= (!$editComfyEp || $editComfyEp['is_active']) ? 'checked' : '' ?>>
-                        Endpunkt aktiv (nimmt Bildgenerierungsanfragen entgegen)
-                    </label>
-                </div>
-
-                <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
-                    <button type="submit" class="btn btn-primary">💾 Speichern</button>
-                </div>
-            </form>
-        </div>
-        </details>
-    </div>
-
-    <!-- ═══════════════════════════════════════════════════════════════════════
          Bildgenerierung (ImageInt)
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-image-card">
@@ -4448,9 +4078,9 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
                 eigenen Modellservern). LLMInt schickt den Bildwunsch per HTTP
                 dorthin und präsentiert dem Text-LLM das Tool
                 <code>generate_image</code>.<br>
-                ImageInt ersetzt die früheren Integrationen AUTOMATIC1111 und
-                ComfyUI; deren Karten sind nur noch ausgeblendet, ihre
-                Konfiguration bleibt erhalten.<br>
+                ImageInt hat die früheren Integrationen AUTOMATIC1111 und
+                ComfyUI abgelöst; deren Konfiguration bleibt in der Datenbank
+                erhalten, wird aber nicht mehr angesprochen.<br>
                 Eine Generierung dauert auf einer CPU <strong>mehrere
                 Minuten</strong>. Auf Wunsch schickt LLMInt deshalb eine
                 Benachrichtigungsmail, wenn das Bild fertig ist.
@@ -6330,6 +5960,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
 
 </div><!-- /.page-body -->
 
+<script src="../assets/js/flow-topology.js"></script>
 <script>
 (function () {
     'use strict';
@@ -7168,1247 +6799,32 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
     });
 })();
 
-// ── Load-distribution tree ────────────────────────────────────────────────────
+// ── Message-flow topology ─────────────────────────────────────────────────────
+//
+// The graph itself is drawn by assets/js/flow-topology.js. This block only
+// connects the shared renderer to the dashboard card: it keeps the KPI tiles in
+// sync with the very same payload, drives the status line and polls the SSH
+// system stats. The renderer owns the 15 s poll on load_stats.php?topology=1.
 (function () {
     'use strict';
 
-    // Initial data injected from PHP (avoids an extra round-trip on first load).
-    const INITIAL_DATA = <?= json_encode(
-        array_map(function ($s) {
-            return [
-                'id'            => (int) $s['id'],
-                'alias'         => (string) ($s['alias'] ?? ''),
-                'base_url'      => $s['base_url'],
-                'default_model' => $s['default_model'],
-                'is_active'     => (int) $s['is_active'],
-                'running'                 => (int) $s['cnt_running'],
-                'today_jobs'              => (int) $s['today_jobs'],
-                'today_prompt_tokens'     => (int) $s['today_prompt_tokens'],
-                'today_completion_tokens' => (int) $s['today_completion_tokens'],
-                'today_tokens'            => (int) $s['today_tokens'],
-                'today_avg_tokens_per_second' => (float) $s['today_avg_tokens_per_second'],
-                'ssh_configured' => (bool) ($s['ssh_configured'] ?? false),
-                'sys_stats'      => $s['sys_stats'] ?? null,
-            ];
-        }, $epStats),
-        JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
-    ) ?>;
+    const root     = document.querySelector('[data-flow-topology]');
+    const statusEl = document.getElementById('tree-status');
+    const liveDot  = document.getElementById('tree-live-dot');
 
-    const INITIAL_SEARXNG = <?= json_encode([
-        'enabled'              => $searxngBaseUrl !== '',
-        'base_url'             => $searxngBaseUrl,
-        'running'              => $searxngStats['running'],
-        'today_jobs'           => $searxngStats['today_jobs'],
-        'avg_duration_seconds' => $searxngStats['avg_duration_seconds'],
-    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+    // Rendered server-side: at least one endpoint has SSH credentials stored.
+    const SSH_CONFIGURED = <?= $hasSshEndpoints ? 'true' : 'false' ?>;
 
-    const INITIAL_VECTOR = <?= json_encode($vectorStatus, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+    // ── Status bar ────────────────────────────────────────────────────────────
 
-    const INITIAL_SD = <?= json_encode(
-        array_map(function ($s) {
-            return [
-                'id'         => (int) $s['id'],
-                'base_url'   => $s['base_url'],
-                'is_active'  => (int) $s['is_active'],
-                'running'    => (int) $s['cnt_running'],
-                'today_jobs' => (int) $s['today_jobs'],
-            ];
-        }, $sdStats),
-        JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
-    ) ?>;
-
-    const INITIAL_COMFY = <?= json_encode(
-        array_map(function ($s) {
-            return [
-                'id'         => (int) $s['id'],
-                'base_url'   => $s['base_url'],
-                'is_active'  => (int) $s['is_active'],
-                'running'    => (int) $s['cnt_running'],
-                'today_jobs' => (int) $s['today_jobs'],
-            ];
-        }, $comfyStats),
-        JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP
-    ) ?>;
-
-    const INITIAL_CLIENTS = <?= json_encode([
-        'current'   => $clientStats['current'],
-        'today_min' => $clientStats['today_min'],
-        'today_max' => $clientStats['today_max'],
-        'today_avg' => $clientStats['today_avg'],
-        'list'      => $clientStats['list'],
-    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
-
-    // SpeechInt endpoints (dictation service) plus the readiness of the endpoint
-    // that is actually in effect. The token is never part of this payload.
-    const INITIAL_SPEECH = <?= json_encode(array_map(function ($s) {
-        return [
-            'id'        => (int) $s['id'],
-            'alias'     => (string) ($s['alias'] ?? ''),
-            'base_url'  => (string) $s['base_url'],
-            'timeout'   => (int) $s['timeout'],
-            'is_active' => (int) $s['is_active'],
-        ];
-    }, $speechEndpoints), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
-
-    const INITIAL_SPEECH_STATUS = <?= json_encode([
-        'configured'  => (bool) $speechStatus['configured'],
-        'url'         => (string) $speechStatus['url'],
-        'source'      => (string) $speechStatus['source'],
-        'ready'       => (bool) $speechStatus['ready'],
-        'loading'     => (bool) $speechStatus['loading'],
-        'reachable'   => (bool) $speechStatus['reachable'],
-        'status'      => (string) $speechStatus['status'],
-        'message'     => (string) $speechStatus['message'],
-        'retry_after' => (int) $speechStatus['retry_after'],
-        'probed'      => (bool) ($speechStatus['probed'] ?? true),
-    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
-
-    const MODEL_COLORS = <?= json_encode($modelColorMap,
-        JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
-
-    const PALETTE = ['#6c63ff','#22c55e','#f59e0b','#ef4444',
-                     '#06b6d4','#a855f7','#f97316','#84cc16'];
-
-    const svg       = document.getElementById('load-tree-svg');
-    const container = document.getElementById('load-tree-container');
-    const statusEl  = document.getElementById('tree-status');
-    const liveDot   = document.getElementById('tree-live-dot');
-    const resetBtn  = document.getElementById('tree-reset-btn');
-    const NS        = 'http://www.w3.org/2000/svg';
-
-    // ── Pan / zoom state ──────────────────────────────────────────────────────
-
-    let treeW = 600, treeH = 400; // full diagram dimensions
-    let treeX = 0, treeY = 0;     // top-left corner of the diagram (may be negative)
-    let vpX = 0, vpY = 0, vpW = 600, vpH = 400; // current viewport (SVG coords)
-
-    // True as soon as the user has panned or zoomed manually. In that case the
-    // auto-refresh must keep the current detail view instead of resetting the
-    // diagram to the full overview.
-    let viewAdjusted = false;
-
-    function applyViewBox() {
-        svg.setAttribute('viewBox', `${vpX} ${vpY} ${vpW} ${vpH}`);
+    function setStatus(label, loading) {
+        if (statusEl) statusEl.textContent = label;
+        if (liveDot)  liveDot.style.background = loading ? '#f59e0b' : '#22c55e';
     }
 
-    function resetView() {
-        vpX = treeX; vpY = treeY; vpW = treeW; vpH = treeH;
-        viewAdjusted = false;
-        applyViewBox();
-    }
-
-    // Called after every (re-)render: restore the user's current detail view,
-    // fall back to the full view if it was never changed.
-    function restoreViewAfterRender() {
-        if (viewAdjusted) applyViewBox();
-        else              resetView();
-    }
-
-    // Mouse pan
-    let isDragging = false, dStartX = 0, dStartY = 0, dStartVpX = 0, dStartVpY = 0;
-
-    container.addEventListener('mousedown', function (e) {
-        if (e.button !== 0) return;
-        isDragging = true;
-        dStartX = e.clientX; dStartY = e.clientY;
-        dStartVpX = vpX; dStartVpY = vpY;
-        container.classList.add('dragging');
-        e.preventDefault();
-    });
-
-    window.addEventListener('mousemove', function (e) {
-        if (!isDragging) return;
-        const rect = container.getBoundingClientRect();
-        const scaleX = vpW / Math.max(1, rect.width);
-        const scaleY = vpH / Math.max(1, rect.height);
-        vpX = dStartVpX - (e.clientX - dStartX) * scaleX;
-        vpY = dStartVpY - (e.clientY - dStartY) * scaleY;
-        viewAdjusted = true;
-        applyViewBox();
-    });
-
-    window.addEventListener('mouseup', function () {
-        isDragging = false;
-        container.classList.remove('dragging');
-    });
-
-    // Scroll-wheel zoom
-    container.addEventListener('wheel', function (e) {
-        e.preventDefault();
-        const factor = e.deltaY > 0 ? 1.13 : 1 / 1.13;
-        const rect   = container.getBoundingClientRect();
-        const mx = (e.clientX - rect.left) / Math.max(1, rect.width);
-        const my = (e.clientY - rect.top)  / Math.max(1, rect.height);
-        const cx = vpX + mx * vpW;
-        const cy = vpY + my * vpH;
-        const newW = Math.min(treeW * 6, Math.max(200, vpW * factor));
-        const newH = newW * (vpH / Math.max(1, vpW));
-        vpX = cx - mx * newW;
-        vpY = cy - my * newH;
-        vpW = newW; vpH = newH;
-        viewAdjusted = true;
-        applyViewBox();
-    }, { passive: false });
-
-    // Touch pan + pinch-zoom
-    let lastTouchDist = 0;
-    let touchStartVpX = 0, touchStartVpY = 0, touchStartX = 0, touchStartY = 0;
-
-    container.addEventListener('touchstart', function (e) {
-        if (e.touches.length === 1) {
-            isDragging = true;
-            touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY;
-            touchStartVpX = vpX; touchStartVpY = vpY;
-        } else if (e.touches.length === 2) {
-            isDragging = false;
-            lastTouchDist = Math.hypot(
-                e.touches[0].clientX - e.touches[1].clientX,
-                e.touches[0].clientY - e.touches[1].clientY
-            );
-        }
-        e.preventDefault();
-    }, { passive: false });
-
-    container.addEventListener('touchmove', function (e) {
-        if (e.touches.length === 1 && isDragging) {
-            const rect   = container.getBoundingClientRect();
-            const scaleX = vpW / Math.max(1, rect.width);
-            const scaleY = vpH / Math.max(1, rect.height);
-            vpX = touchStartVpX - (e.touches[0].clientX - touchStartX) * scaleX;
-            vpY = touchStartVpY - (e.touches[0].clientY - touchStartY) * scaleY;
-            viewAdjusted = true;
-            applyViewBox();
-        } else if (e.touches.length === 2) {
-            const dist = Math.hypot(
-                e.touches[0].clientX - e.touches[1].clientX,
-                e.touches[0].clientY - e.touches[1].clientY
-            );
-            if (lastTouchDist > 0) {
-                const factor = lastTouchDist / dist;
-                const cx = vpX + vpW / 2;
-                const cy = vpY + vpH / 2;
-                const newW = Math.min(treeW * 6, Math.max(200, vpW * factor));
-                const newH = newW * (treeH / Math.max(1, treeW));
-                vpX = cx - newW / 2;
-                vpY = cy - newH / 2;
-                vpW = newW; vpH = newH;
-                viewAdjusted = true;
-                applyViewBox();
-            }
-            lastTouchDist = dist;
-        }
-        e.preventDefault();
-    }, { passive: false });
-
-    container.addEventListener('touchend', function () {
-        isDragging = false; lastTouchDist = 0;
-    });
-
-    if (resetBtn) resetBtn.addEventListener('click', resetView);
-
-    // ── Maximize only the diagram area to the browser window ──────────────────
-
-    const fsBtn    = document.getElementById('tree-fullscreen-btn');
-    const fsExitBtn = document.getElementById('tree-maximize-exit');
-
-    function isMaximized() {
-        return container.classList.contains('tree-maximized');
-    }
-
-    function updateFsBtn() {
-        if (!fsBtn) return;
-        const on = isMaximized();
-        fsBtn.textContent = on ? '⛶ Vollbild beenden' : '⛶ Vollbild';
-        fsBtn.title = on
-            ? 'Vollbild beenden'
-            : 'Diagramm auf volle Fenstergröße vergrößern';
-    }
-
-    function setMaximized(on) {
-        container.classList.toggle('tree-maximized', on);
-        document.body.classList.toggle('tree-maximized-open', on);
-        updateFsBtn();
-        // Re-fit the diagram to the new container size
-        resetView();
-    }
-
-    if (fsBtn) {
-        fsBtn.addEventListener('click', function () {
-            setMaximized(!isMaximized());
-        });
-        updateFsBtn();
-    }
-
-    if (fsExitBtn) {
-        fsExitBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-        fsExitBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            setMaximized(false);
-        });
-    }
-
-    document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape' && isMaximized()) setMaximized(false);
-    });
-
-    window.addEventListener('resize', function () {
-        if (isMaximized()) resetView();
-    });
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    function mk(tag, attrs) {
-        const e = document.createElementNS(NS, tag);
-        if (attrs) {
-            for (const [k, v] of Object.entries(attrs)) {
-                e.setAttribute(k, v);
-            }
-        }
-        return e;
-    }
-
-    function txt(parent, text, attrs) {
-        const e = mk('text', attrs);
-        e.textContent = text;
-        parent.appendChild(e);
-        return e;
-    }
-
-    function formatNum(n) {
-        if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-        if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
-        return String(n);
-    }
-
-    function shortUrl(url) {
-        try {
-            const u = new URL(url);
-            return u.hostname + (u.port ? ':' + u.port : '');
-        } catch (_) {
-            return url.length > 28 ? url.slice(0, 26) + '…' : url;
-        }
-    }
-
-    function truncate(str, max) {
-        return str.length > max ? str.slice(0, max - 1) + '…' : str;
-    }
-
-    // Label for a connected client: hostname when known, otherwise IP address.
-    // Clients without any address are listed individually and numbered so that
-    // several of them can be told apart.
-    function clientLabel(c, unknownNo) {
-        const host = (c && c.hostname ? String(c.hostname) : '').trim();
-        const ip   = (c && c.ip ? String(c.ip) : '').trim();
-        if (host !== '') {
-            // Prefer the short hostname when the FQDN gets too long
-            const short = host.split('.')[0];
-            return truncate(host.length > 26 && short !== '' ? short : host, 26);
-        }
-        if (ip !== '') return truncate(ip, 26);
-        return unknownNo && unknownNo > 1 ? `unbekannt ${unknownNo}` : 'unbekannt';
-    }
-
-    function clientTooltip(c) {
-        const host = (c && c.hostname ? String(c.hostname) : '').trim();
-        const ip   = (c && c.ip ? String(c.ip) : '').trim();
-        const tabs = (c && c.tabs) ? c.tabs : 1;
-        const who  = host !== '' ? (ip !== '' ? `${host} (${ip})` : host)
-                                 : (ip !== '' ? ip : 'Unbekannte Adresse');
-        return `${who} · ${tabs} Tab${tabs !== 1 ? 's' : ''}`;
-    }
-
-    // Normalises a model identifier for grouping/colouring purposes (mirrors
-    // canonicalModelName() in db.php): strips any directory prefix, a common
-    // model file extension, and a trailing quantisation marker (optionally
-    // preceded by an "-it" instruction-tuned marker, e.g. "-it-q4_k_m",
-    // "-q8_0", "-fp16"), then lowercases. This ensures identical models
-    // sharing the same short name (but referenced via different paths or
-    // quantisations, e.g. "google/gemma-4-e4b" vs. "/opt/llama.cpp/models/
-    // gemma-4-E4B-it-Q4_K_M.gguf") are grouped and coloured together.
-    function canonicalModelName(model) {
-        if (!model) return '';
-        let name = String(model).trim();
-        if (name === '') return '';
-        name = name.replace(/^.*[/\\]/, '');
-        name = name.replace(/\.(gguf|bin|safetensors|pt|ckpt)$/i, '');
-        name = name.replace(/(-it)?[-_](?:iq[1-4](?:_[a-z0-9]+)?|q[2-8](?:_[0-9k](?:_[ms])?)?|fp16|fp32|f16|f32|bf16|int4|int8)$/i, '');
-        return name.toLowerCase();
-    }
-
-    function extractIntelligenceLabel(modelName) {
-        if (!modelName) return '–';
-        const matches = [...String(modelName).matchAll(/(?:\b(a))?(\d+(?:[.,]\d+)?)\s*b\b/gi)];
-        if (matches.length === 0) return '–';
-        let best = null;
-        let fallback = null;
-        for (const m of matches) {
-            const v = parseFloat((m[2] || '').replace(',', '.'));
-            if (!Number.isFinite(v) || v <= 0) continue;
-            if (m[1]) {
-                // MoE active-parameter marker (A17B, A3B, …) – only a fallback.
-                if (fallback === null || v > fallback) fallback = v;
-                continue;
-            }
-            if (best === null || v > best) best = v;
-        }
-        if (best === null) best = fallback;
-        if (best === null) return '–';
-        const rounded = Math.round(best);
-        if (Math.abs(best - rounded) < 1e-6) return `${rounded}b`;
-        return `${best.toFixed(2).replace(/\.?0+$/, '')}b`;
-    }
-
-    // ── Tree renderer ─────────────────────────────────────────────────────────
-
-    // ── SpeechInt (dictation service) helpers ─────────────────────────────────
-
-    /**
-     * True when the dashboard's readiness probe was made against this tile.
-     *
-     * Only one SpeechInt endpoint is probed per dashboard refresh – the one that
-     * is actually in effect (environment variable or the selected row).
-     */
-    function isEffectiveSpeechEndpoint(ep, status) {
-        if (!ep || !status || !status.configured || !status.url) { return false; }
-        const a = String(ep.base_url || '').replace(/\/+$/, '');
-        const b = String(status.url || '').replace(/\/+$/, '');
-        return a !== '' && a === b;
-    }
-
-    /** Colour and label of one SpeechInt tile. */
-    function speechTileState(status) {
-        if (!status || !status.configured) {
-            return { label: 'kein Endpunkt aktiv', color: '#8e8ea0', loading: false };
-        }
-        if (status.probed === false) {
-            return { label: 'wird geprüft …', color: '#8e8ea0', loading: false };
-        }
-        if (status.loading) {
-            return { label: 'Modelle werden geladen …', color: '#f59e0b', loading: true };
-        }
-        if (status.ready) {
-            return { label: 'bereit', color: '#22c55e', loading: false };
-        }
-        if (!status.reachable) {
-            return { label: 'nicht erreichbar', color: '#ef4444', loading: false };
-        }
-        return { label: 'nicht bereit', color: '#ef4444', loading: false };
-    }
-
-    function renderLoadTree(endpoints, searxng, sdEndpoints, comfyEndpoints, clients, vectorStore, speechEndpoints, speechStatus) {
-        svg.innerHTML = '';
-
-        const hasSearxng  = searxng && searxng.enabled;
-        const hasVector   = vectorStore && vectorStore.enabled;
-        const hasSd       = Array.isArray(sdEndpoints) && sdEndpoints.length > 0;
-        const hasComfy    = Array.isArray(comfyEndpoints) && comfyEndpoints.length > 0;
-        const hasSpeech   = Array.isArray(speechEndpoints) && speechEndpoints.length > 0;
-
-        if ((!endpoints || endpoints.length === 0) && !hasSearxng && !hasVector && !hasSd && !hasComfy && !hasSpeech) {
-            treeW = 400; treeH = 60; treeX = 0; treeY = 0;
-            svg.setAttribute('viewBox', `0 0 ${treeW} ${treeH}`);
-            txt(svg, 'Keine Endpunkte konfiguriert.', {
-                x: 16, y: 38,
-                fill: '#8e8ea0',
-                'font-size': 13,
-                'font-family': 'sans-serif',
-            });
-            restoreViewAfterRender();
-            return;
-        }
-
-        // ── SVG defs (gradients) ──────────────────────────────────────────────
-        const defs = mk('defs', null);
-
-        function addLinearGradient(id, x2, y2, stop0, stop1) {
-            const g = mk('linearGradient', { id, x1: 0, y1: 0, x2, y2 });
-            const s0 = mk('stop', { offset: '0%', 'stop-color': stop0 });
-            const s1 = mk('stop', { offset: '100%', 'stop-color': stop1 });
-            g.appendChild(s0); g.appendChild(s1);
-            defs.appendChild(g);
-        }
-
-        addLinearGradient('grad-ep',    0, 1, '#363645', '#2a2a38');
-        addLinearGradient('grad-root',  0, 1, '#312f52', '#242438');
-        addLinearGradient('grad-mod',   0, 1, '#333342', '#28283a');
-        addLinearGradient('grad-cli',   0, 1, '#1c2b1c', '#182418');
-        addLinearGradient('grad-srxng', 0, 1, '#1a2f38', '#142028');
-        addLinearGradient('grad-vec',   0, 1, '#14312a', '#0f221d');
-        addLinearGradient('grad-sd',    0, 1, '#2b200f', '#201808');
-        addLinearGradient('grad-comfy', 0, 1, '#221430', '#180e22');
-        addLinearGradient('grad-speech', 0, 1, '#10283a', '#0b1a26');
-        svg.appendChild(defs);
-
-        // Group LLM endpoints by model (identical models sharing a canonical
-        // name are grouped together even if referenced via different paths).
-        const groups = new Map();
-        const colorMap = {};
-        let ci = 0;
-        for (const ep of (endpoints || [])) {
-            const key = canonicalModelName(ep.default_model) || '–';
-            if (!groups.has(key)) {
-                groups.set(key, []);
-                colorMap[key] = MODEL_COLORS[key] || PALETTE[ci % PALETTE.length];
-                ci++;
-            }
-            groups.get(key).push(ep);
-        }
-
-        // ── Layout constants ──────────────────────────────────────────────────
-        const PAD       = 22;
-        const CLIENT_W  = 112, CLIENT_H = 96;
-        const CLIENT_GAP = 40;
-        const ROOT_W = 112, ROOT_H = 82;
-        const MOD_W  = 178, MOD_H  = 64;
-        const EP_W        = 218, EP_H      = 170;
-        const EP_H_SYSSTAT = 228;  // extended height when SSH system stats are shown
-        const H_GAP  = 60;
-        const V_GAP  = 14;
-        const SRXNG_W = EP_W, SRXNG_H = 110;
-        const VEC_W   = EP_W, VEC_H   = 130;
-        const SD_W    = EP_W, SD_H    = 90;
-        const COMFY_W = EP_W, COMFY_H = 90;
-        const SPCH_W  = EP_W, SPCH_H  = 90;
-
-        // Per-endpoint height: extended when sys_stats are available
-        function epHeight(ep) {
-            return (ep.sys_stats || ep.ssh_configured) ? EP_H_SYSSTAT : EP_H;
-        }
-
-        const COL0_X = PAD;
-        const COL1_X = COL0_X + CLIENT_W + CLIENT_GAP;
-        const COL2_X = COL1_X + ROOT_W + H_GAP;
-        const COL3_X = COL2_X + MOD_W  + H_GAP;
-        const TOTAL_W = COL3_X + EP_W + PAD;
-
-        const totalEps = (endpoints || []).length;
-        const LLM_H = totalEps > 0
-            ? PAD * 2 + (endpoints || []).reduce((s, ep) => s + epHeight(ep) + V_GAP, -V_GAP)
-            : PAD * 2 + ROOT_H;
-
-        const SRXNG_V_GAP = 20;
-        let TOTAL_H = LLM_H;
-        if (hasSearxng) { TOTAL_H += SRXNG_V_GAP + SRXNG_H; }
-        if (hasVector)  { TOTAL_H += SRXNG_V_GAP + VEC_H; }
-        if (hasSd)      { TOTAL_H += SRXNG_V_GAP + sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP; }
-        if (hasComfy)   { TOTAL_H += SRXNG_V_GAP + comfyEndpoints.length * COMFY_H + (comfyEndpoints.length - 1) * V_GAP; }
-        if (hasSpeech)  { TOTAL_H += SRXNG_V_GAP + speechEndpoints.length * SPCH_H + (speechEndpoints.length - 1) * V_GAP; }
-        TOTAL_H += PAD;
-
-        let curY = PAD;
-        const epCY  = {};
-        const epHMap = {};
-        const modCY = {};
-
-        for (const [model, eps] of groups) {
-            const startY = curY;
-            for (const ep of eps) {
-                const h = epHeight(ep);
-                epHMap[ep.id] = h;
-                epCY[ep.id] = curY + h / 2;
-                curY += h + V_GAP;
-            }
-            curY -= V_GAP;
-            modCY[model] = startY + (curY - startY) / 2;
-            curY += V_GAP;
-        }
-
-        const rootCY = LLM_H / 2;
-
-        let afterLlmY = LLM_H;
-        const searxngCY = afterLlmY + SRXNG_V_GAP + SRXNG_H / 2;
-        if (hasSearxng) { afterLlmY += SRXNG_V_GAP + SRXNG_H; }
-
-        const vectorCY = afterLlmY + SRXNG_V_GAP + VEC_H / 2;
-        if (hasVector) { afterLlmY += SRXNG_V_GAP + VEC_H; }
-
-        const sdStartY = afterLlmY + SRXNG_V_GAP;
-        const sdCY = {};
-        let sdCurY = sdStartY;
-        for (const sdEp of (sdEndpoints || [])) {
-            sdCY[sdEp.id] = sdCurY + SD_H / 2;
-            sdCurY += SD_H + V_GAP;
-        }
-        let afterSdY = afterLlmY;
-        if (hasSd) { afterSdY += SRXNG_V_GAP + sdEndpoints.length * SD_H + (sdEndpoints.length - 1) * V_GAP; }
-
-        const comfyStartY = afterSdY + SRXNG_V_GAP;
-        const comfyCY = {};
-        let comfyCurY = comfyStartY;
-        for (const comfyEp of (comfyEndpoints || [])) {
-            comfyCY[comfyEp.id] = comfyCurY + COMFY_H / 2;
-            comfyCurY += COMFY_H + V_GAP;
-        }
-        let afterComfyY = afterSdY;
-        if (hasComfy) { afterComfyY += SRXNG_V_GAP + comfyEndpoints.length * COMFY_H + (comfyEndpoints.length - 1) * V_GAP; }
-
-        // SpeechInt endpoints (dictation service) – placed below the ComfyUI tiles.
-        const speechStartY = afterComfyY + SRXNG_V_GAP;
-        const speechCY = {};
-        let speechCurY = speechStartY;
-        for (const speechEp of (speechEndpoints || [])) {
-            speechCY[speechEp.id] = speechCurY + SPCH_H / 2;
-            speechCurY += SPCH_H + V_GAP;
-        }
-
-        // ── Client cloud layout ───────────────────────────────────────────────
-        // Connected clients are placed as small bubbles in a cloud around the
-        // (unchanged) "Clients" tile. Labelled with hostname, else IP address.
-        const clientList = (clients && Array.isArray(clients.list)) ? clients.list.slice(0, 40) : [];
-        // Pre-compute the labels: clients without hostname *and* without IP are
-        // numbered consecutively so each one stays distinguishable.
-        const clientLabels = [];
-        {
-            let unknownNo = 0;
-            for (const c of clientList) {
-                const host = (c && c.hostname ? String(c.hostname) : '').trim();
-                const ip   = (c && c.ip ? String(c.ip) : '').trim();
-                clientLabels.push(clientLabel(c, (host === '' && ip === '') ? ++unknownNo : 0));
-            }
-        }
-        const cloudNodes = [];
-        {
-            const cx = COL0_X + CLIENT_W / 2;
-            const cy = rootCY;
-            const BUB_H = 26;
-            const RING_SIZES = [6, 9, 12, 13];
-
-            let idx = 0;
-            let ring = 0;
-            while (idx < clientList.length) {
-                const perRing  = RING_SIZES[Math.min(ring, RING_SIZES.length - 1)];
-                const inRing   = Math.min(perRing, clientList.length - idx);
-                const radiusX  = CLIENT_W / 2 + 96 + ring * 74;
-                const radiusY  = CLIENT_H / 2 + 62 + ring * 52;
-                // Leave the right-hand side free – the connector to the root
-                // node leaves the tile there.
-                const startDeg = 42;
-                const endDeg   = 318;
-                for (let i = 0; i < inRing; i++) {
-                    const c   = clientList[idx + i];
-                    const t   = inRing === 1 ? 0.5 : i / (inRing - 1);
-                    const deg = startDeg + t * (endDeg - startDeg);
-                    const rad = deg * Math.PI / 180;
-                    const label = clientLabels[idx + i];
-                    const w = Math.max(78, Math.min(196, label.length * 6.2 + 26));
-                    // Keep the bubbles clear of the root node column
-                    const maxRight = COL1_X - 14;
-                    let bcx = cx + Math.cos(rad) * radiusX;
-                    if (bcx + w / 2 > maxRight) { bcx = maxRight - w / 2; }
-                    cloudNodes.push({
-                        client: c,
-                        label,
-                        w,
-                        h: BUB_H,
-                        cx: bcx,
-                        cy: cy + Math.sin(rad) * radiusY,
-                    });
-                }
-                idx += inRing;
-                ring++;
-            }
-        }
-
-        // Update pan/zoom state for new diagram size (the cloud may stick out
-        // to the left / above / below the regular diagram area)
-        let minX = 0, minY = 0, maxX = TOTAL_W, maxY = TOTAL_H;
-        for (const n of cloudNodes) {
-            minX = Math.min(minX, n.cx - n.w / 2 - PAD);
-            minY = Math.min(minY, n.cy - n.h / 2 - PAD);
-            maxX = Math.max(maxX, n.cx + n.w / 2 + PAD);
-            maxY = Math.max(maxY, n.cy + n.h / 2 + PAD);
-        }
-        treeX = minX;
-        treeY = minY;
-        treeW = maxX - minX;
-        treeH = maxY - minY;
-        restoreViewAfterRender();
-
-        // ── Connector curves ──────────────────────────────────────────────────
-
-        const CURVE_CTRL = H_GAP * 0.65;
-
-        // Helper: build animated path
-        function connPath(d, stroke, hasActive) {
-            return mk('path', {
-                d,
-                fill: 'none',
-                stroke,
-                'stroke-width': 1.8,
-                class: hasActive ? 'conn-active' : 'conn-idle',
-            });
-        }
-
-        // Root → each model group
-        for (const [model, eps] of groups) {
-            const mY = modCY[model];
-            const rX = COL1_X + ROOT_W;
-            const groupRunning = eps.reduce((s, e) => s + e.running, 0);
-            svg.appendChild(connPath(
-                `M ${rX},${rootCY} C ${rX + CURVE_CTRL},${rootCY} ${COL2_X - CURVE_CTRL},${mY} ${COL2_X},${mY}`,
-                'rgba(255,255,255,0.15)',
-                groupRunning > 0
-            ));
-        }
-
-        // Each model group → its endpoints
-        for (const [model, eps] of groups) {
-            const mY = modCY[model];
-            const mX = COL2_X + MOD_W;
-            for (const ep of eps) {
-                const eY = epCY[ep.id];
-                svg.appendChild(connPath(
-                    `M ${mX},${mY} C ${mX + CURVE_CTRL},${mY} ${COL3_X - CURVE_CTRL},${eY} ${COL3_X},${eY}`,
-                    'rgba(255,255,255,0.12)',
-                    ep.running > 0
-                ));
-            }
-        }
-
-        // Root → SearXNG
-        if (hasSearxng) {
-            const rX   = COL1_X + ROOT_W;
-            const ctrl = (COL3_X - rX) * 0.55;
-            svg.appendChild(connPath(
-                `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${searxngCY} ${COL3_X},${searxngCY}`,
-                'rgba(6,182,212,0.35)',
-                searxng.running > 0
-            ));
-        }
-
-        // Root → Vector store (docvecwizard API / local Milvus)
-        if (hasVector) {
-            const rX   = COL1_X + ROOT_W;
-            const ctrl = (COL3_X - rX) * 0.55;
-            svg.appendChild(connPath(
-                `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${vectorCY} ${COL3_X},${vectorCY}`,
-                vectorStore.online ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)',
-                false
-            ));
-        }
-
-        // Root → SD endpoints
-        if (hasSd) {
-            for (const sdEp of sdEndpoints) {
-                const rX   = COL1_X + ROOT_W;
-                const eY   = sdCY[sdEp.id];
-                const ctrl = (COL3_X - rX) * 0.55;
-                svg.appendChild(connPath(
-                    `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
-                    'rgba(249,115,22,0.35)',
-                    sdEp.running > 0
-                ));
-            }
-        }
-
-        // Root → ComfyUI endpoints
-        if (hasComfy) {
-            for (const comfyEp of comfyEndpoints) {
-                const rX   = COL1_X + ROOT_W;
-                const eY   = comfyCY[comfyEp.id];
-                const ctrl = (COL3_X - rX) * 0.55;
-                svg.appendChild(connPath(
-                    `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
-                    'rgba(168,85,247,0.35)',
-                    comfyEp.running > 0
-                ));
-            }
-        }
-
-        // Root → SpeechInt endpoints
-        if (hasSpeech) {
-            for (const speechEp of speechEndpoints) {
-                const rX   = COL1_X + ROOT_W;
-                const eY   = speechCY[speechEp.id];
-                const ctrl = (COL3_X - rX) * 0.55;
-                svg.appendChild(connPath(
-                    `M ${rX},${rootCY} C ${rX + ctrl},${rootCY} ${COL3_X - ctrl * 0.4},${eY} ${COL3_X},${eY}`,
-                    'rgba(56,189,248,0.35)',
-                    (speechStatus && speechStatus.ready && isEffectiveSpeechEndpoint(speechEp, speechStatus)) === true
-                ));
-            }
-        }
-
-        // Client → Root connector
-        {
-            const cRX  = COL0_X + CLIENT_W;
-            const ctrl = CLIENT_GAP * 0.5;
-            const anyRunning = (endpoints || []).some(e => e.running > 0);
-            svg.appendChild(connPath(
-                `M ${cRX},${rootCY} C ${cRX + ctrl},${rootCY} ${COL1_X - ctrl},${rootCY} ${COL1_X},${rootCY}`,
-                'rgba(255,255,255,0.22)',
-                anyRunning
-            ));
-        }
-
-        // ── Client cloud (bubbles around the Clients tile) ────────────────────
-        for (const n of cloudNodes) {
-            const bx = n.cx - n.w / 2;
-            const by = n.cy - n.h / 2;
-
-            // Connector from the Clients tile to the bubble
-            svg.appendChild(mk('line', {
-                x1: COL0_X + CLIENT_W / 2,
-                y1: rootCY,
-                x2: n.cx,
-                y2: n.cy,
-                stroke: 'rgba(34,197,94,0.22)',
-                'stroke-width': 1,
-            }));
-
-            const g = mk('g', { transform: `translate(${bx},${by})` });
-
-            const title = mk('title', null);
-            title.textContent = clientTooltip(n.client);
-            g.appendChild(title);
-
-            g.appendChild(mk('rect', {
-                x: 0, y: 0, width: n.w, height: n.h,
-                rx: n.h / 2,
-                fill: 'url(#grad-cli)',
-                stroke: 'rgba(34,197,94,0.45)',
-                'stroke-width': 1,
-            }));
-            g.appendChild(mk('circle', {
-                cx: 12, cy: n.h / 2, r: 3.5, fill: '#22c55e',
-            }));
-            txt(g, n.label, {
-                x: 22, y: n.h / 2 + 4,
-                fill: '#c9d6c9', 'font-size': 10, 'font-family': 'sans-serif',
-            });
-            if ((n.client.tabs || 1) > 1) {
-                txt(g, `×${n.client.tabs}`, {
-                    x: n.w - 8, y: n.h / 2 + 4,
-                    'text-anchor': 'end',
-                    fill: '#6b7280', 'font-size': 9, 'font-family': 'sans-serif',
-                });
-            }
-
-            svg.appendChild(g);
-        }
-
-        // ── Client node ───────────────────────────────────────────────────────
-        {
-            const cl      = clients || {};
-            const current = cl.current  ?? 0;
-            const minVal  = cl.today_min ?? 0;
-            const maxVal  = cl.today_max ?? 0;
-            const avgVal  = cl.today_avg ?? 0;
-
-            const g = mk('g', { transform: `translate(${COL0_X},${rootCY - CLIENT_H / 2})` });
-
-            g.appendChild(mk('rect', {
-                x: 0, y: 0, width: CLIENT_W, height: CLIENT_H,
-                rx: 12,
-                fill: 'url(#grad-cli)',
-                stroke: 'rgba(34,197,94,0.5)',
-                'stroke-width': 1.5,
-            }));
-            txt(g, '👥', {
-                x: CLIENT_W / 2, y: 26,
-                'text-anchor': 'middle', fill: '#ececf1', 'font-size': 18, 'font-family': 'sans-serif',
-            });
-            txt(g, String(current), {
-                x: CLIENT_W / 2, y: 48,
-                'text-anchor': 'middle', fill: '#22c55e', 'font-size': 18, 'font-weight': 700, 'font-family': 'sans-serif',
-            });
-            txt(g, 'Clients', {
-                x: CLIENT_W / 2, y: 64,
-                'text-anchor': 'middle', fill: '#8e8ea0', 'font-size': 10, 'font-family': 'sans-serif',
-            });
-            txt(g, `min ${minVal} · max ${maxVal} · Ø ${avgVal}`, {
-                x: CLIENT_W / 2, y: 80,
-                'text-anchor': 'middle', fill: '#6b7280', 'font-size': 9, 'font-family': 'sans-serif',
-            });
-
-            svg.appendChild(g);
-        }
-
-        // ── Root node ─────────────────────────────────────────────────────────
-        {
-            const g = mk('g', { transform: `translate(${COL1_X},${rootCY - ROOT_H / 2})` });
-
-            g.appendChild(mk('rect', {
-                x: 0, y: 0, width: ROOT_W, height: ROOT_H,
-                rx: 12,
-                fill: 'url(#grad-root)',
-                stroke: 'rgba(108,99,255,0.65)',
-                'stroke-width': 1.5,
-            }));
-            txt(g, '⚡', {
-                x: ROOT_W / 2, y: 30,
-                'text-anchor': 'middle', fill: '#ececf1', 'font-size': 22, 'font-family': 'sans-serif',
-            });
-            txt(g, 'LLMInt', {
-                x: ROOT_W / 2, y: 50,
-                'text-anchor': 'middle', fill: '#ececf1', 'font-size': 12, 'font-weight': 700, 'font-family': 'sans-serif',
-            });
-            txt(g, 'System', {
-                x: ROOT_W / 2, y: 66,
-                'text-anchor': 'middle', fill: '#8e8ea0', 'font-size': 10, 'font-family': 'sans-serif',
-            });
-
-            svg.appendChild(g);
-        }
-
-        // ── Model group nodes ─────────────────────────────────────────────────
-        for (const [model, eps] of groups) {
-            const color = colorMap[model];
-            const mY = modCY[model];
-            const g  = mk('g', { transform: `translate(${COL2_X},${mY - MOD_H / 2})` });
-
-            g.appendChild(mk('rect', {
-                x: 0, y: 0, width: MOD_W, height: MOD_H,
-                rx: 10,
-                fill: 'url(#grad-mod)',
-                stroke: color + '66',
-                'stroke-width': 1.5,
-            }));
-            // Coloured left accent bar
-            g.appendChild(mk('rect', {
-                x: 0, y: 8, width: 4, height: MOD_H - 16,
-                rx: 2, fill: color,
-            }));
-
-            const groupRunning      = eps.reduce((s, e) => s + e.running, 0);
-            const modelLabel        = truncate(model, 22);
-            const intelligenceLabel = extractIntelligenceLabel(model);
-
-            txt(g, modelLabel, {
-                x: 16, y: 24, fill: '#ececf1', 'font-size': 11, 'font-weight': 700, 'font-family': 'sans-serif',
-            });
-            txt(g, `${eps.length} Endpunkt${eps.length !== 1 ? 'e' : ''} · ${intelligenceLabel}`, {
-                x: 16, y: 40, fill: '#8e8ea0', 'font-size': 10, 'font-family': 'sans-serif',
-            });
-
-            if (groupRunning > 0) {
-                txt(g, `▶ ${groupRunning} laufend`, {
-                    x: 16, y: 56, fill: '#f59e0b', 'font-size': 10, 'font-family': 'sans-serif',
-                });
-                const dot = mk('circle', { class: 'pulse-dot', cx: MOD_W - 14, cy: 14, r: 5, fill: '#f59e0b' });
-                g.appendChild(dot);
-            }
-
-            svg.appendChild(g);
-        }
-
-        // ── Endpoint nodes ────────────────────────────────────────────────────
-        for (const ep of endpoints) {
-            const model    = ep.default_model || '–';
-            const color    = colorMap[canonicalModelName(model) || '–'] || '#555';
-            const eY       = epCY[ep.id];
-            const curEpH   = epHMap[ep.id] || EP_H;
-            const isActive = ep.is_active === 1;
-            const g        = mk('g', { transform: `translate(${COL3_X},${eY - curEpH / 2})` });
-
-            // Clicking an endpoint node opens the same edit overlay as the
-            // "✏ Bearbeiten" button under "Endpunkte".
-            if (window.EP_EDIT_DATA && window.EP_EDIT_DATA[ep.id]) {
-                g.style.cursor = 'pointer';
-                g.addEventListener('click', function () {
-                    window.openEndpointEditOverlay(window.EP_EDIT_DATA[ep.id]);
-                });
-            }
-
-            g.appendChild(mk('rect', {
-                x: 0, y: 0, width: EP_W, height: curEpH,
-                rx: 10,
-                fill: 'url(#grad-ep)',
-                stroke: isActive ? color + '44' : 'rgba(239,68,68,0.4)',
-                'stroke-width': 1.5,
-            }));
-            // Accent bar (left)
-            g.appendChild(mk('rect', {
-                x: 0, y: 10, width: 3, height: curEpH - 20,
-                rx: 1.5,
-                fill: isActive ? color : '#ef4444',
-                opacity: 0.7,
-            }));
-
-            // Animated running pulse (behind status dot)
-            if (ep.running > 0 && isActive) {
-                g.appendChild(mk('circle', { class: 'pulse-dot', cx: 16, cy: 20, r: 4, fill: '#f59e0b' }));
-            }
-            // Status dot
-            g.appendChild(mk('circle', { cx: 16, cy: 20, r: 4, fill: isActive ? '#22c55e' : '#8e8ea0' }));
-
-            const endpointLabel = ep.alias ? ep.alias : shortUrl(ep.base_url);
-            txt(g, truncate(endpointLabel, 26), {
-                x: 28, y: 24, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
-            });
-
-            // Divider
-            g.appendChild(mk('line', { x1: 10, y1: 34, x2: EP_W - 10, y2: 34, stroke: 'rgba(255,255,255,0.08)', 'stroke-width': 1 }));
-
-            // Running count
-            const runColor = ep.running > 0 ? '#f59e0b' : '#8e8ea0';
-            txt(g, `▶  Laufend: ${ep.running}`, {
-                x: 12, y: 52, fill: runColor, 'font-size': 11, 'font-family': 'sans-serif',
-            });
-
-            // Jobs today
-            txt(g, `✓  Jobs heute: ${formatNum(ep.today_jobs)}`, {
-                x: 12, y: 70, fill: '#22c55e', 'font-size': 11, 'font-family': 'sans-serif',
-            });
-
-            // Tokens today
-            txt(g, `↑  Prompt heute: ${formatNum(ep.today_prompt_tokens)}`, {
-                x: 12, y: 88, fill: '#6c63ff', 'font-size': 11, 'font-family': 'sans-serif',
-            });
-            txt(g, `↓  Completion: ${formatNum(ep.today_completion_tokens)}`, {
-                x: 12, y: 106, fill: '#8b5cf6', 'font-size': 11, 'font-family': 'sans-serif',
-            });
-            txt(g, `⬡  Total Token: ${formatNum(ep.today_tokens)}`, {
-                x: 12, y: 124, fill: '#a78bfa', 'font-size': 11, 'font-family': 'sans-serif',
-            });
-            const speedLabel = ep.today_avg_tokens_per_second > 0
-                ? `${ep.today_avg_tokens_per_second.toFixed(1)} Tok/s`
-                : '–';
-            txt(g, `⚡  Ø Geschwindigkeit: ${speedLabel}`, {
-                x: 12, y: 142, fill: '#fbbf24', 'font-size': 11, 'font-family': 'sans-serif',
-            });
-
-            // Slot utilisation bar (max 4 slots)
-            const maxSlots  = 4;
-            const barX      = 12, barY = 154, barW = EP_W - 24, barH = 5;
-            g.appendChild(mk('rect', { x: barX, y: barY, width: barW, height: barH, rx: 2.5, fill: 'rgba(255,255,255,0.07)' }));
-            if (ep.running > 0) {
-                const fillW = Math.round(barW * Math.min(1, ep.running / maxSlots));
-                g.appendChild(mk('rect', { x: barX, y: barY, width: fillW, height: barH, rx: 2.5, fill: '#f59e0b' }));
-            }
-
-            // ── SSH system stats (RAM, CPU load, CPU temp) ────────────────────
-            if (ep.sys_stats || ep.ssh_configured) {
-                g.appendChild(mk('line', { x1: 10, y1: 168, x2: EP_W - 10, y2: 168, stroke: 'rgba(255,255,255,0.06)', 'stroke-width': 1 }));
-                const ss = ep.sys_stats || {};
-                const ssOk = ss.ok === true;
-
-                if (!ssOk && !ss.ram_total) {
-                    // SSH configured but no successful fetch yet
-                    txt(g, '🔑  SSH: Warte auf Daten …', {
-                        x: 12, y: 186, fill: '#6b7280', 'font-size': 10, 'font-family': 'sans-serif',
-                    });
-                } else {
-                    // RAM
-                    let ramLabel = '–';
-                    if (ss.ram_total && ss.ram_used !== null && ss.ram_used !== undefined) {
-                        const used  = ss.ram_used  / 1073741824;
-                        const total = ss.ram_total / 1073741824;
-                        const pct   = Math.round(ss.ram_used / ss.ram_total * 100);
-                        ramLabel = `${used.toFixed(1)} / ${total.toFixed(1)} GB  (${pct}%)`;
-                    }
-                    txt(g, `🧠  RAM: ${ramLabel}`, {
-                        x: 12, y: 186, fill: '#60a5fa', 'font-size': 10.5, 'font-family': 'sans-serif',
-                    });
-
-                    // CPU load
-                    const load1 = ss.cpu_load_1m != null ? Number(ss.cpu_load_1m).toFixed(2) : '–';
-                    const load5 = ss.cpu_load_5m != null ? Number(ss.cpu_load_5m).toFixed(2) : '–';
-                    txt(g, `📊  CPU-Last: ${load1}  (5 min: ${load5})`, {
-                        x: 12, y: 204, fill: '#34d399', 'font-size': 10.5, 'font-family': 'sans-serif',
-                    });
-
-                    // CPU temperature
-                    const tempLabel = ss.cpu_temp != null ? `${Number(ss.cpu_temp).toFixed(1)} °C` : '–';
-                    const tempColor = ss.cpu_temp != null && ss.cpu_temp >= 80 ? '#ef4444'
-                                    : ss.cpu_temp != null && ss.cpu_temp >= 65 ? '#f59e0b'
-                                    : '#fb923c';
-                    txt(g, `🌡  Temp: ${tempLabel}`, {
-                        x: 12, y: 222, fill: tempColor, 'font-size': 10.5, 'font-family': 'sans-serif',
-                    });
-                }
-            }
-
-            svg.appendChild(g);
-        }
-
-        // ── SearXNG tile ──────────────────────────────────────────────────────
-        if (hasSearxng) {
-            const SRXNG_COLOR = '#06b6d4';
-            const g = mk('g', { transform: `translate(${COL3_X},${searxngCY - SRXNG_H / 2})` });
-
-            g.appendChild(mk('rect', {
-                x: 0, y: 0, width: SRXNG_W, height: SRXNG_H,
-                rx: 10, fill: 'url(#grad-srxng)', stroke: SRXNG_COLOR + '66', 'stroke-width': 1.5,
-            }));
-
-            if (searxng.running > 0) {
-                g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: SRXNG_COLOR }));
-            }
-            g.appendChild(mk('circle', { cx: 14, cy: 18, r: 4, fill: SRXNG_COLOR }));
-
-            const srxngLabel = searxng.base_url ? truncate(shortUrl(searxng.base_url), 26) : 'SearXNG';
-            txt(g, srxngLabel, {
-                x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
-            });
-            g.appendChild(mk('line', { x1: 10, y1: 32, x2: SRXNG_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
-
-            const runColor = searxng.running > 0 ? '#f59e0b' : '#8e8ea0';
-            txt(g, `▶  Laufend: ${searxng.running}`, { x: 12, y: 52, fill: runColor, 'font-size': 11, 'font-family': 'sans-serif' });
-            txt(g, `✓  Jobs heute: ${formatNum(searxng.today_jobs)}`, { x: 12, y: 72, fill: '#22c55e', 'font-size': 11, 'font-family': 'sans-serif' });
-
-            const avgDur      = searxng.avg_duration_seconds;
-            const avgDurLabel = avgDur !== null && avgDur !== undefined
-                ? `⏱  Ø Antwortzeit: ${avgDur.toFixed(1)} s` : `⏱  Ø Antwortzeit: –`;
-            txt(g, avgDurLabel, { x: 12, y: 92, fill: '#94a3b8', 'font-size': 11, 'font-family': 'sans-serif' });
-
-            svg.appendChild(g);
-        }
-
-        // ── Vector store tile ─────────────────────────────────────────────────
-        if (hasVector) {
-            const VEC_COLOR = '#10b981';
-            const online    = !!vectorStore.online;
-            const g = mk('g', { transform: `translate(${COL3_X},${vectorCY - VEC_H / 2})` });
-
-            g.appendChild(mk('rect', {
-                x: 0, y: 0, width: VEC_W, height: VEC_H,
-                rx: 10, fill: 'url(#grad-vec)',
-                stroke: online ? VEC_COLOR + '66' : 'rgba(239,68,68,0.4)', 'stroke-width': 1.5,
-            }));
-
-            if (online && (vectorStore.today_queries || 0) > 0) {
-                g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: VEC_COLOR }));
-            }
-            g.appendChild(mk('circle', { cx: 14, cy: 18, r: 4, fill: online ? VEC_COLOR : '#ef4444' }));
-
-            const vecTitle = vectorStore.mode === 'remote' ? '🧠 docvecwizard-API' : '🧠 Milvus (lokal)';
-            txt(g, vecTitle, {
-                x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
-            });
-            g.appendChild(mk('line', { x1: 10, y1: 32, x2: VEC_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
-
-            const urlLabel = vectorStore.base_url ? truncate(shortUrl(vectorStore.base_url), 30) : '–';
-            txt(g, urlLabel, { x: 12, y: 50, fill: '#cbd5e1', 'font-size': 10, 'font-family': 'monospace, sans-serif' });
-
-            txt(g, online ? '●  Online' : '●  Offline', {
-                x: 12, y: 70, fill: online ? '#22c55e' : '#ef4444', 'font-size': 11, 'font-family': 'sans-serif',
-            });
-            const docs = vectorStore.documents, vecs = vectorStore.vectors;
-            const invLabel = (docs === null || docs === undefined) && (vecs === null || vecs === undefined)
-                ? '📚  Bestand: –'
-                : `📚  ${formatNum(docs || 0)} Dok. · ${formatNum(vecs || 0)} Vektoren`;
-            txt(g, invLabel, { x: 12, y: 90, fill: '#94a3b8', 'font-size': 11, 'font-family': 'sans-serif' });
-
-            const avgMs = vectorStore.avg_duration_ms;
-            const avgLabel = (avgMs !== null && avgMs !== undefined) ? `${Math.round(avgMs)} ms` : '–';
-            txt(g, `🔍  Abfragen heute: ${formatNum(vectorStore.today_queries || 0)} · Ø ${avgLabel}`, {
-                x: 12, y: 110, fill: '#94a3b8', 'font-size': 11, 'font-family': 'sans-serif',
-            });
-
-            svg.appendChild(g);
-        }
-
-        // ── SD endpoint tiles ─────────────────────────────────────────────────
-        if (hasSd) {
-            const SD_COLOR = '#f97316';
-            for (const sdEp of sdEndpoints) {
-                const eY       = sdCY[sdEp.id];
-                const isActive = sdEp.is_active === 1;
-                const g        = mk('g', { transform: `translate(${COL3_X},${eY - SD_H / 2})` });
-
-                g.appendChild(mk('rect', {
-                    x: 0, y: 0, width: SD_W, height: SD_H,
-                    rx: 10, fill: 'url(#grad-sd)',
-                    stroke: isActive ? SD_COLOR + '66' : 'rgba(239,68,68,0.4)', 'stroke-width': 1.5,
-                }));
-
-                if (sdEp.running > 0 && isActive) {
-                    g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: '#f59e0b' }));
-                }
-                g.appendChild(mk('circle', { cx: 14, cy: 18, r: 4, fill: isActive ? SD_COLOR : '#8e8ea0' }));
-
-                txt(g, truncate(shortUrl(sdEp.base_url), 26), {
-                    x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
-                });
-                g.appendChild(mk('line', { x1: 10, y1: 32, x2: SD_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
-
-                const runColor = sdEp.running > 0 ? '#f59e0b' : '#8e8ea0';
-                txt(g, `▶  Laufend: ${sdEp.running}`, { x: 12, y: 52, fill: runColor, 'font-size': 11, 'font-family': 'sans-serif' });
-                txt(g, `🖼  Bilder heute: ${formatNum(sdEp.today_jobs)}`, { x: 12, y: 72, fill: '#22c55e', 'font-size': 11, 'font-family': 'sans-serif' });
-
-                svg.appendChild(g);
-            }
-        }
-
-        // ── ComfyUI endpoint tiles ─────────────────────────────────────────────
-        if (hasComfy) {
-            const COMFY_COLOR = '#a855f7';
-            for (const comfyEp of comfyEndpoints) {
-                const eY       = comfyCY[comfyEp.id];
-                const isActive = comfyEp.is_active === 1;
-                const g        = mk('g', { transform: `translate(${COL3_X},${eY - COMFY_H / 2})` });
-
-                g.appendChild(mk('rect', {
-                    x: 0, y: 0, width: COMFY_W, height: COMFY_H,
-                    rx: 10, fill: 'url(#grad-comfy)',
-                    stroke: isActive ? COMFY_COLOR + '66' : 'rgba(239,68,68,0.4)', 'stroke-width': 1.5,
-                }));
-
-                if (comfyEp.running > 0 && isActive) {
-                    g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: '#f59e0b' }));
-                }
-                g.appendChild(mk('circle', { cx: 14, cy: 18, r: 4, fill: isActive ? COMFY_COLOR : '#8e8ea0' }));
-
-                txt(g, truncate(shortUrl(comfyEp.base_url), 26), {
-                    x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
-                });
-                g.appendChild(mk('line', { x1: 10, y1: 32, x2: COMFY_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
-
-                const runColor = comfyEp.running > 0 ? '#f59e0b' : '#8e8ea0';
-                txt(g, `▶  Laufend: ${comfyEp.running}`, { x: 12, y: 52, fill: runColor, 'font-size': 11, 'font-family': 'sans-serif' });
-                txt(g, `🖼  Bilder heute: ${formatNum(comfyEp.today_jobs)}`, { x: 12, y: 72, fill: '#22c55e', 'font-size': 11, 'font-family': 'sans-serif' });
-
-                svg.appendChild(g);
-            }
-        }
-
-        // ── SpeechInt endpoint tiles ───────────────────────────────────────────
-        if (hasSpeech) {
-            const SPCH_COLOR = '#38bdf8';
-            for (const speechEp of speechEndpoints) {
-                const eY       = speechCY[speechEp.id];
-                const isActive = speechEp.is_active === 1;
-                const effective = isEffectiveSpeechEndpoint(speechEp, speechStatus);
-                const state    = effective ? speechTileState(speechStatus) : null;
-                const g        = mk('g', { transform: `translate(${COL3_X},${eY - SPCH_H / 2})` });
-
-                g.appendChild(mk('rect', {
-                    x: 0, y: 0, width: SPCH_W, height: SPCH_H,
-                    rx: 10, fill: 'url(#grad-speech)',
-                    stroke: isActive ? SPCH_COLOR + '66' : 'rgba(239,68,68,0.4)', 'stroke-width': 1.5,
-                }));
-
-                const title = mk('title', null);
-                title.textContent = 'SpeechInt'
-                    + (speechEp.alias ? ' · ' + speechEp.alias : '')
-                    + ' · ' + speechEp.base_url
-                    + (effective && speechStatus && speechStatus.message ? ' · ' + speechStatus.message : '');
-                g.appendChild(title);
-
-                if (state && state.loading) {
-                    g.appendChild(mk('circle', { class: 'pulse-dot', cx: 14, cy: 18, r: 4, fill: '#f59e0b' }));
-                }
-                g.appendChild(mk('circle', {
-                    cx: 14, cy: 18, r: 4,
-                    fill: state ? state.color : (isActive ? SPCH_COLOR : '#8e8ea0'),
-                }));
-
-                txt(g, truncate(speechEp.alias || shortUrl(speechEp.base_url), 26), {
-                    x: 26, y: 22, fill: '#ececf1', 'font-size': 10.5, 'font-weight': 700, 'font-family': 'monospace, sans-serif',
-                });
-                g.appendChild(mk('line', { x1: 10, y1: 32, x2: SPCH_W - 10, y2: 32, stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 }));
-
-                txt(g, `🎙  ${truncate(shortUrl(speechEp.base_url), 24)}`, {
-                    x: 12, y: 52, fill: '#8e8ea0', 'font-size': 10, 'font-family': 'monospace, sans-serif',
-                });
-                txt(g, state ? state.label : 'Zustand: nicht geprüft', {
-                    x: 12, y: 72, fill: state ? state.color : '#6b7280', 'font-size': 11, 'font-family': 'sans-serif',
-                });
-
-                svg.appendChild(g);
-            }
-        }
+    function tsLabel(ts) {
+        const d = new Date(ts * 1000);
+        return 'Aktualisiert ' + d.toLocaleTimeString('de-DE');
     }
 
     // ── Live stat-box updates ─────────────────────────────────────────────────
@@ -8433,11 +6849,34 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         }
     }
 
+    /**
+     * Renders the online/offline tile of a service group (ImageInt, SpeechInt).
+     * `status` is the payload's *_status object; a missing entry means the group
+     * has no endpoints configured and therefore no tile in the dashboard.
+     */
+    function updateServiceStatBox(id, status) {
+        const el = document.getElementById(id);
+        if (!el || !status) return;
+        const online = !!status.reachable;
+        const label = online ? 'online' : 'offline';
+        if (el.textContent === label) return;
+        el.textContent = label;
+        el.classList.toggle('stat-done', online);
+        el.classList.toggle('stat-error', !online);
+        const box = el.closest('.stat-box');
+        if (box) {
+            box.classList.remove('stat-flash');
+            // Force reflow so animation restarts
+            void box.offsetWidth;
+            box.classList.add('stat-flash');
+        }
+    }
+
     function updateStatBoxes(data) {
-        const t     = data.totals       || {};
-        const s     = data.searxng      || {};
-        const sdT   = data.sd_totals    || {};
-        const comfyT = data.comfy_totals || {};
+        const t      = data.totals       || {};
+        const s      = data.searxng      || {};
+        const image  = data.image_status  || null;
+        const speech = data.speech_status || null;
 
         setStatBox('db-llm-running',   t.total_running           ?? 0);
         setStatBox('db-llm-done24',    t.total_done_24h          ?? 0);
@@ -8448,22 +6887,18 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         setStatBox('db-total-tok',     t.grand_tokens            ?? 0);
         setStatBox('db-srxng-running', s.running                 ?? 0);
         setStatBox('db-srxng-today',   s.today_jobs              ?? 0);
-        setStatBox('db-sd-running',    sdT.total_running         ?? 0);
-        setStatBox('db-sd-done24',     sdT.total_done_24h        ?? 0);
-        setStatBox('db-sd-done',       sdT.total_done            ?? 0);
-        setStatBox('db-comfy-running', comfyT.total_running      ?? 0);
-        setStatBox('db-comfy-done24',  comfyT.total_done_24h     ?? 0);
-        setStatBox('db-comfy-done',    comfyT.total_done         ?? 0);
+        updateServiceStatBox('db-image-status',  image);
+        updateServiceStatBox('db-speech-status', speech);
 
         const v = data.vector_store || null;
         if (v && v.enabled) {
-            const statusEl = document.getElementById('db-vec-status');
-            if (statusEl) {
+            const vecStatusEl = document.getElementById('db-vec-status');
+            if (vecStatusEl) {
                 const label = v.online ? 'online' : 'offline';
-                if (statusEl.textContent !== label) {
-                    statusEl.textContent = label;
-                    statusEl.classList.toggle('stat-done', !!v.online);
-                    statusEl.classList.toggle('stat-error', !v.online);
+                if (vecStatusEl.textContent !== label) {
+                    vecStatusEl.textContent = label;
+                    vecStatusEl.classList.toggle('stat-done', !!v.online);
+                    vecStatusEl.classList.toggle('stat-error', !v.online);
                 }
             }
             setStatBox('db-vec-today', v.today_queries ?? 0);
@@ -8475,52 +6910,13 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         }
     }
 
-    // ── Status bar ────────────────────────────────────────────────────────────
-
-    function setStatus(label, loading) {
-        if (statusEl) statusEl.textContent = label;
-        if (liveDot)  liveDot.style.background = loading ? '#f59e0b' : '#22c55e';
-    }
-
-    function tsLabel(ts) {
-        const d = new Date(ts * 1000);
-        return 'Aktualisiert ' + d.toLocaleTimeString('de-DE');
-    }
-
-    // ── Auto-refresh ──────────────────────────────────────────────────────────
-
-    async function refreshTree() {
-        setStatus('⟳ Aktualisiere …', true);
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10000);
-        try {
-            const res  = await fetch('load_stats.php', { cache: 'no-store', signal: controller.signal });
-            clearTimeout(timer);
-            const data = await res.json();
-            if (data.ok && Array.isArray(data.endpoints)) {
-                renderLoadTree(data.endpoints, data.searxng || null, data.sd_endpoints || [], data.comfy_endpoints || [], data.clients || null, data.vector_store || null, data.speech_endpoints || [], data.speech_status || null);
-                updateStatBoxes(data);
-                setStatus(tsLabel(data.ts), false);
-            } else {
-                setStatus('Fehler beim Laden', false);
-            }
-        } catch (err) {
-            clearTimeout(timer);
-            setStatus(err.name === 'AbortError' ? 'Zeitüberschreitung' : 'Netzwerkfehler', false);
-        }
-    }
-
-    // Initial render using PHP-injected data
-    renderLoadTree(INITIAL_DATA, INITIAL_SEARXNG, INITIAL_SD, INITIAL_COMFY, INITIAL_CLIENTS, INITIAL_VECTOR, INITIAL_SPEECH, INITIAL_SPEECH_STATUS);
-    setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
-
-    // Refresh every 15 seconds
-    setInterval(refreshTree, 15000);
-
     // ── SSH system-stats refresh (every 60 seconds) ───────────────────────────
     //
     // Polls refresh_sys_stats.php which SSH-connects to each configured endpoint
-    // and caches the results. The next load_stats.php poll then picks them up.
+    // and caches the results. The following load_stats.php poll then picks them
+    // up; pulling once more right away shows them without waiting for the poll.
+
+    let topology = null;
 
     async function refreshSysStats() {
         try {
@@ -8529,17 +6925,35 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
             const res  = await fetch('refresh_sys_stats.php', { cache: 'no-store', signal: controller.signal });
             clearTimeout(timer);
             const data = await res.json();
-            if (data.ok) {
-                // Trigger a tree refresh so updated sys_stats are shown promptly
-                refreshTree();
+            if (data.ok && topology) {
+                topology.load(false);
             }
         } catch (_e) {
             // Non-critical – silently ignore (SSH may simply not be configured)
         }
     }
 
+    // ── Bootstrap ─────────────────────────────────────────────────────────────
+
+    if (root && window.FlowTopology) {
+        topology = window.FlowTopology.mount(root, {
+            onData: function (payload) {
+                updateStatBoxes(payload);
+                setStatus(tsLabel(payload.ts), false);
+            },
+            onBusy: function () {
+                setStatus('⟳ Aktualisiere …', true);
+            },
+            onError: function (message) {
+                setStatus(message, false);
+            },
+        });
+    }
+
+    setStatus(tsLabel(Math.floor(Date.now() / 1000)), false);
+
     // Only poll if at least one endpoint has SSH configured
-    if (INITIAL_DATA.some(ep => ep.ssh_configured)) {
+    if (SSH_CONFIGURED) {
         // First fetch shortly after page load so the tile shows data quickly
         setTimeout(refreshSysStats, 3000);
         setInterval(refreshSysStats, 60000);
@@ -9141,7 +7555,7 @@ if (isset($_GET['edit']) && (int) $_GET['edit'] > 0) {
         'dashboard-card', 'usage-stats-card', 'config-smtp-card', 'config-ldap-card', 'config-searxng-card',
         'config-speech-card',
         'config-endpoints-card', 'config-request-handling-card', 'config-global-system-prompt-card',
-        'config-sd-card', 'config-comfy-card', 'config-system-messages-card',
+        'config-image-card', 'config-system-messages-card',
         'config-vector-store-card', 'config-embedding-card', 'config-hybrid-search-card', 'config-reranker-card', 'embedding-stats-card',
         'log-config-card', 'log-viewer-card', 'users-card', 'openai-api-card', 'api-keys-card', 'password-card'
     ];

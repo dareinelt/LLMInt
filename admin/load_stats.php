@@ -12,13 +12,22 @@
  *     searxng: { enabled, running, today_jobs, avg_duration_seconds },
  *     vector_store: { enabled, mode, label, base_url, online, documents, vectors, today_queries, … },
  *     speech_endpoints: [ { id, alias, base_url, timeout, is_active }, … ],
- *     speech_status: { configured, url, ready, loading, status, message, retry_after, probed } }
+ *     speech_status: { configured, url, ready, loading, status, message, retry_after, probed },
+ *     image_endpoints: [ { id, alias, base_url, timeout, is_active }, … ],
+ *     image_status: { configured, url, ready, loading, status, message, retry_after, probed } }
+ *
+ * With `?topology=1` the response additionally contains a `topology` object:
+ * the same data translated into the message-flow graph consumed by
+ * assets/js/flow-topology.js (see lib/topology.php). Building it server side
+ * keeps the polling front end down to a single request.
  */
 
 session_start();
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../lib/speech_dictation.php';
+require_once __DIR__ . '/../lib/image_generation.php';
+require_once __DIR__ . '/../lib/topology.php';
 require_once __DIR__ . '/../api/vector_store.php';
 requireAdminOrJson403();
 
@@ -110,7 +119,13 @@ try {
     unset($r);
 
     $searxngEnabled = trim(getSetting('searxng_base_url', '')) !== '';
-    $searxng = ['enabled' => $searxngEnabled, 'running' => 0, 'today_jobs' => 0, 'avg_duration_seconds' => null];
+    $searxng = [
+        'enabled'  => $searxngEnabled,
+        'base_url' => trim(getSetting('searxng_base_url', '')),
+        'running'  => 0,
+        'today_jobs' => 0,
+        'avg_duration_seconds' => null,
+    ];
 
     if ($searxngEnabled) {
         try {
@@ -137,68 +152,26 @@ try {
         }
     }
 
-    // ── SD endpoint stats ─────────────────────────────────────────────────────
+    // ── ImageInt endpoints (image generation service) ─────────────────────────
 
-    $sdRows = [];
+    $imageRows = [];
     try {
-        $sdRows = getDb()->query("
-            SELECT
-                e.id,
-                e.base_url,
-                e.is_active,
-                COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0)
-                    AS running,
-                COALESCE(SUM(CASE WHEN t.status = 'done'
-                                  AND DATE(t.started_at) = CURDATE()
-                             THEN 1 ELSE 0 END), 0)
-                    AS today_jobs
-            FROM sd_endpoints e
-            LEFT JOIN sd_tasks t ON t.endpoint_id = e.id
-            GROUP BY e.id, e.base_url, e.is_active
-            ORDER BY e.sort_order ASC, e.id ASC
-        ")->fetchAll(PDO::FETCH_ASSOC);
-
-        foreach ($sdRows as &$r) {
-            $r['id']         = (int) $r['id'];
-            $r['is_active']  = (int) $r['is_active'];
-            $r['running']    = (int) $r['running'];
-            $r['today_jobs'] = (int) $r['today_jobs'];
+        foreach (imageIntEndpoints() as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            // Deliberately field-by-field: the endpoint token must never end up
+            // in this payload.
+            $imageRows[] = [
+                'id'        => (int) ($row['id'] ?? 0),
+                'alias'     => (string) ($row['alias'] ?? ''),
+                'base_url'  => (string) ($row['base_url'] ?? ''),
+                'timeout'   => (int) ($row['timeout'] ?? 0),
+                'is_active' => (int) ($row['is_active'] ?? 0),
+            ];
         }
-        unset($r);
-    } catch (PDOException $e) {
-        // sd_endpoints / sd_tasks tables may not exist yet
-    }
-
-    // ── ComfyUI endpoint stats ────────────────────────────────────────────────
-
-    $comfyRows = [];
-    try {
-        $comfyRows = getDb()->query("
-            SELECT
-                e.id,
-                e.base_url,
-                e.is_active,
-                COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0)
-                    AS running,
-                COALESCE(SUM(CASE WHEN t.status = 'done'
-                                  AND DATE(t.started_at) = CURDATE()
-                             THEN 1 ELSE 0 END), 0)
-                    AS today_jobs
-            FROM comfy_endpoints e
-            LEFT JOIN comfy_tasks t ON t.endpoint_id = e.id
-            GROUP BY e.id, e.base_url, e.is_active
-            ORDER BY e.sort_order ASC, e.id ASC
-        ")->fetchAll(PDO::FETCH_ASSOC);
-
-        foreach ($comfyRows as &$r) {
-            $r['id']         = (int) $r['id'];
-            $r['is_active']  = (int) $r['is_active'];
-            $r['running']    = (int) $r['running'];
-            $r['today_jobs'] = (int) $r['today_jobs'];
-        }
-        unset($r);
-    } catch (PDOException $e) {
-        // comfy_endpoints / comfy_tasks tables may not exist yet
+    } catch (Throwable $e) {
+        // image_endpoints table may not exist yet
     }
 
     // ── Client stats ─────────────────────────────────────────────────────────
@@ -261,53 +234,15 @@ try {
         }
     } catch (PDOException $e) { }
 
-    // ── SD aggregate totals ───────────────────────────────────────────────────
-
-    $sdTotals = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
+    // Readiness of the endpoint that is actually in effect. Cached for 20 s in
+    // imageIntDashboardStatus(), so the 15 s dashboard poll does not hammer the
+    // remote service. Tokens are never part of this payload.
+    $imageStatus = [];
     try {
-        $sdT = getDb()->query("
-            SELECT
-                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
-                COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
-                COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
-                COALESCE(SUM(CASE WHEN status = 'done'
-                                  AND started_at >= NOW() - INTERVAL 24 HOUR
-                             THEN 1 ELSE 0 END), 0) AS total_done_24h
-            FROM sd_tasks
-        ")->fetch(PDO::FETCH_ASSOC);
-        if ($sdT) {
-            $sdTotals = [
-                'total_running'  => (int) $sdT['total_running'],
-                'total_done'     => (int) $sdT['total_done'],
-                'total_error'    => (int) $sdT['total_error'],
-                'total_done_24h' => (int) $sdT['total_done_24h'],
-            ];
-        }
-    } catch (PDOException $e) { }
-
-    // ── ComfyUI aggregate totals ──────────────────────────────────────────────
-
-    $comfyTotals = ['total_running' => 0, 'total_done' => 0, 'total_error' => 0, 'total_done_24h' => 0];
-    try {
-        $comfyT = getDb()->query("
-            SELECT
-                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS total_running,
-                COALESCE(SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END), 0) AS total_done,
-                COALESCE(SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END), 0) AS total_error,
-                COALESCE(SUM(CASE WHEN status = 'done'
-                                  AND started_at >= NOW() - INTERVAL 24 HOUR
-                             THEN 1 ELSE 0 END), 0) AS total_done_24h
-            FROM comfy_tasks
-        ")->fetch(PDO::FETCH_ASSOC);
-        if ($comfyT) {
-            $comfyTotals = [
-                'total_running'  => (int) $comfyT['total_running'],
-                'total_done'     => (int) $comfyT['total_done'],
-                'total_error'    => (int) $comfyT['total_error'],
-                'total_done_24h' => (int) $comfyT['total_done_24h'],
-            ];
-        }
-    } catch (PDOException $e) { }
+        $imageStatus = imageIntDashboardStatus();
+    } catch (Throwable $e) {
+        $imageStatus = [];
+    }
 
     // ── Vector store (docvecwizard API / local Milvus) ────────────────────────
 
@@ -350,14 +285,28 @@ try {
         $speechStatus = [];
     }
 
-    echo json_encode(
-        ['ok' => true, 'ts' => time(), 'endpoints' => $rows, 'searxng' => $searxng,
-         'sd_endpoints' => $sdRows, 'comfy_endpoints' => $comfyRows, 'clients' => $clientStats,
-         'totals' => $totals, 'sd_totals' => $sdTotals, 'comfy_totals' => $comfyTotals,
-         'vector_store' => $vectorStore,
-         'speech_endpoints' => $speechRows, 'speech_status' => $speechStatus],
-        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
-    );
+    $payload = [
+        'ok'               => true,
+        'ts'               => time(),
+        'endpoints'        => $rows,
+        'searxng'          => $searxng,
+        'clients'          => $clientStats,
+        'totals'           => $totals,
+        'image_endpoints'  => $imageRows,
+        'image_status'     => $imageStatus,
+        'vector_store'     => $vectorStore,
+        'speech_endpoints' => $speechRows,
+        'speech_status'    => $speechStatus,
+    ];
+
+    // Optional extra representation of the same data: the message-flow
+    // topology consumed by assets/js/flow-topology.js. Only the consumers that
+    // actually render the graph (dashboard card, admin/topology.php) ask for it.
+    if (($_GET['topology'] ?? '') === '1') {
+        $payload['topology'] = topology_build($payload, ['base_url' => '', 'slot_limit' => 4]);
+    }
+
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
 } catch (PDOException $e) {
     http_response_code(500);
