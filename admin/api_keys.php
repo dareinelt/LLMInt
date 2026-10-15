@@ -16,17 +16,25 @@ $adminPageTitle = 'API-Keys';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('api-keys-intro', 'API-Keys',
+    'Ein API-Key ist optional. Er dient der Zuordnung im Log und kann – wenn ein Modell gewählt wurde – '
+    . 'das für diesen Key verwendete Modell festlegen. API-Zugriffe verhalten sich immer wie ein nicht '
+    . 'angemeldeter Benutzer.');
+
+admin_help_text('api-key-model', 'Modell (optional)',
+    'Anfragen mit diesem API-Key verwenden das gewählte Modell. Ohne Auswahl gilt das Standardmodell für '
+    . 'nicht angemeldete Zugriffe. Zur Auswahl stehen die Modelle der aktiven Endpunkte.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          API keys (OpenAI-compatible API)
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="api-keys-card">
-        <h2>🗝️ API-Keys</h2>
-        <p class="hint" style="margin-bottom:16px">
-            Ein API-Key ist optional. Er dient der Zuordnung im Log und kann – wenn ein Modell gewählt wurde –
-            das für diesen Key verwendete Modell festlegen. API-Zugriffe verhalten sich immer wie ein nicht
-            angemeldeter Benutzer.
-        </p>
+        <h2>🗝️ API-Keys <?php admin_help_button('api-keys-intro'); ?></h2>
 
         <?php if ($newApiKey !== ''): ?>
             <div class="flash-ok" style="margin-bottom:18px">
@@ -58,17 +66,13 @@ require __DIR__ . '/partials/layout_head.php';
                           style="width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.88rem;font-family:var(--font)"></textarea>
             </div>
             <div class="form-group" style="max-width:740px">
-                <label for="api-key-model">Modell (optional)</label>
+                <label for="api-key-model">Modell (optional) <?php admin_help_button('api-key-model'); ?></label>
                 <select id="api-key-model" name="model">
                     <option value="">Standardmodell verwenden</option>
                     <?php foreach ($availableModels as $availableModel): ?>
                         <option value="<?= htmlspecialchars($availableModel) ?>"><?= htmlspecialchars($availableModel) ?></option>
                     <?php endforeach; ?>
                 </select>
-                <p class="hint">
-                    Anfragen mit diesem API-Key verwenden das gewählte Modell. Ohne Auswahl gilt das Standardmodell für
-                    nicht angemeldete Zugriffe. Zur Auswahl stehen die Modelle der aktiven Endpunkte.
-                </p>
                 <?php if (empty($availableModels)): ?>
                     <p class="hint" style="color:var(--warning)">
                         Aktuell ist kein aktives Endpunkt-Modell verfügbar. Bitte zuerst unter

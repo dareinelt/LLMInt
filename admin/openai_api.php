@@ -16,20 +16,25 @@ $adminPageTitle = 'OpenAI-API';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('openai-api-intro', 'OpenAI-kompatible API',
+    'Externe Applikationen greifen über diese Basis-URLs auf die KI zu. API-Zugriffe verhalten sich '
+    . 'wie ein nicht angemeldeter Benutzer: Sie verwenden das Gast-Standardmodell '
+    . '(<code>' . htmlspecialchars(getGuestDefaultModel() !== '' ? getGuestDefaultModel() : '– nicht konfiguriert –') . '</code>), '
+    . 'durchlaufen Routing und Lastverteilung wie ein direkter Zugriff und werden im Log mit '
+    . '<code>API</code> gekennzeichnet. Ein <a href="api_keys.php">API-Key</a> ist optional. Er dient '
+    . 'der Zuordnung im Log und kann optional ein festes Modell festlegen; ohne Modell gilt das '
+    . 'Standardmodell.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          OpenAI-compatible API (links for external applications)
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="openai-api-card">
-        <h2>🔌 OpenAI-kompatible API</h2>
-        <p class="hint" style="margin-bottom:12px">
-            Externe Applikationen greifen über diese Basis-URLs auf die KI zu. API-Zugriffe verhalten sich wie
-            ein nicht angemeldeter Benutzer: Sie verwenden das Gast-Standardmodell
-            (<code><?= htmlspecialchars(getGuestDefaultModel() !== '' ? getGuestDefaultModel() : '– nicht konfiguriert –') ?></code>),
-            durchlaufen Routing und Lastverteilung wie ein direkter Zugriff und werden im Log mit <code>API</code> gekennzeichnet.
-            Ein <a href="api_keys.php">API-Key</a> ist optional. Er dient der Zuordnung im Log und kann optional ein
-            festes Modell festlegen; ohne Modell gilt das Standardmodell.
-        </p>
+        <h2>🔌 OpenAI-kompatible API <?php admin_help_button('openai-api-intro'); ?></h2>
         <?php foreach ([
             'openai-api-url'       => ['Ohne Tools', openaiPublicBaseUrl(false)],
             'openai-tools-api-url' => ['Mit Tools (Websuche, Dokumente, Bilder)', openaiPublicBaseUrl(true)],

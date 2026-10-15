@@ -16,6 +16,16 @@ $adminPageTitle = 'Protokollierung';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('log-level', 'Mindest-Log-Level',
+    'Einträge unterhalb des gewählten Levels werden nicht gespeichert.');
+
+admin_help_text('log-retention', 'Aufbewahrungsdauer (Tage)',
+    'Log-Einträge, die älter als diese Anzahl von Tagen sind, werden automatisch gelöscht.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Logging – Configuration
@@ -29,22 +39,20 @@ require __DIR__ . '/partials/layout_head.php';
                 <input type="hidden" name="action"     value="save_log_config">
 
                 <div class="form-group">
-                    <label for="log-level">Mindest-Log-Level</label>
+                    <label for="log-level">Mindest-Log-Level <?php admin_help_button('log-level'); ?></label>
                     <select id="log-level" name="log_level" style="max-width:200px">
                         <option value="info"    <?= $logLevel === 'info'    ? 'selected' : '' ?>>Info</option>
                         <option value="warning" <?= $logLevel === 'warning' ? 'selected' : '' ?>>Warning</option>
                         <option value="error"   <?= $logLevel === 'error'   ? 'selected' : '' ?>>Error</option>
                     </select>
-                    <p class="hint">Einträge unterhalb des gewählten Levels werden nicht gespeichert.</p>
                 </div>
 
                 <div class="form-group">
-                    <label for="log-retention">Aufbewahrungsdauer (Tage)</label>
+                    <label for="log-retention">Aufbewahrungsdauer (Tage) <?php admin_help_button('log-retention'); ?></label>
                     <input type="number" id="log-retention" name="log_retention_days"
                            min="1" max="3650"
                            value="<?= htmlspecialchars((string) $logRetentionDays) ?>"
                            style="max-width:120px">
-                    <p class="hint">Log-Einträge, die älter als diese Anzahl von Tagen sind, werden automatisch gelöscht.</p>
                 </div>
 
                 <div class="action-row">

@@ -16,13 +16,22 @@ $adminPageTitle = 'RAG-Statistik';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('rag-stats-intro', 'RAG-Statistik & Monitoring',
+    'Zeigt den Status der Hybrid-RAG-Pipeline. Embedding-Anfragen werden in '
+    . '<code>embedding_logs</code> protokolliert. Die Statistiken beziehen sich auf die letzten '
+    . '24 Stunden.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          RAG-Statistik / Monitoring
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="embedding-stats-card">
         <details class="config-panel" open>
-            <summary>📊 RAG-Statistik &amp; Monitoring</summary>
+            <summary>📊 RAG-Statistik &amp; Monitoring <?php admin_help_button('rag-stats-intro'); ?></summary>
 
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px">
                 <div class="stat-box">
@@ -77,11 +86,6 @@ require __DIR__ . '/partials/layout_head.php';
                 </div>
             </div>
 
-            <p class="hint">
-                Zeigt den Status der Hybrid-RAG-Pipeline. Embedding-Anfragen werden in
-                <code>embedding_logs</code> protokolliert.
-                Die Statistiken beziehen sich auf die letzten 24 Stunden.
-            </p>
         </details>
     </div>
 

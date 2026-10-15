@@ -17,6 +17,8 @@ declare(strict_types=1);
  *   - every page keeps the bootstrap -> head -> body -> foot layout contract,
  *   - every card and every element id lives on exactly one page, so nothing
  *     was duplicated or lost while slicing,
+ *   - every "?" of a field description has exactly one text, and the heading of
+ *     a description stays plain text because the popup writes it as text,
  *   - every JavaScript hook (getElementById) and every label for= still finds
  *     its element on the same page - the classic breakage of such a split,
  *   - no anchor jumps to a card that now lives on a different page,
@@ -186,12 +188,42 @@ function admin_split_files(): array
     return $files;
 }
 
-/** The ids of the shared page shell (layout_head.php / layout_foot.php). */
+/** Every id handed to $function as a literal string, e.g. admin_help_button('ep-alias'). */
+function admin_split_call_ids(string $source, string $function): array
+{
+    preg_match_all('~' . preg_quote($function, '~') . "\\(\\s*'([^']+)'~", $source, $matches);
+
+    return $matches[1];
+}
+
+/**
+ * Every admin_help_text() call of $source as ['id' => ..., 'title' => ...]. The
+ * heading is read as a single literal; the text below it may be concatenated.
+ *
+ * @return list<array{id: string, title: string}>
+ */
+function admin_split_help_titles(string $source): array
+{
+    preg_match_all("~admin_help_text\\(\\s*'([^']+)'\\s*,\\s*'([^']*)'~", $source, $matches, PREG_SET_ORDER);
+
+    $calls = [];
+    foreach ($matches as $match) {
+        $calls[] = ['id' => $match[1], 'title' => $match[2]];
+    }
+
+    return $calls;
+}
+
+/**
+ * The ids of the shared page shell (layout_head.php / layout_foot.php and the
+ * help partial they pull in).
+ */
 function admin_split_shell_ids(): array
 {
     return array_merge(
         admin_split_ids(admin_split_read('admin/partials/layout_head.php')),
-        admin_split_ids(admin_split_read('admin/partials/layout_foot.php'))
+        admin_split_ids(admin_split_read('admin/partials/layout_foot.php')),
+        admin_split_ids(admin_split_read('admin/partials/help.php'))
     );
 }
 
@@ -418,6 +450,75 @@ test_case('Jedes label for= zeigt auf ein Feld derselben Seite', function () {
             assert_true(
                 in_array($target, $ids, true),
                 $name . ': label for="' . $target . '" hat kein Feld auf dieser Seite'
+            );
+        }
+    }
+});
+
+// ── Field descriptions ("?") ──────────────────────────────────────────────────
+
+test_case('Das Layout rendert die Beschreibungs-Popup jeder Seite', function () {
+    $help = admin_split_read('admin/partials/help.php');
+
+    assert_contains(
+        "require_once __DIR__ . '/help.php';",
+        admin_split_read('admin/partials/layout_head.php'),
+        'layout_head macht die Beschreibungen verfügbar'
+    );
+    assert_contains(
+        'admin_help_overlay();',
+        admin_split_read('admin/partials/layout_foot.php'),
+        'layout_foot rendert die Popup jeder Seite'
+    );
+    assert_contains(
+        'function admin_help_text(string $id, string $title, string $body): void',
+        $help,
+        'help.php deklariert admin_help_text'
+    );
+    assert_contains('function admin_help_button(string $id): void', $help, 'help.php deklariert admin_help_button');
+    assert_contains('function admin_help_overlay(): void', $help, 'help.php deklariert admin_help_overlay');
+});
+
+test_case('Das Skript der Beschreibungs-Popup findet seine Elemente', function () {
+    $help = admin_split_read('admin/partials/help.php');
+    $ids  = admin_split_ids($help);
+
+    foreach (admin_split_js_ids($help) as $id) {
+        assert_true(
+            in_array($id, $ids, true),
+            "admin/partials/help.php: getElementById('" . $id . "') findet kein Element"
+        );
+    }
+});
+
+test_case('Jeder ?-Button hat genau einen Beschreibungstext', function () {
+    foreach (admin_split_sources() as $name => $source) {
+        $buttons = admin_split_call_ids($source, 'admin_help_button');
+        $texts   = admin_split_call_ids($source, 'admin_help_text');
+
+        foreach ($buttons as $id) {
+            assert_true(
+                in_array($id, $texts, true),
+                $name . ": ?-Button '" . $id . "' hat keinen Beschreibungstext"
+            );
+        }
+        foreach ($texts as $id) {
+            assert_true(
+                in_array($id, $buttons, true),
+                $name . ": Beschreibungstext '" . $id . "' hängt an keinem ?-Button"
+            );
+        }
+    }
+});
+
+test_case('Die Überschrift einer Beschreibung bleibt reiner Text', function () {
+    foreach (admin_split_sources() as $name => $source) {
+        foreach (admin_split_help_titles($source) as $call) {
+            // The popup writes the heading with textContent: markup would show up
+            // literally, and an HTML entity would appear as "&amp;".
+            assert_true(
+                preg_match('~<|&#?[A-Za-z0-9]+;~', $call['title']) !== 1,
+                $name . ": Überschrift von '" . $call['id'] . "' enthält Markup oder HTML-Entitäten"
             );
         }
     }

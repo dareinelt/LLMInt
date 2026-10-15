@@ -42,7 +42,7 @@ Neue Endpunkte werden als neue Datei unter `api/` angelegt und binden `../db.php
 | `api/upload_document.php` | 488 | Datei-Upload, Textextraktion, Chunking, Vision-Analyse |
 | `api/openai*/**` | – | OpenAI-kompatible Fassade (`v1/models`, `v1/chat/completions`) |
 | `admin/index.php` | 661 | Dashboard-Seite: Nachrichtenflow-Topologie, Systemstatus, Nutzung heute; jede weitere Karte liegt auf einer eigenen Seite `admin/<seite>.php` |
-| `admin/partials/` | 2.489 | Gemeinsame Hülle aller Adminseiten: `bootstrap.php` (Sitzung, Rechte, Einstellungen, CSRF), `actions.php` (POST-Verarbeitung), `data.php` (Livedaten), `nav.php` (Seitenleiste), `layout_head.php`/`layout_foot.php` (Kopf mit CSS, Fuß) |
+| `admin/partials/` | 2.695 | Gemeinsame Hülle aller Adminseiten: `bootstrap.php` (Sitzung, Rechte, Einstellungen, CSRF), `actions.php` (POST-Verarbeitung), `data.php` (Livedaten), `nav.php` (Seitenleiste), `layout_head.php`/`layout_foot.php` (Kopf mit CSS, Fuß), `help.php` (Feldbeschreibungen hinter dem **?**-Symbol) |
 | `admin/prompt_security.php` | 878 | Prompt-Security-Regeln, Logs und Einstellungen |
 | `admin/load_stats.php` | 314 | JSON-Livedaten für das Dashboard; enthält über `topology_build()` auch den Payload der Nachrichtenflow-Topologie |
 | `admin/topology.php` | 221 | Vollbildansicht der Nachrichtenflow-Topologie (eigene Hülle ohne Admin-Sidebar, gleicher Payload) |
@@ -334,7 +334,10 @@ Verwaltung: `admin/prompt_security.php` (Dashboard, Regeln, Logs, Einstellungen)
 
 Jeder Eintrag der linken Navigation ist eine eigene Seite (`admin/index.php` als Dashboard,
 dazu `admin/<seite>.php`); die gemeinsame Hülle liegt in `admin/partials/` (Bootstrap,
-POST-Verarbeitung, Livedaten, Navigation, Layout).
+POST-Verarbeitung, Livedaten, Navigation, Layout, Feldbeschreibungen). Beschreibungen, die
+nicht zur unmittelbaren Bedienung nötig sind, stehen nicht im Markup, sondern hinter einem
+**?**-Symbol: `admin_help_text()` registriert sie, `admin_help_button()` setzt den Knopf,
+`admin_help_overlay()` rendert die Popup einmal je Seite.
 
 `admin/partials/actions.php` verarbeitet für alle Adminseiten die Änderungen als POST mit
 `action`-Feld und CSRF-Token; das absendende Formular steht jeweils auf der Seite, die den

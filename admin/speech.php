@@ -16,22 +16,72 @@ $adminPageTitle = 'Spracherkennung';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('speech-intro', 'Spracherkennung / Diktat',
+    'Transkription (whisper.cpp) und Diktat-Nachbearbeitung laufen in einem separaten Dienst – dem '
+    . '<strong>SpeechInt</strong>-Server. LLMInt schickt die Audioschnipsel und den erkannten Text per '
+    . 'HTTP dorthin; das erkannte Diktat verlässt dabei den Server nicht und wird nicht gespeichert. '
+    . 'Mindestanforderung je Speech-Endpunkt: <strong>6 CPU-Kerne mit AVX2</strong> und '
+    . '<strong>16 GB RAM</strong>.');
+
+admin_help_text('speech-enabled', 'Spracherkennung aktiviert',
+    'Blendet den Mikrofon-Button 🎙 in der Chat-Eingabe ein. Das Diktat steht angemeldeten Benutzern '
+    . 'zur Verfügung.');
+
+admin_help_text('speech-endpoint-select', 'Aktiver Speech-Endpunkt',
+    'Pro Diktat-Anfrage wird genau ein Endpunkt angesprochen – der hier ausgewählte. Ohne Auswahl wird '
+    . 'der erste aktive Endpunkt der Liste genutzt.');
+
+admin_help_text('speech-language', 'Sprache',
+    'Sprachcode für Whisper (z.&nbsp;B. <code>de</code>, <code>en</code>). Leer oder <code>auto</code> '
+    . 'lässt die Sprache automatisch erkennen.');
+
+admin_help_text('speech-buffer-words', 'Anzahl gepufferter Wörter',
+    'So viele Wörter werden zurückgehalten, bis der nachfolgende Kontext bekannt ist – erst dadurch '
+    . 'sind Diktatbefehle wie <em>„neue Zeile"</em> zuverlässig erkennbar. Empfehlung: 3–4.');
+
+admin_help_text('speech-stop-timeout', 'Wartezeit bis „Erkennung beenden" (Sekunden)',
+    'Nach dieser Zeit ohne neu verarbeiteten Text erscheint die Schaltfläche „Erkennung beenden". Das '
+    . 'Diktat läuft dabei weiter und kann fortgesetzt werden.');
+
+admin_help_text('speech-max-segment', 'Maximale Segmentdauer (Sekunden)',
+    'Die Mikrofonaufnahme wird in Segmente dieser Länge zerlegt und einzeln an SpeechInt gesendet. '
+    . 'Kürzere Segmente liefern schnelleres Feedback, längere sind effizienter. Empfehlung: 10–20.');
+
+admin_help_text('speech-max-audio', 'Maximale Audiodateigröße (MB)',
+    'Größere Segmente werden verworfen und protokolliert (1–100 MB). Der SpeechInt-Server weist '
+    . 'Aufnahmen über 25 MB zusätzlich selbst zurück.');
+
+admin_help_text('speech-commands', 'Diktatbefehle und Kurzbefehle',
+    'Prompt und Befehlstabelle bleiben in LLMInt konfiguriert und werden bei jeder Anfrage an SpeechInt '
+    . 'mitgeschickt – der Speech-Endpunkt ist zustandslos.');
+
+admin_help_text('speech-ep-alias', 'Name',
+    'Nur zur Anzeige – hilft bei mehreren Speech-Endpunkten.');
+
+admin_help_text('speech-ep-timeout', 'Timeout (Sekunden)',
+    '10 – 600 s');
+
+admin_help_text('speech-ep-url', 'Basis-URL des SpeechInt-Servers',
+    'Ohne Pfad – die API-Pfade (<code>/v1/ready</code>, <code>/v1/audio/transcriptions</code>, '
+    . '<code>/v1/dictate/process</code>) werden automatisch ergänzt. Der Server muss über mindestens '
+    . '<strong>6 CPU-Kerne mit AVX2</strong> und <strong>16 GB RAM</strong> verfügen.');
+
+admin_help_text('speech-ep-token', 'Auth-Token',
+    'Gemeinsames Geheimnis des SpeechInt-Servers (<code>SPEECHINT_TOKEN</code> bzw. '
+    . '<code>AUTH_TOKEN</code>). Das gespeicherte Token wird nur maskiert angezeigt – leer lassen '
+    . 'behält es bei.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Speech recognition / dictation (SpeechInt)
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-speech-card">
         <details class="config-panel" id="config-speech" open>
-            <summary>🎙️ Spracherkennung / Diktat</summary>
-
-            <p class="hint" style="margin-bottom:16px">
-                Transkription (whisper.cpp) und Diktat-Nachbearbeitung laufen in einem
-                separaten Dienst – dem <strong>SpeechInt</strong>-Server. LLMInt schickt die
-                Audioschnipsel und den erkannten Text per HTTP dorthin; das erkannte Diktat
-                verlässt dabei den Server nicht und wird nicht gespeichert.<br>
-                Mindestanforderung je Speech-Endpunkt: <strong>6 CPU-Kerne mit AVX2</strong>
-                und <strong>16 GB RAM</strong>.
-            </p>
+            <summary>🎙️ Spracherkennung / Diktat <?php admin_help_button('speech-intro'); ?> <?php admin_help_button('speech-commands'); ?></summary>
 
             <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
@@ -42,15 +92,12 @@ require __DIR__ . '/partials/layout_head.php';
                     <input type="checkbox" name="speech_dictation_enabled" value="1"
                            <?= $speechEnabled ? 'checked' : '' ?> style="width:auto">
                     Spracherkennung aktiviert
+                    <?php admin_help_button('speech-enabled'); ?>
                 </label>
-                <p class="hint">
-                    Blendet den Mikrofon-Button 🎙 in der Chat-Eingabe ein. Das Diktat steht
-                    angemeldeten Benutzern zur Verfügung.
-                </p>
             </div>
 
             <div class="form-group">
-                <label for="speech-endpoint-select">Aktiver Speech-Endpunkt</label>
+                <label for="speech-endpoint-select">Aktiver Speech-Endpunkt <?php admin_help_button('speech-endpoint-select'); ?></label>
                 <select id="speech-endpoint-select" name="speech_dictation_endpoint_id">
                     <option value="0" <?= $speechEndpointId === 0 ? 'selected' : '' ?>>
                         – Automatisch (erster aktiver Endpunkt) –
@@ -64,8 +111,6 @@ require __DIR__ . '/partials/layout_head.php';
                     <?php endforeach; ?>
                 </select>
                 <p class="hint">
-                    Pro Diktat-Anfrage wird genau ein Endpunkt angesprochen – der hier
-                    ausgewählte. Ohne Auswahl wird der erste aktive Endpunkt der Liste genutzt.<br>
                     Aktuell wirksam: <strong><?= htmlspecialchars(speechDictationSourceLabel($speechUrlSrc)) ?></strong><?php
                     if ($speechUrlSrc === 'env'): ?> – die Umgebungsvariable
                     <code>SPEECHINT_URL</code> hat Vorrang vor dieser Auswahl.<?php endif; ?>
@@ -78,56 +123,34 @@ require __DIR__ . '/partials/layout_head.php';
 
             <div class="form-row">
                 <div class="form-group" style="flex:1">
-                    <label for="speech-language">Sprache</label>
+                    <label for="speech-language">Sprache <?php admin_help_button('speech-language'); ?></label>
                     <input type="text" id="speech-language" name="speech_dictation_language"
                            placeholder="de" value="<?= htmlspecialchars($speechLanguage) ?>">
-                    <p class="hint">
-                        Sprachcode für Whisper (z.&nbsp;B. <code>de</code>, <code>en</code>). Leer oder
-                        <code>auto</code> lässt die Sprache automatisch erkennen.
-                    </p>
                 </div>
                 <div class="form-group" style="flex:1">
-                    <label for="speech-buffer-words">Anzahl gepufferter Wörter</label>
+                    <label for="speech-buffer-words">Anzahl gepufferter Wörter <?php admin_help_button('speech-buffer-words'); ?></label>
                     <input type="number" id="speech-buffer-words" name="speech_dictation_buffer_words"
                            min="1" max="50" value="<?= (int) $speechBufferWords ?>">
-                    <p class="hint">
-                        So viele Wörter werden zurückgehalten, bis der nachfolgende Kontext bekannt
-                        ist – erst dadurch sind Diktatbefehle wie <em>„neue Zeile"</em> zuverlässig
-                        erkennbar. Empfehlung: 3–4.
-                    </p>
                 </div>
             </div>
 
             <div class="form-row">
                 <div class="form-group" style="flex:1">
-                    <label for="speech-stop-timeout">Wartezeit bis „Erkennung beenden" (Sekunden)</label>
+                    <label for="speech-stop-timeout">Wartezeit bis „Erkennung beenden" (Sekunden) <?php admin_help_button('speech-stop-timeout'); ?></label>
                     <input type="number" id="speech-stop-timeout" name="speech_dictation_stop_timeout_seconds"
                            min="1" max="60" value="<?= (int) $speechStopTimeout ?>">
-                    <p class="hint">
-                        Nach dieser Zeit ohne neu verarbeiteten Text erscheint die Schaltfläche
-                        „Erkennung beenden". Das Diktat läuft dabei weiter und kann fortgesetzt werden.
-                    </p>
                 </div>
                 <div class="form-group" style="flex:1">
-                    <label for="speech-max-segment">Maximale Segmentdauer (Sekunden)</label>
+                    <label for="speech-max-segment">Maximale Segmentdauer (Sekunden) <?php admin_help_button('speech-max-segment'); ?></label>
                     <input type="number" id="speech-max-segment" name="speech_dictation_max_segment_seconds"
                            min="3" max="120" value="<?= (int) $speechMaxSegment ?>">
-                    <p class="hint">
-                        Die Mikrofonaufnahme wird in Segmente dieser Länge zerlegt und einzeln an
-                        SpeechInt gesendet. Kürzere Segmente liefern schnelleres Feedback, längere
-                        sind effizienter. Empfehlung: 10–20.
-                    </p>
                 </div>
             </div>
 
             <div class="form-group">
-                <label for="speech-max-audio">Maximale Audiodateigröße (MB)</label>
+                <label for="speech-max-audio">Maximale Audiodateigröße (MB) <?php admin_help_button('speech-max-audio'); ?></label>
                 <input type="number" id="speech-max-audio" name="speech_dictation_max_audio_mb"
                        min="1" max="100" value="<?= (int) $speechMaxAudioMb ?>">
-                <p class="hint">
-                    Größere Segmente werden verworfen und protokolliert (1–100 MB). Der
-                    SpeechInt-Server weist Aufnahmen über 25 MB zusätzlich selbst zurück.
-                </p>
             </div>
 
             <div class="action-row" style="align-items:center;gap:10px;flex-wrap:wrap">
@@ -144,8 +167,6 @@ require __DIR__ . '/partials/layout_head.php';
                 Diktatbefehle: <strong><?= (int) $speechCommandCount ?></strong> Phrasen aktiv
                 (z.&nbsp;B. „Punkt", „Neue Zeile", „Lösche letztes Wort").
                 Kurzbefehle nach dem Diktat: <strong><?= (int) $speechPillCount ?></strong> Pills.
-                Prompt und Befehlstabelle bleiben in LLMInt konfiguriert und werden bei jeder
-                Anfrage an SpeechInt mitgeschickt – der Speech-Endpunkt ist zustandslos.
             </p>
             </form>
 
@@ -237,46 +258,33 @@ require __DIR__ . '/partials/layout_head.php';
 
                     <div class="form-row">
                         <div class="form-group" style="flex:1">
-                            <label for="speech-ep-alias">Name</label>
+                            <label for="speech-ep-alias">Name <?php admin_help_button('speech-ep-alias'); ?></label>
                             <input type="text" id="speech-ep-alias" name="speech_ep_alias"
                                    placeholder="Speech-Host 1" maxlength="120"
                                    value="<?= $editSpeechEp ? htmlspecialchars($editSpeechEp['alias']) : '' ?>">
-                            <p class="hint">Nur zur Anzeige – hilft bei mehreren Speech-Endpunkten.</p>
                         </div>
                         <div class="form-group" style="flex:1;min-width:140px">
-                            <label for="speech-ep-timeout">Timeout (Sekunden) *</label>
+                            <label for="speech-ep-timeout">Timeout (Sekunden) * <?php admin_help_button('speech-ep-timeout'); ?></label>
                             <input type="number" id="speech-ep-timeout" name="speech_ep_timeout"
                                    min="10" max="600" required
                                    value="<?= $editSpeechEp ? (int) $editSpeechEp['timeout'] : 120 ?>">
-                            <p class="hint">10 – 600 s</p>
                         </div>
                     </div>
 
                     <div class="form-group">
-                        <label for="speech-ep-url">Basis-URL des SpeechInt-Servers *</label>
+                        <label for="speech-ep-url">Basis-URL des SpeechInt-Servers * <?php admin_help_button('speech-ep-url'); ?></label>
                         <input type="url" id="speech-ep-url" name="speech_ep_base_url"
                                placeholder="http://192.168.1.20:8099" required
                                value="<?= $editSpeechEp ? htmlspecialchars($editSpeechEp['base_url']) : '' ?>">
-                        <p class="hint">
-                            Ohne Pfad – die API-Pfade (<code>/v1/ready</code>,
-                            <code>/v1/audio/transcriptions</code>, <code>/v1/dictate/process</code>)
-                            werden automatisch ergänzt. Der Server muss über mindestens
-                            <strong>6 CPU-Kerne mit AVX2</strong> und <strong>16 GB RAM</strong> verfügen.
-                        </p>
                     </div>
 
                     <div class="form-group">
-                        <label for="speech-ep-token">Auth-Token (<code>X-Auth-Token</code>)</label>
+                        <label for="speech-ep-token">Auth-Token (<code>X-Auth-Token</code>) <?php admin_help_button('speech-ep-token'); ?></label>
                         <input type="text" id="speech-ep-token" name="speech_ep_token"
                                autocomplete="off" spellcheck="false"
                                placeholder="<?= $editSpeechEp && (string) ($editSpeechEp['token'] ?? '') !== ''
                                                   ? htmlspecialchars(speechDictationMaskToken((string) $editSpeechEp['token']))
                                                   : 'ohne Token bleibt der Endpunkt offen' ?>">
-                        <p class="hint">
-                            Gemeinsames Geheimnis des SpeechInt-Servers (<code>SPEECHINT_TOKEN</code>
-                            bzw. <code>AUTH_TOKEN</code>). Das gespeicherte Token wird nur maskiert
-                            angezeigt – leer lassen behält es bei.
-                        </p>
                         <?php if ($editSpeechEp && (string) ($editSpeechEp['token'] ?? '') !== ''): ?>
                         <label class="inline" style="margin-top:6px">
                             <input type="checkbox" id="speech-ep-clear-token" name="speech_ep_clear_token">

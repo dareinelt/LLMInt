@@ -16,19 +16,22 @@ $adminPageTitle = 'Reranker';
 require __DIR__ . '/partials/bootstrap.php';
 require __DIR__ . '/partials/layout_head.php';
 
+/**
+ * Descriptions behind the "?" buttons of this page; the popup itself comes
+ * from admin/partials/help.php.
+ */
+admin_help_text('reranker-intro', 'Reranker',
+    'Ein Reranker bewertet die fusionierten Suchergebnisse neu und gibt eine präzisere Rangfolge '
+    . 'zurück. Kompatibel mit: Cohere Rerank, Jina Reranker, lokalen Rerank-APIs. Falls nicht '
+    . 'konfiguriert oder nicht erreichbar, werden die RRF-Ergebnisse direkt verwendet.');
+
 ?>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Reranker Einstellungen
     ═══════════════════════════════════════════════════════════════════════ -->
     <div class="card" id="config-reranker-card">
         <details class="config-panel" open>
-            <summary>🏆 Reranker</summary>
-
-            <p class="hint" style="margin-bottom:16px">
-                Ein Reranker bewertet die fusionierten Suchergebnisse neu und gibt eine präzisere Rangfolge zurück.
-                Kompatibel mit: Cohere Rerank, Jina Reranker, lokalen Rerank-APIs.
-                Falls nicht konfiguriert oder nicht erreichbar, werden die RRF-Ergebnisse direkt verwendet.
-            </p>
+            <summary>🏆 Reranker <?php admin_help_button('reranker-intro'); ?></summary>
 
             <form method="POST">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
