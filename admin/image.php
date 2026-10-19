@@ -517,18 +517,16 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
         return minutes + ':' + String(rest).padStart(2, '0') + ' min';
     }
 
-    function formatBytes(bytes) {
+    const MEGABYTE = 1024 * 1024;
+    const MB_NUMBER = new Intl.NumberFormat('de-DE', {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1
+    });
+
+    function formatMegabytes(bytes) {
         const value = Number(bytes);
         if (!isFinite(value) || value < 0) { return ''; }
-        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        let index = 0;
-        let size = value;
-        while (size >= 1024 && index < units.length - 1) {
-            size /= 1024;
-            index++;
-        }
-        const digits = size >= 10 || index === 0 ? 0 : 1;
-        return size.toFixed(digits).replace('.', ',') + ' ' + units[index];
+        return MB_NUMBER.format(value / MEGABYTE) + ' MB';
     }
 
     function stateText(component) {
@@ -593,12 +591,12 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
 
         const meta = [];
         if (progress.bytes_downloaded !== null && progress.bytes_downloaded !== undefined) {
-            const downloaded = formatBytes(progress.bytes_downloaded);
-            const total = formatBytes(progress.bytes_total);
-            meta.push(total ? downloaded + ' / ' + total : downloaded + ' geladen');
+            const downloaded = formatMegabytes(progress.bytes_downloaded);
+            const total = formatMegabytes(progress.bytes_total);
+            meta.push(total ? downloaded + ' von ' + total : downloaded + ' geladen');
         }
         if (progress.files_total !== null && progress.files_total !== undefined) {
-            meta.push((progress.files_downloaded || 0) + ' / ' + progress.files_total + ' Dateien');
+            meta.push((progress.files_downloaded || 0) + ' von ' + progress.files_total + ' Dateien');
         }
         if (progress.current_file) {
             meta.push('Datei: ' + progress.current_file);

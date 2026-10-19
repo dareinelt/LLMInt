@@ -695,7 +695,8 @@ Text-LLM ── Tool-Aufruf generate_image ──► api/chat.php
   (`percent`, `bytes_downloaded`/`bytes_total`, `files_downloaded`/`files_total`,
   `eta_seconds`, jeweils auch verschachtelt unter `progress`/`download`); meldet
   ImageInt nur `state`/`since_seconds`, bleibt der Balken unbestimmt und füllt sich
-  erst bei `ready` auf 100 %.
+  erst bei `ready` auf 100 %. Liefert ImageInt `bytes_downloaded`/`bytes_total`,
+  wird der Balken bestimmt und zeigt darunter „X von Y MB" (`formatMegabytes()`).
 - Tokens werden maskiert angezeigt (`imageIntMaskToken()`) und nie geloggt; Fehler-
   und Statusmeldungen sind deutsch.
 

@@ -760,8 +760,9 @@ Verbindungstest). Der Test fragt `api/image_health.php` ab.
 Das Panel `#image-load-panel` („⏬ Modell-Download") pollt dieselbe API automatisch
 (`?quiet=1&compact=1`): 2–60 s während der Ladephase, sonst alle 60 s, pausiert bei
 verstecktem Tab. Pro Komponente zeigt es einen Balken aus `components[*].progress`;
-die Funktionen `progressRow()`/`progressOf()`/`formatBytes()`/`formatDuration()`
-liegen im zweiten `<script>`-Block der Seite.
+die Funktionen `progressRow()`/`progressOf()`/`formatMegabytes()`/`formatDuration()`
+liegen im zweiten `<script>`-Block der Seite. Meldet ImageInt Bytes, steht unter dem
+Balken „X von Y MB" (`formatMegabytes()`, deutsches Zahlenformat, 1024-basiert).
 
 Die Aktionen `add_sd_endpoint`, `update_sd_endpoint`, `delete_sd_endpoint`,
 `add_comfy_endpoint`, `update_comfy_endpoint` und `delete_comfy_endpoint` werden von
