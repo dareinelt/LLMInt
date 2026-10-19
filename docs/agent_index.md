@@ -398,8 +398,11 @@ ImageInt's health cache so the bars (and the `MB/s` rate) move live; the panel p
 `bytes_downloaded`/`bytes_total`, `files_downloaded`/`files_total`, `eta_seconds` and
 `bytes_per_second` (flat or nested under `progress`/`download`); the parser also tolerates
 an older endpoint that only sends `state`/`since_seconds`, in which case the bars stay
-indeterminate until `state: ready`. `quiet=1` suppresses `writeLog()`, `compact=1` skips
-`/v1/models`.
+indeterminate until `state: ready`. When `bytes_downloaded` exceeds `bytes_total` (ImageInt
+counts the whole HuggingFace cache, so stale blobs can inflate it), the parser flags
+`bytes_inconsistent`, derives the percentage from the file count instead of the unusable
+byte ratio, and the panel shows "X MB im Cache" instead of the impossible "X von Y MB".
+`quiet=1` suppresses `writeLog()`, `compact=1` skips `/v1/models`.
 
 Non-obvious constraints — change only with the surrounding comment:
 
