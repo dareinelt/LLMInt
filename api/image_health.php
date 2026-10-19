@@ -14,12 +14,20 @@
  * `permanent: true`.
  *
  * GET:
- *   url   – base URL to probe instead of the configured one (optional)
- *   token – shared secret for that URL (optional; only used together with url)
+ *   url     – base URL to probe instead of the configured one (optional)
+ *   token   – shared secret for that URL (optional; only used together with url)
+ *   quiet   – `1` suppresses the log line (used by the auto-refreshing panel)
+ *   compact – `1` skips the `/v1/models` call (the panel only needs components)
  *
  * Returns JSON:
  *   { ok, loading, permanent, ready, reachable, status, message, retry_after,
  *     latency_ms, http, url, models: {…}, components: {…}, host: {…} }
+ *
+ * Every component carries `label`, `state_label`, `transient`, `since_seconds`
+ * and a `progress` block (`known`, `percent`, bytes, files, ETA). ImageInt does
+ * not report bytes today, so `progress.known` is false and the admin area shows
+ * an indeterminate bar; a future endpoint that reports them is rendered as a
+ * determinate bar without another LLMInt change.
  *
  * The token is never echoed back.
  */
@@ -42,6 +50,8 @@ require_once __DIR__ . '/../lib/image_generation.php';
 
 $urlParam = isset($_GET['url']) ? trim((string) $_GET['url']) : '';
 $target   = $urlParam !== '' ? $urlParam : imageIntUrl();
+$quiet    = isset($_GET['quiet']) && (string) $_GET['quiet'] === '1';
+$compact  = isset($_GET['compact']) && (string) $_GET['compact'] === '1';
 
 // A URL supplied by the form is always probed with exactly the token from the
 // form; the configured endpoint uses the stored secret.
@@ -73,6 +83,11 @@ if ($health['reachable']) {
             $host = $detail['host'];
         }
     }
+    // `/v1/ready` may carry the same component map; use it when `/v1/health`
+    // answered without a body.
+    if ($components === [] && $health['components'] !== []) {
+        $components = $health['components'];
+    }
     // `/health` and `/v1/ready` are unauthenticated by design, so a ready
     // service says nothing about the secret. A rejected token on the
     // authenticated detail endpoint is a permanent misconfiguration – waiting
@@ -82,9 +97,11 @@ if ($health['reachable']) {
             . 'Einstellungen prüfen – er muss zu IMAGEINT_TOKEN der Gegenseite passen.';
     }
 
-    $models = imageIntModels($target, $token);
-    if (is_array($models['models'])) {
-        $modelsRaw = $models['models'];
+    if (!$compact) {
+        $models = imageIntModels($target, $token);
+        if (is_array($models['models'])) {
+            $modelsRaw = $models['models'];
+        }
     }
 }
 
@@ -94,14 +111,16 @@ if ($authError !== '') {
 }
 $permanent = $permanent || $authError !== '';
 
-writeLog($health['loading'] ? 'info' : ($ok ? 'info' : 'warning'),
-    'Bildgenerierung: Verbindungstest '
-    . ($target !== '' ? $target : '(nicht konfiguriert)') . ' – '
-    . ($authError !== '' ? 'Zugangsschlüssel abgelehnt'
-        : ($permanent ? 'Host nicht unterstützt'
-            : ($health['loading'] ? 'Modelle werden noch geladen'
-                : ($ok ? 'bereit' : ($health['message'] !== '' ? $health['message'] : 'nicht bereit')))))
-    . ' (' . $health['http'] . ', ' . $health['latency_ms'] . ' ms).');
+if (!$quiet) {
+    writeLog($health['loading'] ? 'info' : ($ok ? 'info' : 'warning'),
+        'Bildgenerierung: Verbindungstest '
+        . ($target !== '' ? $target : '(nicht konfiguriert)') . ' – '
+        . ($authError !== '' ? 'Zugangsschlüssel abgelehnt'
+            : ($permanent ? 'Host nicht unterstützt'
+                : ($health['loading'] ? 'Modelle werden noch geladen'
+                    : ($ok ? 'bereit' : ($health['message'] !== '' ? $health['message'] : 'nicht bereit')))))
+        . ' (' . $health['http'] . ', ' . $health['latency_ms'] . ' ms).');
+}
 
 echo json_encode([
     'ok'          => $ok,

@@ -90,6 +90,70 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
     . 'behält es bei.');
 
 ?>
+<style>
+    .image-load-panel {
+        margin: 6px 0 18px;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface-alt);
+    }
+    .image-load-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+    }
+    .image-load-head strong { font-size: .9rem; }
+    .image-load-head .hint { flex: 1 1 220px; margin: 0; }
+    .image-load-head .btn { margin-left: auto; }
+    .image-progress-list { display: flex; flex-direction: column; gap: 12px; }
+    .image-progress-row { display: flex; flex-direction: column; gap: 4px; }
+    .image-progress-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: .85rem;
+    }
+    .image-progress-head .state { color: var(--text-muted); font-weight: normal; }
+    .image-progress-head .state.is-ready   { color: var(--success); }
+    .image-progress-head .state.is-error   { color: var(--error); }
+    .image-progress-head .state.is-loading { color: var(--warning); }
+    .image-progress-pct { font-variant-numeric: tabular-nums; color: var(--text-muted); }
+    .image-progress-track {
+        position: relative;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--border);
+        overflow: hidden;
+    }
+    .image-progress-fill {
+        height: 100%;
+        width: 0;
+        border-radius: inherit;
+        background: var(--accent);
+        transition: width .35s ease;
+    }
+    .image-progress-fill.is-ready { background: var(--success); }
+    .image-progress-fill.is-error { background: var(--error); }
+    .image-progress-fill.is-indeterminate {
+        width: 35%;
+        background: linear-gradient(90deg, var(--accent), var(--warning));
+        animation: image-progress-slide 1.4s ease-in-out infinite;
+    }
+    @keyframes image-progress-slide {
+        0%   { transform: translateX(-110%); }
+        100% { transform: translateX(320%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .image-progress-fill.is-indeterminate { animation: none; width: 100%; opacity: .45; }
+    }
+    .image-progress-meta { font-size: .78rem; color: var(--text-muted); }
+    .image-progress-meta.error   { color: var(--error); }
+    .image-progress-meta.warning { color: var(--warning); }
+</style>
     <!-- ═══════════════════════════════════════════════════════════════════════
          Bildgenerierung (ImageInt)
     ═══════════════════════════════════════════════════════════════════════ -->
@@ -134,6 +198,16 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
                     Chat <?= (int) $imageSyncTimeout ?> s)
                     <?php endif; ?>
                 </p>
+            </div>
+
+            <div class="image-load-panel" id="image-load-panel"<?= $imageUrl === '' ? ' hidden' : '' ?>>
+                <div class="image-load-head">
+                    <strong>⏬ Modell-Download</strong>
+                    <span class="hint" id="image-load-summary">wird geprüft …</span>
+                    <button type="button" class="btn btn-sm" id="image-load-refresh">↻ Aktualisieren</button>
+                </div>
+                <div class="image-progress-list" id="image-load-components"></div>
+                <p class="hint" id="image-load-note" hidden></p>
             </div>
 
             <div class="form-group">
@@ -417,7 +491,13 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
     const formUrl    = document.getElementById('image-ep-url');
     const formToken  = document.getElementById('image-ep-token');
 
-    if (!cardBtn && !formBtn) { return; }
+    const panel        = document.getElementById('image-load-panel');
+    const panelSummary = document.getElementById('image-load-summary');
+    const panelList    = document.getElementById('image-load-components');
+    const panelNote    = document.getElementById('image-load-note');
+    const panelRefresh = document.getElementById('image-load-refresh');
+
+    if (!cardBtn && !formBtn && !panel) { return; }
 
     const MAX_ATTEMPTS = 12;
 
@@ -427,20 +507,139 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
         return div.innerHTML;
     }
 
+    const COMPONENT_NAMES = { enhancer: 'Prompt-Enhancer', image: 'Bildmodell (Qwen-Image-2.1)' };
+
+    function formatDuration(seconds) {
+        const total = Math.max(0, Math.round(Number(seconds) || 0));
+        const minutes = Math.floor(total / 60);
+        const rest = total % 60;
+        if (minutes <= 0) { return rest + ' s'; }
+        return minutes + ':' + String(rest).padStart(2, '0') + ' min';
+    }
+
+    function formatBytes(bytes) {
+        const value = Number(bytes);
+        if (!isFinite(value) || value < 0) { return ''; }
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let index = 0;
+        let size = value;
+        while (size >= 1024 && index < units.length - 1) {
+            size /= 1024;
+            index++;
+        }
+        const digits = size >= 10 || index === 0 ? 0 : 1;
+        return size.toFixed(digits).replace('.', ',') + ' ' + units[index];
+    }
+
+    function stateText(component) {
+        const state = String(component.state || '').toLowerCase();
+        const labels = {
+            ready: 'bereit', loading: 'lädt', starting: 'startet', idle: 'untätig',
+            error: 'Fehler', unreachable: 'nicht erreichbar', unconfigured: 'nicht konfiguriert'
+        };
+        return labels[state] || component.state_label || component.state || 'unbekannt';
+    }
+
+    function stateClass(component, state) {
+        if (component.ok || state === 'bereit') { return 'is-ready'; }
+        if (state === 'Fehler' || state === 'nicht erreichbar' || state === 'nicht konfiguriert') {
+            return 'is-error';
+        }
+        if (state === 'lädt' || state === 'startet') { return 'is-loading'; }
+        return '';
+    }
+
+    function progressOf(component) {
+        const progress = component.progress || {};
+        let percent = progress.percent;
+        if (percent === null || percent === undefined) {
+            const done = Number(progress.bytes_downloaded);
+            const total = Number(progress.bytes_total);
+            if (isFinite(done) && isFinite(total) && total > 0) { percent = done / total * 100; }
+        }
+        if (percent === null || percent === undefined) {
+            const done = Number(progress.files_downloaded);
+            const total = Number(progress.files_total);
+            if (isFinite(done) && isFinite(total) && total > 0) { percent = done / total * 100; }
+        }
+        if (percent === null || percent === undefined) {
+            if (component.ok || String(component.state || '').toLowerCase() === 'ready') {
+                percent = 100;
+            }
+        }
+        if (percent !== null && percent !== undefined) {
+            percent = Math.max(0, Math.min(100, Number(percent)));
+        }
+        return { percent: percent, progress: progress };
+    }
+
+    function progressRow(key, component) {
+        const c = component || {};
+        const label = c.label || COMPONENT_NAMES[key] || key;
+        const state = stateText(c);
+        const kind = stateClass(c, state);
+        const info = progressOf(c);
+        const percent = info.percent;
+        const progress = info.progress || {};
+
+        const fill = percent === null || percent === undefined
+            ? '<div class="image-progress-fill is-indeterminate"></div>'
+            : '<div class="image-progress-fill ' + kind + '" style="width:'
+                + percent.toFixed(1) + '%"></div>';
+
+        const headRight = percent === null || percent === undefined
+            ? 'Bitte warten …'
+            : percent.toFixed(percent >= 10 ? 0 : 1).replace('.', ',') + ' %';
+
+        const meta = [];
+        if (progress.bytes_downloaded !== null && progress.bytes_downloaded !== undefined) {
+            const downloaded = formatBytes(progress.bytes_downloaded);
+            const total = formatBytes(progress.bytes_total);
+            meta.push(total ? downloaded + ' / ' + total : downloaded + ' geladen');
+        }
+        if (progress.files_total !== null && progress.files_total !== undefined) {
+            meta.push((progress.files_downloaded || 0) + ' / ' + progress.files_total + ' Dateien');
+        }
+        if (progress.current_file) {
+            meta.push('Datei: ' + progress.current_file);
+        }
+        if (c.transient && c.since_seconds !== null && c.since_seconds !== undefined) {
+            meta.push('seit ' + formatDuration(c.since_seconds));
+        }
+        if (progress.eta_seconds !== null && progress.eta_seconds !== undefined) {
+            meta.push('noch ca. ' + formatDuration(progress.eta_seconds));
+        }
+        if (c.load_seconds !== null && c.load_seconds !== undefined && Number(c.load_seconds) > 0) {
+            meta.push('Ladezeit ' + formatDuration(c.load_seconds));
+        }
+        if (c.model) { meta.push('Modell: ' + c.model); }
+
+        let metaHtml = meta.length
+            ? '<div class="image-progress-meta">' + esc(meta.join(' · ')) + '</div>'
+            : '';
+        if (c.message) {
+            const cls = kind === 'is-error' ? 'error' : (c.transient ? 'warning' : '');
+            metaHtml += '<div class="image-progress-meta' + (cls ? ' ' + cls : '') + '">'
+                + esc(c.message) + '</div>';
+        }
+
+        return '<div class="image-progress-row">'
+            + '<div class="image-progress-head">'
+            +   '<span><strong>' + esc(label) + '</strong> '
+            +     '<span class="state ' + kind + '">' + esc(state) + '</span></span>'
+            +   '<span class="image-progress-pct">' + esc(headRight) + '</span>'
+            + '</div>'
+            + '<div class="image-progress-track">' + fill + '</div>'
+            + metaHtml
+            + '</div>';
+    }
+
     function componentRows(components) {
-        const names = { enhancer: 'Prompt-Enhancer', image: 'Renderer (Qwen-Image-2.1)' };
-        let html = '';
-        Object.keys(components || {}).forEach(function (key) {
-            const c = components[key] || {};
-            const label = names[key] || key;
-            const ok = c.ok ? '✓' : '✗';
-            html += '<div>' + ok + ' <strong>' + esc(label) + '</strong>'
-                 + ' – ' + esc(c.state_label || c.state || 'unbekannt')
-                 + (c.model ? ' (Modell: ' + esc(c.model) + ')' : '')
-                 + (c.message ? ': ' + esc(c.message) : '')
-                 + '</div>';
-        });
-        return html;
+        const keys = Object.keys(components || {});
+        if (!keys.length) { return ''; }
+        return '<div class="image-progress-list">'
+            + keys.map(function (key) { return progressRow(key, components[key]); }).join('')
+            + '</div>';
     }
 
     function hostRows(host) {
@@ -566,6 +765,108 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
                   formUrl ? formUrl.value.trim() : '',
                   formToken ? formToken.value.trim() : '',
                   1);
+        });
+    }
+
+    // ── Auto-refreshing download panel ──────────────────────────────────────
+    // Polls the active endpoint while the models load. `quiet=1` keeps the
+    // access log clean, `compact=1` skips the redundant /v1/models call.
+    let panelTimer = null;
+    let panelBusy  = false;
+
+    function panelComponents(data) {
+        const components = (data && data.components) || {};
+        if (Object.keys(components).length) { return components; }
+        if (!data || (!data.loading && !data.ok)) { return {}; }
+        const state = data.loading ? 'loading' : 'ready';
+        const fallback = {};
+        ['enhancer', 'image'].forEach(function (key) {
+            fallback[key] = {
+                label: COMPONENT_NAMES[key],
+                state: state,
+                ok: !data.loading,
+                transient: !!data.loading,
+                message: data.message || ''
+            };
+        });
+        return fallback;
+    }
+
+    function renderPanel(data) {
+        const components = panelComponents(data);
+        panelList.innerHTML = componentRows(components);
+
+        const hasProgress = Object.keys(components).some(function (key) {
+            const info = progressOf(components[key] || {});
+            return info.percent !== null && info.percent !== undefined;
+        });
+
+        if (data && data.permanent) {
+            panelSummary.textContent = '✗ ' + (data.message || 'Dieser Host wird von ImageInt abgelehnt.');
+            panelSummary.style.color = 'var(--error)';
+        } else if (data && data.ok) {
+            panelSummary.textContent = '✓ ' + (data.message || 'Alle Komponenten sind bereit.');
+            panelSummary.style.color = 'var(--success)';
+        } else if (data && data.loading) {
+            panelSummary.textContent = '⏳ ' + (data.message || 'Die Modelle werden noch geladen …');
+            panelSummary.style.color = 'var(--warning)';
+        } else {
+            panelSummary.textContent = (data && data.message) || 'ImageInt ist nicht bereit.';
+            panelSummary.style.color = 'var(--error)';
+        }
+
+        if (data && data.loading && Object.keys(components).length && !hasProgress) {
+            panelNote.hidden = false;
+            panelNote.textContent = 'ImageInt meldet noch keinen Byte-Fortschritt. Die Balken zeigen '
+                + 'den Ladezustand, bis das jeweilige Modell bereit ist.';
+        } else {
+            panelNote.hidden = true;
+            panelNote.textContent = '';
+        }
+    }
+
+    function schedulePanel(milliseconds) {
+        if (panelTimer !== null) { clearTimeout(panelTimer); }
+        panelTimer = null;
+        if (document.hidden) { return; }
+        panelTimer = setTimeout(loadPanel, milliseconds);
+    }
+
+    async function loadPanel() {
+        if (!panel || panel.hidden || panelBusy) { return; }
+        if (panelTimer !== null) { clearTimeout(panelTimer); panelTimer = null; }
+        panelBusy = true;
+        if (panelRefresh) { panelRefresh.disabled = true; }
+        panelSummary.textContent = 'wird geprüft …';
+        panelSummary.style.color = 'var(--text-muted)';
+
+        try {
+            const res = await fetch('../api/image_health.php?quiet=1&compact=1', { cache: 'no-store' });
+            const data = await res.json();
+            renderPanel(data);
+            const wait = data && data.loading
+                ? Math.max(2, Math.min(60, parseInt(data.retry_after, 10) || 10))
+                : 60;
+            schedulePanel(wait * 1000);
+        } catch (e) {
+            panelSummary.textContent = '✗ ' + e.message;
+            panelSummary.style.color = 'var(--error)';
+            panelList.innerHTML = '';
+            panelNote.hidden = true;
+            schedulePanel(15000);
+        } finally {
+            panelBusy = false;
+            if (panelRefresh) { panelRefresh.disabled = false; }
+        }
+    }
+
+    if (panel && !panel.hidden) {
+        loadPanel();
+        if (panelRefresh) {
+            panelRefresh.addEventListener('click', function () { loadPanel(); });
+        }
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden && panelTimer === null) { loadPanel(); }
         });
     }
 })();

@@ -537,7 +537,7 @@ pflegt). Aufbau, Interaktion und Anpassung beschreibt
 | `api/test_vector_store.php` | POST | Admin | Verbindungstest docvecwizard-API (`mode=remote`) oder Milvus (`mode=local`) |
 | `api/image_status.php` | GET/POST | Session | Status eines Bildauftrags bzw. Übernahme des fertigen Bildes in die Sitzung |
 | `api/image_notify.php` | POST | Session + CSRF | Zustimmung zur Fertigstellungsmail hinterlegen |
-| `api/image_health.php` | GET | Admin | Verbindungstest gegen ImageInt (`/v1/ready`, `/v1/health`) |
+| `api/image_health.php` | GET | Admin | Verbindungstest gegen ImageInt (`/v1/ready`, `/v1/health`); `quiet=1`/`compact=1` für das Auto-Refresh-Download-Panel |
 | `api/image_notify_worker.php` | CLI/Cron | – | fertige Bildaufträge abarbeiten und Benachrichtigungsmails versenden |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
 | `api/speech_config.php` | GET | Session | Diktat-Konfiguration und CSRF-Token für die Oberfläche |
@@ -687,6 +687,15 @@ Text-LLM ── Tool-Aufruf generate_image ──► api/chat.php
 - Die Dimensionierung des Hosts (`host.cpu_cores`, `host.memory_gb`, `host.avx2`,
   `host.blocking`, `host.warnings`) sowie die beiden Modellserver (`components`)
   liefert `GET /v1/health`; der Verbindungstest im Adminbereich zeigt sie an.
+- Der Adminbereich (`admin/image.php`) pollt während der Ladephase automatisch
+  `api/image_health.php?quiet=1&compact=1` (5–30 s, pausiert bei verstecktem Tab) und
+  rendert pro Komponente einen Balken „⏬ Modell-Download". `quiet=1` unterdrückt den
+  Access-Log-Eintrag, `compact=1` überspringt `/v1/models`. Der Fortschritt wird in
+  `imageIntComponentProgress()` tolerant aus optionalen Feldern gelesen
+  (`percent`, `bytes_downloaded`/`bytes_total`, `files_downloaded`/`files_total`,
+  `eta_seconds`, jeweils auch verschachtelt unter `progress`/`download`); meldet
+  ImageInt nur `state`/`since_seconds`, bleibt der Balken unbestimmt und füllt sich
+  erst bei `ready` auf 100 %.
 - Tokens werden maskiert angezeigt (`imageIntMaskToken()`) und nie geloggt; Fehler-
   und Statusmeldungen sind deutsch.
 

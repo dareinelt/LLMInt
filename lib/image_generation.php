@@ -512,6 +512,197 @@ function imageIntDownloadImage(string $url, string $token = '', int $timeout = 6
 
 // ── Readiness / health ────────────────────────────────────────────────────────
 
+/** German label of an ImageInt component key. */
+function imageIntComponentLabel(string $key, array $component = []): string
+{
+    $label = trim((string) ($component['label'] ?? ''));
+    if ($label !== '') {
+        return $label;
+    }
+    switch ($key) {
+        case 'enhancer':
+            return 'Prompt-Enhancer';
+        case 'image':
+        case 'renderer':
+            return 'Bildmodell';
+        default:
+            return $key !== '' ? $key : 'Komponente';
+    }
+}
+
+/** German label of an ImageInt component state (`ready`, `loading`, …). */
+function imageIntStateLabel(string $state, string $fallback = ''): string
+{
+    switch (strtolower(trim($state))) {
+        case 'ready':
+            return 'bereit';
+        case 'loading':
+            return 'lädt';
+        case 'starting':
+            return 'startet';
+        case 'idle':
+            return 'untätig';
+        case 'error':
+            return 'Fehler';
+        case 'unreachable':
+            return 'nicht erreichbar';
+        case 'unconfigured':
+            return 'nicht konfiguriert';
+        default:
+            return $fallback !== '' ? $fallback : ($state !== '' ? $state : 'unbekannt');
+    }
+}
+
+/** Numeric value of a scalar, tolerating "42,5 %" and thousands separators. */
+function imageIntNumeric($value): ?float
+{
+    if (is_int($value) || is_float($value)) {
+        $number = (float) $value;
+        return is_finite($number) ? $number : null;
+    }
+    if (!is_string($value)) {
+        return null;
+    }
+    $clean = str_replace(['%', ' ', "\u{00A0}", "\u{202F}"], '', trim($value));
+    $clean = str_replace(',', '.', $clean);
+    return is_numeric($clean) ? (float) $clean : null;
+}
+
+/**
+ * Normalise the optional download progress of one component.
+ *
+ * ImageInt's current `/v1/health` reports only `state` and `since_seconds`, so
+ * `known` stays false and the admin area shows an indeterminate bar. The
+ * parser accepts a nested `progress`/`download` block as well as flat fields,
+ * so an endpoint that starts reporting bytes needs no LLMInt change.
+ *
+ * @return array{known:bool,percent:?float,bytes_downloaded:?int,bytes_total:?int,
+ *               files_downloaded:?int,files_total:?int,current_file:string,
+ *               eta_seconds:?int}
+ */
+function imageIntComponentProgress(array $component): array
+{
+    $sources = [];
+    foreach (['progress', 'download', 'download_progress'] as $key) {
+        if (isset($component[$key]) && is_array($component[$key])) {
+            $sources[] = $component[$key];
+        }
+    }
+    $sources[] = $component;
+
+    $pick = static function (array $names) use ($sources): ?float {
+        foreach ($sources as $source) {
+            foreach ($names as $name) {
+                if (!array_key_exists($name, $source)) {
+                    continue;
+                }
+                $number = imageIntNumeric($source[$name]);
+                if ($number !== null) {
+                    return $number;
+                }
+            }
+        }
+        return null;
+    };
+
+    $percent         = $pick(['percent', 'progress_percent', 'percentage', 'download_percent']);
+    $bytesDownloaded = $pick(['bytes_downloaded', 'downloaded_bytes', 'download_bytes', 'completed_bytes']);
+    $bytesTotal      = $pick(['bytes_total', 'total_bytes', 'download_total', 'size_bytes']);
+    $filesDownloaded = $pick(['files_downloaded', 'downloaded_files', 'files_done', 'files_completed']);
+    $filesTotal      = $pick(['files_total', 'total_files', 'file_count']);
+
+    if ($percent === null && $bytesDownloaded !== null && $bytesTotal !== null && $bytesTotal > 0) {
+        $percent = $bytesDownloaded / $bytesTotal * 100;
+    }
+    if ($percent === null && $filesDownloaded !== null && $filesTotal !== null && $filesTotal > 0) {
+        $percent = $filesDownloaded / $filesTotal * 100;
+    }
+
+    $state = strtolower(trim((string) ($component['state'] ?? '')));
+    if ($percent === null && ((bool) ($component['ready'] ?? false) || $state === 'ready')) {
+        $percent = 100.0;
+    }
+    if ($percent !== null) {
+        $percent = max(0.0, min(100.0, $percent));
+    }
+
+    $currentFile = '';
+    foreach ($sources as $source) {
+        foreach (['current_file', 'filename', 'file'] as $name) {
+            if (isset($source[$name]) && is_string($source[$name]) && trim($source[$name]) !== '') {
+                $currentFile = trim($source[$name]);
+                break 2;
+            }
+        }
+    }
+
+    $eta = $pick(['eta_seconds', 'remaining_seconds']);
+
+    return [
+        'known'            => $percent !== null,
+        'percent'          => $percent,
+        'bytes_downloaded' => $bytesDownloaded === null ? null : (int) round($bytesDownloaded),
+        'bytes_total'      => $bytesTotal === null ? null : (int) round($bytesTotal),
+        'files_downloaded' => $filesDownloaded === null ? null : (int) round($filesDownloaded),
+        'files_total'      => $filesTotal === null ? null : (int) round($filesTotal),
+        'current_file'     => $currentFile,
+        'eta_seconds'      => $eta === null ? null : (int) round($eta),
+    ];
+}
+
+/**
+ * Normalise the component map of an ImageInt `/v1/health` (or `/v1/ready`)
+ * response into the shape the admin area consumes.
+ *
+ * @return array<string,array<string,mixed>>
+ */
+function imageIntParseComponents(array $data): array
+{
+    $sources = [];
+    foreach (['components', 'enhancer', 'renderer', 'models', 'downloads'] as $key) {
+        if (isset($data[$key]) && is_array($data[$key])) {
+            $sources[$key] = $data[$key];
+        }
+    }
+
+    $components = [];
+    foreach ($sources as $groupKey => $group) {
+        // `/v1/health` may inline a single component as `"enhancer": {…}`
+        // instead of `"components": {"enhancer": {…}}`.
+        if (isset($group['state']) || isset($group['ready']) || isset($group['component'])) {
+            $group = [(string) ($group['component'] ?? $groupKey) => $group];
+        }
+        foreach ($group as $name => $component) {
+            if (!is_array($component)) {
+                continue;
+            }
+            $key = is_int($name) ? (string) ($component['component'] ?? $name) : (string) $name;
+            if (isset($components[$key])) {
+                continue;
+            }
+            $state = strtolower(trim((string) ($component['state'] ?? '')));
+
+            $components[$key] = [
+                'component'     => $key,
+                'label'         => imageIntComponentLabel($key, $component),
+                'state'         => $state,
+                'state_label'   => imageIntStateLabel($state, (string) ($component['state_label'] ?? '')),
+                'ok'            => (bool) ($component['ready'] ?? $component['ok'] ?? false),
+                'transient'     => (bool) ($component['transient']
+                    ?? in_array($state, ['loading', 'starting'], true)),
+                'model'         => (string) ($component['model'] ?? ''),
+                'message'       => (string) ($component['message'] ?? ''),
+                'since_seconds' => imageIntNumeric($component['since_seconds'] ?? null),
+                'load_seconds'  => imageIntNumeric($component['load_seconds'] ?? null),
+                'loaded_at'     => (string) ($component['loaded_at'] ?? ''),
+                'progress'      => imageIntComponentProgress($component),
+            ];
+        }
+    }
+
+    return $components;
+}
+
 /**
  * Reachability and readiness of an ImageInt service (GET /v1/ready).
  *
@@ -524,7 +715,8 @@ function imageIntDownloadImage(string $url, string $token = '', int $timeout = 6
  *
  * @return array{ok:bool,reachable:bool,loading:bool,ready:bool,status:string,
  *               message:string,retry_after:int,http:int,latency_ms:int,
- *               error:string,url:string,host:array<string,mixed>}
+ *               error:string,url:string,host:array<string,mixed>,
+ *               components:array<string,array<string,mixed>>}
  */
 function imageIntReady(?string $url = null, ?string $token = null, array $options = []): array
 {
@@ -544,6 +736,7 @@ function imageIntReady(?string $url = null, ?string $token = null, array $option
         'error'       => '',
         'url'         => $base,
         'host'        => [],
+        'components'  => [],
     ];
 
     if ($base === '') {
@@ -560,6 +753,7 @@ function imageIntReady(?string $url = null, ?string $token = null, array $option
 
     $data = is_array($response['data']) ? $response['data'] : [];
 
+    $health['components']  = imageIntParseComponents($data);
     $health['reachable']   = $response['http'] > 0;
     $health['loading']     = $response['loading'];
     $health['status']      = (string) ($data['status'] ?? '');
@@ -652,26 +846,7 @@ function imageIntHealth(?string $url = null, ?string $token = null, array $optio
 
     // Both model servers are reported individually under `components`
     // (keys `enhancer` and `image`). Older/newer shapes are tolerated.
-    $componentSources = [];
-    foreach (['components', 'enhancer', 'renderer', 'models'] as $key) {
-        if (isset($data[$key]) && is_array($data[$key])) {
-            $componentSources[] = $data[$key];
-        }
-    }
-    foreach ($componentSources as $group) {
-        foreach ($group as $name => $model) {
-            if (!is_array($model) || isset($result['models'][(string) $name])) {
-                continue;
-            }
-            $result['models'][(string) $name] = [
-                'state'       => (string) ($model['state'] ?? ''),
-                'state_label' => (string) ($model['state_label'] ?? ''),
-                'ok'          => (bool) ($model['ready'] ?? $model['ok'] ?? false),
-                'model'       => (string) ($model['model'] ?? ''),
-                'message'     => (string) ($model['message'] ?? ''),
-            ];
-        }
-    }
+    $result['models'] = imageIntParseComponents($data);
 
     $limits = $data['limits'] ?? [];
     $result['limits'] = is_array($limits) ? $limits : [];
