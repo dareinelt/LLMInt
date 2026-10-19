@@ -5,11 +5,11 @@ declare(strict_types=1);
  * tests/php/test_image_health.php
  *
  * Unit tests for the tolerant ImageInt component/progress normalisation that
- * feeds the download bars in the admin area. ImageInt's current /v1/health
- * reports only `state` and `since_seconds`, so the important guarantee is that
- * the parser degrades to an indeterminate bar instead of failing, and that it
- * starts producing a percentage as soon as an endpoint reports bytes, files or
- * a percentage.
+ * feeds the download bars in the admin area. ImageInt reports a `progress`
+ * block while a model downloads; the important guarantees are that the parser
+ * degrades to an indeterminate bar instead of failing, that it produces a
+ * percentage from bytes, files or a percentage, and that it carries the
+ * transfer rate (`bytes_per_second`) through for the MB/s display.
  *
  * Deliberately not covered here (they need a live endpoint): imageIntHealth(),
  * imageIntReady(), imageIntModels() and the HTTP transport.
@@ -84,6 +84,7 @@ test_case('imageIntComponentProgress() bleibt ohne Zahlen unbestimmt', function 
     assert_same(null, $progress['files_total']);
     assert_same('', $progress['current_file']);
     assert_same(null, $progress['eta_seconds']);
+    assert_same(null, $progress['rate_bytes_per_second']);
 });
 
 test_case('imageIntComponentProgress() setzt eine bereite Komponente auf 100 %', function (): void {
@@ -138,6 +139,39 @@ test_case('imageIntComponentProgress() liest auch flache Felder und die ETA', fu
 
     $flat = imageIntComponentProgress(['bytes_downloaded' => 512, 'bytes_total' => 2048]);
     assert_close(25.0, $flat['percent']);
+});
+
+test_case('imageIntComponentProgress() übernimmt die Übertragungsrate', function (): void {
+    $progress = imageIntComponentProgress([
+        'progress' => [
+            'bytes_downloaded'  => 1048576,
+            'bytes_total'       => 4194304,
+            'bytes_per_second'  => 524288.5,
+        ],
+    ]);
+
+    assert_close(25.0, $progress['percent']);
+    assert_close(524288.5, $progress['rate_bytes_per_second']);
+
+    // Die Rate ist unabhängig von einer bekannten Gesamtgröße.
+    $withoutTotal = imageIntComponentProgress([
+        'progress' => ['bytes_downloaded' => 10, 'bytes_per_second' => 2048],
+    ]);
+    assert_same(false, $withoutTotal['known']);
+    assert_close(2048.0, $withoutTotal['rate_bytes_per_second']);
+});
+
+test_case('imageIntComponentProgress() liest die Rate auch flach und über Aliase', function (): void {
+    assert_close(1024.0, imageIntComponentProgress(['bytes_per_second' => 1024])['rate_bytes_per_second']);
+    assert_close(1024.0, imageIntComponentProgress(['rate_bytes_per_second' => '1024'])['rate_bytes_per_second']);
+    assert_close(1024.0, imageIntComponentProgress(['speed_bytes_per_second' => 1024.0])['rate_bytes_per_second']);
+    assert_close(1024.0, imageIntComponentProgress(['download' => ['bytes_per_second' => 1024]])['rate_bytes_per_second']);
+});
+
+test_case('imageIntComponentProgress() verwirft eine unbrauchbare Rate und klemmt sie bei 0', function (): void {
+    assert_same(null, imageIntComponentProgress(['bytes_per_second' => 'schnell'])['rate_bytes_per_second']);
+    assert_same(null, imageIntComponentProgress(['bytes_per_second' => null])['rate_bytes_per_second']);
+    assert_same(0.0, imageIntComponentProgress(['bytes_per_second' => -5])['rate_bytes_per_second']);
 });
 
 test_case('imageIntComponentProgress() begrenzt Prozentwerte auf 0 bis 100', function (): void {

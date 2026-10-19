@@ -537,7 +537,7 @@ pflegt). Aufbau, Interaktion und Anpassung beschreibt
 | `api/test_vector_store.php` | POST | Admin | Verbindungstest docvecwizard-API (`mode=remote`) oder Milvus (`mode=local`) |
 | `api/image_status.php` | GET/POST | Session | Status eines Bildauftrags bzw. Übernahme des fertigen Bildes in die Sitzung |
 | `api/image_notify.php` | POST | Session + CSRF | Zustimmung zur Fertigstellungsmail hinterlegen |
-| `api/image_health.php` | GET | Admin | Verbindungstest gegen ImageInt (`/v1/ready`, `/v1/health`); `quiet=1`/`compact=1` für das Auto-Refresh-Download-Panel |
+| `api/image_health.php` | GET | Admin | Verbindungstest gegen ImageInt (`/v1/ready`, `/v1/health`); `quiet=1`/`compact=1` für das Auto-Refresh-Download-Panel, `fresh=1` umgeht den Health-Cache |
 | `api/image_notify_worker.php` | CLI/Cron | – | fertige Bildaufträge abarbeiten und Benachrichtigungsmails versenden |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | Admin | Verbindungstests |
 | `api/speech_config.php` | GET | Session | Diktat-Konfiguration und CSRF-Token für die Oberfläche |
@@ -688,15 +688,19 @@ Text-LLM ── Tool-Aufruf generate_image ──► api/chat.php
   `host.blocking`, `host.warnings`) sowie die beiden Modellserver (`components`)
   liefert `GET /v1/health`; der Verbindungstest im Adminbereich zeigt sie an.
 - Der Adminbereich (`admin/image.php`) pollt während der Ladephase automatisch
-  `api/image_health.php?quiet=1&compact=1` (5–30 s, pausiert bei verstecktem Tab) und
-  rendert pro Komponente einen Balken „⏬ Modell-Download". `quiet=1` unterdrückt den
-  Access-Log-Eintrag, `compact=1` überspringt `/v1/models`. Der Fortschritt wird in
-  `imageIntComponentProgress()` tolerant aus optionalen Feldern gelesen
-  (`percent`, `bytes_downloaded`/`bytes_total`, `files_downloaded`/`files_total`,
-  `eta_seconds`, jeweils auch verschachtelt unter `progress`/`download`); meldet
-  ImageInt nur `state`/`since_seconds`, bleibt der Balken unbestimmt und füllt sich
-  erst bei `ready` auf 100 %. Liefert ImageInt `bytes_downloaded`/`bytes_total`,
-  wird der Balken bestimmt und zeigt darunter „X von Y MB" (`formatMegabytes()`).
+  `api/image_health.php?quiet=1&compact=1&fresh=1` (2 s während der Ladephase, sonst
+  60 s, pausiert bei verstecktem Tab) und rendert pro Komponente einen Balken
+  „⏬ Modell-Download". `quiet=1` unterdrückt den Access-Log-Eintrag, `compact=1`
+  überspringt `/v1/models` und `fresh=1` umgeht den Health-Cache von ImageInt
+  (`?fresh=1` auf `/v1/ready` und `/v1/health`), damit die Balken live laufen. Der
+  Fortschritt wird in `imageIntComponentProgress()` tolerant aus optionalen Feldern
+  gelesen (`percent`, `bytes_downloaded`/`bytes_total`, `files_downloaded`/`files_total`,
+  `eta_seconds`, `bytes_per_second`, jeweils auch verschachtelt unter
+  `progress`/`download`); meldet ImageInt nur `state`/`since_seconds`, bleibt der Balken
+  unbestimmt und füllt sich erst bei `ready` auf 100 %. Liefert ImageInt
+  `bytes_downloaded`/`bytes_total`, wird der Balken bestimmt und zeigt darunter
+  „X von Y MB" (`formatMegabytes()`) sowie die aktuelle Übertragungsrate als
+  „Z MB/s" (`formatRate()`, gespeist aus `rate_bytes_per_second`).
 - Tokens werden maskiert angezeigt (`imageIntMaskToken()`) und nie geloggt; Fehler-
   und Statusmeldungen sind deutsch.
 

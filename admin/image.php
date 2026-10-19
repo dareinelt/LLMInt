@@ -529,6 +529,17 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
         return MB_NUMBER.format(value / MEGABYTE) + ' MB';
     }
 
+    const RATE_NUMBER = new Intl.NumberFormat('de-DE', {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 2
+    });
+
+    function formatRate(bytesPerSecond) {
+        const value = Number(bytesPerSecond);
+        if (!isFinite(value) || value <= 0) { return ''; }
+        return RATE_NUMBER.format(value / MEGABYTE) + ' MB/s';
+    }
+
     function stateText(component) {
         const state = String(component.state || '').toLowerCase();
         const labels = {
@@ -595,6 +606,8 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
             const total = formatMegabytes(progress.bytes_total);
             meta.push(total ? downloaded + ' von ' + total : downloaded + ' geladen');
         }
+        const rate = formatRate(progress.rate_bytes_per_second);
+        if (rate) { meta.push(rate); }
         if (progress.files_total !== null && progress.files_total !== undefined) {
             meta.push((progress.files_downloaded || 0) + ' von ' + progress.files_total + ' Dateien');
         }
@@ -690,10 +703,10 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
         if (detailEl) { detailEl.hidden = true; }
 
         let query = '../api/image_health.php';
-        const params = [];
+        const params = ['fresh=1'];
         if (url)   { params.push('url='   + encodeURIComponent(url)); }
         if (token) { params.push('token=' + encodeURIComponent(token)); }
-        if (params.length) { query += '?' + params.join('&'); }
+        query += '?' + params.join('&');
 
         try {
             const res  = await fetch(query, { cache: 'no-store' });
@@ -768,9 +781,14 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
 
     // ── Auto-refreshing download panel ──────────────────────────────────────
     // Polls the active endpoint while the models load. `quiet=1` keeps the
-    // access log clean, `compact=1` skips the redundant /v1/models call.
-    let panelTimer = null;
-    let panelBusy  = false;
+    // access log clean, `compact=1` skips the redundant /v1/models call and
+    // `fresh=1` bypasses the ImageInt health cache so the bars and the transfer
+    // rate move in near real time.
+    const PANEL_LIVE_MS  = 2000;
+    const PANEL_IDLE_MS  = 60000;
+    let panelTimer  = null;
+    let panelBusy   = false;
+    let panelLoaded = false;
 
     function panelComponents(data) {
         const components = (data && data.components) || {};
@@ -815,7 +833,7 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
 
         if (data && data.loading && Object.keys(components).length && !hasProgress) {
             panelNote.hidden = false;
-            panelNote.textContent = 'ImageInt meldet noch keinen Byte-Fortschritt. Die Balken zeigen '
+            panelNote.textContent = 'ImageInt meldet noch keinen Fortschritt. Die Balken zeigen '
                 + 'den Ladezustand, bis das jeweilige Modell bereit ist.';
         } else {
             panelNote.hidden = true;
@@ -835,17 +853,20 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
         if (panelTimer !== null) { clearTimeout(panelTimer); panelTimer = null; }
         panelBusy = true;
         if (panelRefresh) { panelRefresh.disabled = true; }
-        panelSummary.textContent = 'wird geprüft …';
-        panelSummary.style.color = 'var(--text-muted)';
+        if (!panelLoaded) {
+            panelSummary.textContent = 'wird geprüft …';
+            panelSummary.style.color = 'var(--text-muted)';
+        }
 
         try {
-            const res = await fetch('../api/image_health.php?quiet=1&compact=1', { cache: 'no-store' });
+            const res = await fetch('../api/image_health.php?quiet=1&compact=1&fresh=1', { cache: 'no-store' });
             const data = await res.json();
             renderPanel(data);
-            const wait = data && data.loading
-                ? Math.max(2, Math.min(60, parseInt(data.retry_after, 10) || 10))
-                : 60;
-            schedulePanel(wait * 1000);
+            panelLoaded = true;
+            // While a model loads the panel polls fast; otherwise it only keeps
+            // the state fresh. A finished download needs no live updates.
+            const wait = data && data.loading ? PANEL_LIVE_MS : PANEL_IDLE_MS;
+            schedulePanel(wait);
         } catch (e) {
             panelSummary.textContent = '✗ ' + e.message;
             panelSummary.style.color = 'var(--error)';

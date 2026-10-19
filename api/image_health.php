@@ -18,16 +18,18 @@
  *   token   – shared secret for that URL (optional; only used together with url)
  *   quiet   – `1` suppresses the log line (used by the auto-refreshing panel)
  *   compact – `1` skips the `/v1/models` call (the panel only needs components)
+ *   fresh   – `1` bypasses the ImageInt health cache (live progress bars)
  *
  * Returns JSON:
  *   { ok, loading, permanent, ready, reachable, status, message, retry_after,
  *     latency_ms, http, url, models: {…}, components: {…}, host: {…} }
  *
  * Every component carries `label`, `state_label`, `transient`, `since_seconds`
- * and a `progress` block (`known`, `percent`, bytes, files, ETA). ImageInt does
- * not report bytes today, so `progress.known` is false and the admin area shows
- * an indeterminate bar; a future endpoint that reports them is rendered as a
- * determinate bar without another LLMInt change.
+ * and a `progress` block (`known`, `percent`, bytes, files, ETA and
+ * `rate_bytes_per_second`). While a model downloads, `known` is true and the
+ * admin area renders a determinate bar with the current transfer rate.
+ * ImageInt caches its health snapshot for a few seconds; `fresh=1` forces a new
+ * probe so the bars move in near real time.
  *
  * The token is never echoed back.
  */
@@ -52,6 +54,9 @@ $urlParam = isset($_GET['url']) ? trim((string) $_GET['url']) : '';
 $target   = $urlParam !== '' ? $urlParam : imageIntUrl();
 $quiet    = isset($_GET['quiet']) && (string) $_GET['quiet'] === '1';
 $compact  = isset($_GET['compact']) && (string) $_GET['compact'] === '1';
+$fresh    = isset($_GET['fresh']) && (string) $_GET['fresh'] === '1';
+
+$probeOptions = ['timeout' => 15, 'connect_timeout' => 8, 'fresh' => $fresh];
 
 // A URL supplied by the form is always probed with exactly the token from the
 // form; the configured endpoint uses the stored secret.
@@ -59,7 +64,7 @@ $token = $urlParam !== ''
     ? trim((string) ($_GET['token'] ?? ''))
     : imageIntToken();
 
-$health = imageIntReady($target, $token, ['timeout' => 15, 'connect_timeout' => 8]);
+$health = imageIntReady($target, $token, $probeOptions);
 $permanent = $health['error'] === 'host_unsupported';
 
 // ── Detail of the service and its two model servers ──────────────────────────
@@ -74,7 +79,7 @@ $modelsRaw  = [];
 $authError  = '';
 
 if ($health['reachable']) {
-    $detail = imageIntHealth($target, $token, ['timeout' => 15, 'connect_timeout' => 8]);
+    $detail = imageIntHealth($target, $token, $probeOptions);
     if ($detail['ok'] || $detail['models'] !== []) {
         $components = $detail['models'];
         $limits     = $detail['limits'];

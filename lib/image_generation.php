@@ -571,14 +571,14 @@ function imageIntNumeric($value): ?float
 /**
  * Normalise the optional download progress of one component.
  *
- * ImageInt's current `/v1/health` reports only `state` and `since_seconds`, so
- * `known` stays false and the admin area shows an indeterminate bar. The
- * parser accepts a nested `progress`/`download` block as well as flat fields,
- * so an endpoint that starts reporting bytes needs no LLMInt change.
+ * ImageInt reports the download of a cold start in `components[*].progress`;
+ * an endpoint that does not (or an older ImageInt) leaves `known` false and the
+ * admin area shows an indeterminate bar. The parser accepts a nested
+ * `progress`/`download` block as well as flat fields, so either shape works.
  *
  * @return array{known:bool,percent:?float,bytes_downloaded:?int,bytes_total:?int,
  *               files_downloaded:?int,files_total:?int,current_file:string,
- *               eta_seconds:?int}
+ *               eta_seconds:?int,rate_bytes_per_second:?float}
  */
 function imageIntComponentProgress(array $component): array
 {
@@ -637,16 +637,25 @@ function imageIntComponentProgress(array $component): array
     }
 
     $eta = $pick(['eta_seconds', 'remaining_seconds']);
+    $rate = $pick([
+        'bytes_per_second',
+        'rate_bytes_per_second',
+        'speed_bytes_per_second',
+    ]);
+    if ($rate !== null) {
+        $rate = max(0.0, round($rate, 1));
+    }
 
     return [
-        'known'            => $percent !== null,
-        'percent'          => $percent,
-        'bytes_downloaded' => $bytesDownloaded === null ? null : (int) round($bytesDownloaded),
-        'bytes_total'      => $bytesTotal === null ? null : (int) round($bytesTotal),
-        'files_downloaded' => $filesDownloaded === null ? null : (int) round($filesDownloaded),
-        'files_total'      => $filesTotal === null ? null : (int) round($filesTotal),
-        'current_file'     => $currentFile,
-        'eta_seconds'      => $eta === null ? null : (int) round($eta),
+        'known'                 => $percent !== null,
+        'percent'               => $percent,
+        'bytes_downloaded'      => $bytesDownloaded === null ? null : (int) round($bytesDownloaded),
+        'bytes_total'           => $bytesTotal === null ? null : (int) round($bytesTotal),
+        'files_downloaded'      => $filesDownloaded === null ? null : (int) round($filesDownloaded),
+        'files_total'           => $filesTotal === null ? null : (int) round($filesTotal),
+        'current_file'          => $currentFile,
+        'eta_seconds'           => $eta === null ? null : (int) round($eta),
+        'rate_bytes_per_second' => $rate,
     ];
 }
 
@@ -711,7 +720,7 @@ function imageIntParseComponents(array $data): array
  * separately: `ready` for the first, `loading` for the second. Only
  * `host_unsupported` is a permanent misconfiguration.
  *
- * @param array{timeout?:int,connect_timeout?:int} $options
+ * @param array{timeout?:int,connect_timeout?:int,fresh?:bool} $options
  *
  * @return array{ok:bool,reachable:bool,loading:bool,ready:bool,status:string,
  *               message:string,retry_after:int,http:int,latency_ms:int,
@@ -745,7 +754,7 @@ function imageIntReady(?string $url = null, ?string $token = null, array $option
         return $health;
     }
 
-    $response = imageIntHttpCall($base . '/v1/ready', [
+    $response = imageIntHttpCall($base . '/v1/ready' . (empty($options['fresh']) ? '' : '?fresh=1'), [
         'timeout'         => max(5, min(600, (int) ($options['timeout'] ?? 15))),
         'connect_timeout' => max(1, min(60, (int) ($options['connect_timeout'] ?? 10))),
         'token'           => $secret,
@@ -796,6 +805,8 @@ function imageIntReady(?string $url = null, ?string $token = null, array $option
  * Per-component detail of an ImageInt service (GET /v1/health), including the
  * `host` sizing block the admin card shows.
  *
+ * @param array{timeout?:int,connect_timeout?:int,fresh?:bool} $options
+ *
  * @return array{ok:bool,http:int,error:string,message:string,loading:bool,
  *               latency_ms:int,ready:bool,models:array<string,array<string,mixed>>,
  *               limits:array<string,mixed>,quant:string,
@@ -827,7 +838,7 @@ function imageIntHealth(?string $url = null, ?string $token = null, array $optio
         return $result;
     }
 
-    $response = imageIntHttpCall($base . '/v1/health', [
+    $response = imageIntHttpCall($base . '/v1/health' . (empty($options['fresh']) ? '' : '?fresh=1'), [
         'timeout'         => max(5, min(600, (int) ($options['timeout'] ?? 15))),
         'connect_timeout' => max(1, min(60, (int) ($options['connect_timeout'] ?? 10))),
         'token'           => $secret,
