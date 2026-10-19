@@ -27,7 +27,10 @@
  * Every component carries `label`, `state_label`, `transient`, `since_seconds`
  * and a `progress` block (`known`, `percent`, bytes, files, ETA and
  * `rate_bytes_per_second`). While a model downloads, `known` is true and the
- * admin area renders a determinate bar with the current transfer rate.
+ * admin area renders a determinate bar with the current transfer rate. When
+ * `bytes_downloaded` exceeds `bytes_total` (stale blobs in the HuggingFace
+ * cache), `bytes_inconsistent` is true and the percentage falls back to the
+ * file count.
  * ImageInt caches its health snapshot for a few seconds; `fresh=1` forces a new
  * probe so the bars move in near real time.
  *

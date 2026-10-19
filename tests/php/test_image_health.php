@@ -80,6 +80,7 @@ test_case('imageIntComponentProgress() bleibt ohne Zahlen unbestimmt', function 
     assert_same(null, $progress['percent']);
     assert_same(null, $progress['bytes_downloaded']);
     assert_same(null, $progress['bytes_total']);
+    assert_same(false, $progress['bytes_inconsistent']);
     assert_same(null, $progress['files_downloaded']);
     assert_same(null, $progress['files_total']);
     assert_same('', $progress['current_file']);
@@ -177,6 +178,46 @@ test_case('imageIntComponentProgress() verwirft eine unbrauchbare Rate und klemm
 test_case('imageIntComponentProgress() begrenzt Prozentwerte auf 0 bis 100', function (): void {
     assert_same(100.0, imageIntComponentProgress(['progress' => ['percent' => 150]])['percent']);
     assert_same(0.0, imageIntComponentProgress(['progress' => ['percent' => -5]])['percent']);
+});
+
+test_case('imageIntComponentProgress() nutzt bei mehr Bytes als Gesamtgröße die Dateizahl', function (): void {
+    $progress = imageIntComponentProgress([
+        'state'    => 'loading',
+        'progress' => [
+            'percent'          => 100.0,
+            'bytes_downloaded' => 24000,
+            'bytes_total'      => 18000,
+            'files_downloaded' => 5,
+            'files_total'      => 15,
+        ],
+    ]);
+
+    assert_same(true, $progress['bytes_inconsistent']);
+    assert_close(33.3333, $progress['percent'], 0.01);
+    assert_same(24000, $progress['bytes_downloaded'], 'Der Rohwert bleibt für die Anzeige erhalten');
+    assert_same(18000, $progress['bytes_total']);
+    assert_same(5, $progress['files_downloaded']);
+});
+
+test_case('imageIntComponentProgress() bleibt ohne Dateizahl unbestimmt, wenn die Bytes nicht passen', function (): void {
+    $progress = imageIntComponentProgress([
+        'progress' => [
+            'percent'          => 100,
+            'bytes_downloaded' => 24000,
+            'bytes_total'      => 18000,
+        ],
+    ]);
+
+    assert_same(true, $progress['bytes_inconsistent']);
+    assert_same(false, $progress['known']);
+    assert_same(null, $progress['percent'], '100 % aus dem unbrauchbaren Byte-Verhältnis wird verworfen');
+});
+
+test_case('imageIntComponentProgress() klemmt mehr Dateien als Dateien gesamt', function (): void {
+    $progress = imageIntComponentProgress(['files_downloaded' => 18, 'files_total' => 15]);
+
+    assert_same(15, $progress['files_downloaded']);
+    assert_close(100.0, $progress['percent']);
 });
 
 test_case('imageIntComponentProgress() ignoriert eine Division durch null', function (): void {

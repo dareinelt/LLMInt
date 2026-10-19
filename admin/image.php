@@ -560,16 +560,25 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
 
     function progressOf(component) {
         const progress = component.progress || {};
+        const done = Number(progress.bytes_downloaded);
+        const total = Number(progress.bytes_total);
+        const filesDone = Number(progress.files_downloaded);
+        const filesTotal = Number(progress.files_total);
+        const bytesInconsistent = progress.bytes_inconsistent === true
+            || (isFinite(done) && isFinite(total) && total > 0 && done > total);
+        const filesPercent = isFinite(filesDone) && isFinite(filesTotal) && filesTotal > 0
+            ? Math.min(filesDone, filesTotal) / filesTotal * 100
+            : null;
+
         let percent = progress.percent;
-        if (percent === null || percent === undefined) {
-            const done = Number(progress.bytes_downloaded);
-            const total = Number(progress.bytes_total);
+        if (bytesInconsistent) {
+            percent = filesPercent;
+        }
+        if (!bytesInconsistent && (percent === null || percent === undefined)) {
             if (isFinite(done) && isFinite(total) && total > 0) { percent = done / total * 100; }
         }
-        if (percent === null || percent === undefined) {
-            const done = Number(progress.files_downloaded);
-            const total = Number(progress.files_total);
-            if (isFinite(done) && isFinite(total) && total > 0) { percent = done / total * 100; }
+        if (!bytesInconsistent && (percent === null || percent === undefined)) {
+            if (filesPercent !== null) { percent = filesPercent; }
         }
         if (percent === null || percent === undefined) {
             if (component.ok || String(component.state || '').toLowerCase() === 'ready') {
@@ -579,7 +588,7 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
         if (percent !== null && percent !== undefined) {
             percent = Math.max(0, Math.min(100, Number(percent)));
         }
-        return { percent: percent, progress: progress };
+        return { percent: percent, progress: progress, bytesInconsistent: bytesInconsistent };
     }
 
     function progressRow(key, component) {
@@ -604,12 +613,20 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
         if (progress.bytes_downloaded !== null && progress.bytes_downloaded !== undefined) {
             const downloaded = formatMegabytes(progress.bytes_downloaded);
             const total = formatMegabytes(progress.bytes_total);
-            meta.push(total ? downloaded + ' von ' + total : downloaded + ' geladen');
+            // Never pair a byte count with a smaller total: that reads as
+            // "23.686 MB von 17.967 MB" and makes the panel look broken.
+            if (info.bytesInconsistent) {
+                meta.push(downloaded + ' im Cache');
+            } else {
+                meta.push(total ? downloaded + ' von ' + total : downloaded + ' geladen');
+            }
         }
         const rate = formatRate(progress.rate_bytes_per_second);
         if (rate) { meta.push(rate); }
         if (progress.files_total !== null && progress.files_total !== undefined) {
-            meta.push((progress.files_downloaded || 0) + ' von ' + progress.files_total + ' Dateien');
+            const filesTotal = Number(progress.files_total);
+            const filesDone = Math.min(Number(progress.files_downloaded) || 0, filesTotal);
+            meta.push(filesDone + ' von ' + filesTotal + ' Dateien');
         }
         if (progress.current_file) {
             meta.push('Datei: ' + progress.current_file);

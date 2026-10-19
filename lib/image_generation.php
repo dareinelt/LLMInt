@@ -577,8 +577,8 @@ function imageIntNumeric($value): ?float
  * `progress`/`download` block as well as flat fields, so either shape works.
  *
  * @return array{known:bool,percent:?float,bytes_downloaded:?int,bytes_total:?int,
- *               files_downloaded:?int,files_total:?int,current_file:string,
- *               eta_seconds:?int,rate_bytes_per_second:?float}
+ *               bytes_inconsistent:bool,files_downloaded:?int,files_total:?int,
+ *               current_file:string,eta_seconds:?int,rate_bytes_per_second:?float}
  */
 function imageIntComponentProgress(array $component): array
 {
@@ -611,11 +611,32 @@ function imageIntComponentProgress(array $component): array
     $filesDownloaded = $pick(['files_downloaded', 'downloaded_files', 'files_done', 'files_completed']);
     $filesTotal      = $pick(['files_total', 'total_files', 'file_count']);
 
-    if ($percent === null && $bytesDownloaded !== null && $bytesTotal !== null && $bytesTotal > 0) {
-        $percent = $bytesDownloaded / $bytesTotal * 100;
+    $filesPercent = null;
+    if ($filesDownloaded !== null && $filesTotal !== null && $filesTotal > 0) {
+        $filesDownloaded = min($filesDownloaded, $filesTotal);
+        $filesPercent = $filesDownloaded / $filesTotal * 100;
     }
-    if ($percent === null && $filesDownloaded !== null && $filesTotal !== null && $filesTotal > 0) {
-        $percent = $filesDownloaded / $filesTotal * 100;
+
+    // ImageInt counts every blob in the HuggingFace cache, while bytes_total is
+    // the size of the repository. Stale blobs from an earlier revision (or an
+    // interrupted download) can push the byte count above the total, which
+    // would render as "23.686 MB von 17.967 MB". In that case the byte ratio is
+    // unusable; the file count still tells how far the load has come.
+    $bytesInconsistent = $bytesDownloaded !== null && $bytesTotal !== null
+        && $bytesTotal > 0 && $bytesDownloaded > $bytesTotal;
+
+    if ($bytesInconsistent) {
+        // Ignore any percent derived from the byte ratio (ImageInt clamps its
+        // own to 100) and fall back to the file count; without one the bar
+        // stays indeterminate instead of pretending to be complete.
+        $percent = $filesPercent;
+    } else {
+        if ($percent === null && $bytesDownloaded !== null && $bytesTotal !== null && $bytesTotal > 0) {
+            $percent = $bytesDownloaded / $bytesTotal * 100;
+        }
+        if ($percent === null && $filesPercent !== null) {
+            $percent = $filesPercent;
+        }
     }
 
     $state = strtolower(trim((string) ($component['state'] ?? '')));
@@ -651,6 +672,7 @@ function imageIntComponentProgress(array $component): array
         'percent'               => $percent,
         'bytes_downloaded'      => $bytesDownloaded === null ? null : (int) round($bytesDownloaded),
         'bytes_total'           => $bytesTotal === null ? null : (int) round($bytesTotal),
+        'bytes_inconsistent'    => $bytesInconsistent,
         'files_downloaded'      => $filesDownloaded === null ? null : (int) round($filesDownloaded),
         'files_total'           => $filesTotal === null ? null : (int) round($filesTotal),
         'current_file'          => $currentFile,

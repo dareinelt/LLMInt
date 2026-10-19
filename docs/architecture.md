@@ -700,7 +700,12 @@ Text-LLM ── Tool-Aufruf generate_image ──► api/chat.php
   unbestimmt und füllt sich erst bei `ready` auf 100 %. Liefert ImageInt
   `bytes_downloaded`/`bytes_total`, wird der Balken bestimmt und zeigt darunter
   „X von Y MB" (`formatMegabytes()`) sowie die aktuelle Übertragungsrate als
-  „Z MB/s" (`formatRate()`, gespeist aus `rate_bytes_per_second`).
+  „Z MB/s" (`formatRate()`, gespeist aus `rate_bytes_per_second`). Übersteigt
+  `bytes_downloaded` die Gesamtgröße (ImageInt zählt den gesamten HuggingFace-Cache,
+  alte Blobs einer früheren Revision können ihn aufblähen), markiert
+  `imageIntComponentProgress()` das mit `bytes_inconsistent`: der Prozentwert kommt
+  dann aus der Dateizahl (sonst bleibt der Balken unbestimmt) und die Zeile lautet
+  „X MB im Cache" statt des unmöglichen „X von Y MB".
 - Tokens werden maskiert angezeigt (`imageIntMaskToken()`) und nie geloggt; Fehler-
   und Statusmeldungen sind deutsch.
 
