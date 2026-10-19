@@ -88,7 +88,7 @@ OpenAI-compatible API.
 | `api/healthcheck.php` | Aggregated health status of all LLM endpoints |
 | `api/image_status.php` | Job status of a running image render; also adopts the finished PNG into the stored session |
 | `api/image_notify.php` | Records the user's consent to the completion e-mail in `image_notifications` |
-| `api/image_health.php` | Admin connection test against ImageInt (`/v1/ready`, `/v1/health`); `quiet=1`/`compact=1` for the auto-refresh download panel |
+| `api/image_health.php` | Admin connection test against ImageInt (`/v1/ready`, `/v1/health`); `quiet=1`/`compact=1` for the auto-refresh download panel, `fresh=1` bypasses the ImageInt health cache |
 | `api/image_notify_worker.php` | Cron/CLI worker: drains `image_notifications` and sends the completion mails |
 | `api/openai/v1/**` | OpenAI-compatible endpoints **without** tools |
 | `api/openai-tools/v1/**` | OpenAI-compatible endpoints **with** tools |
@@ -389,13 +389,17 @@ German message, retry after `retry_after`), never as an error. `503` with
 `error: "host_unsupported"` is the opposite — a permanent misconfiguration (missing AVX2)
 that must be reported as a hard failure.
 
-**Download progress:** `admin/image.php` polls `api/image_health.php?quiet=1&compact=1`
-while the models load and renders one progress bar per component (`imageIntParseComponents()`
-+ `imageIntComponentProgress()`). ImageInt reports no byte counts today, so the bars are
-indeterminate until `state: ready`; if ImageInt later adds `percent`, `bytes_downloaded`/
-`bytes_total`, `files_downloaded`/`files_total` or `eta_seconds` (flat or nested under
-`progress`/`download`), the bars become determinate without further LLMInt changes.
-`quiet=1` suppresses `writeLog()`, `compact=1` skips `/v1/models`.
+**Download progress:** `admin/image.php` polls
+`api/image_health.php?quiet=1&compact=1&fresh=1` while the models load and renders one
+progress bar per component (`imageIntParseComponents()` + `imageIntComponentProgress()`).
+`fresh=1` makes LLMInt forward `?fresh=1` to `/v1/ready` and `/v1/health`, which bypasses
+ImageInt's health cache so the bars (and the `MB/s` rate) move live; the panel polls every
+2 s while loading and every 60 s otherwise. ImageInt reports `percent`,
+`bytes_downloaded`/`bytes_total`, `files_downloaded`/`files_total`, `eta_seconds` and
+`bytes_per_second` (flat or nested under `progress`/`download`); the parser also tolerates
+an older endpoint that only sends `state`/`since_seconds`, in which case the bars stay
+indeterminate until `state: ready`. `quiet=1` suppresses `writeLog()`, `compact=1` skips
+`/v1/models`.
 
 Non-obvious constraints — change only with the surrounding comment:
 
@@ -639,7 +643,7 @@ domain:
 | `api/test_vector_store.php` | POST | admin | Connection test (`mode=remote\|local`) |
 | `api/image_status.php` | GET/POST | session | Job status of a running render / adopt the finished image |
 | `api/image_notify.php` | POST | session + CSRF | Record consent to the completion e-mail |
-| `api/image_health.php` | GET | admin | ImageInt connection test (`/v1/ready`, `/v1/health`); `quiet`/`compact` params |
+| `api/image_health.php` | GET | admin | ImageInt connection test (`/v1/ready`, `/v1/health`); `quiet`/`compact`/`fresh` params |
 | `api/image_notify_worker.php` | CLI/cron | – | Send the completion mails for finished jobs |
 | `api/test_searxng.php`, `api/test_ldap.php`, `api/test_smtp.php` | GET/POST | admin | Connection tests |
 | `api/speech_config.php` | GET | session | Dictation config + CSRF token for the chat UI |

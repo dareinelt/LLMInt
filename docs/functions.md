@@ -192,12 +192,12 @@ PHP-Anfrage, danach übernimmt das Browser-Polling), `IMAGE_INT_POLL_INTERVAL_DE
 |---|---|---|
 | `imageIntHttpCall` | `imageIntHttpCall(string $url, array $options = []): array` | Gemeinsamer cURL-Aufruf mit `X-Auth-Token`, Timeout-Klemmen und flacher Fehlerauswertung (`ok`, `error`, `message`, `transient`). |
 | `imageIntDownloadImage` | `imageIntDownloadImage(string $url, string $token = '', int $timeout = 60): array` | Lädt das fertige PNG als Binärdaten. |
-| `imageIntReady` | `imageIntReady(?string $url = null, ?string $token = null, array $options = []): array` | `GET /v1/ready`; unterscheidet Ladephase (`transient`, `retry_after`) von permanenter Fehlkonfiguration (`host_unsupported`). Liefert zusätzlich `components` (falls die Antwort sie enthält). |
-| `imageIntHealth` | `imageIntHealth(?string $url = null, ?string $token = null, array $options = []): array` | `GET /v1/health`; liefert Komponenten- und Host-Dimensionierung (`host.cpu_cores`, `host.memory_gb`, `host.avx2`, `host.blocking`, `host.warnings`). Jede Komponente trägt `label`, `state_label`, `transient`, `since_seconds`, `load_seconds` und `progress`. |
+| `imageIntReady` | `imageIntReady(?string $url = null, ?string $token = null, array $options = []): array` | `GET /v1/ready`; unterscheidet Ladephase (`transient`, `retry_after`) von permanenter Fehlkonfiguration (`host_unsupported`). Liefert zusätzlich `components` (falls die Antwort sie enthält). `$options['fresh']` hängt `?fresh=1` an und umgeht damit den Health-Cache von ImageInt. |
+| `imageIntHealth` | `imageIntHealth(?string $url = null, ?string $token = null, array $options = []): array` | `GET /v1/health`; liefert Komponenten- und Host-Dimensionierung (`host.cpu_cores`, `host.memory_gb`, `host.avx2`, `host.blocking`, `host.warnings`). Jede Komponente trägt `label`, `state_label`, `transient`, `since_seconds`, `load_seconds` und `progress`. `$options['fresh']` hängt `?fresh=1` an (Live-Fortschritt). |
 | `imageIntModels` | `imageIntModels(?string $url = null, ?string $token = null): array` | `GET /v1/models`; Zustand beider Modellserver. |
 | `imageIntDashboardStatus` | `imageIntDashboardStatus(bool $allowProbe = true): array` | Aggregierter Status für Admin-Dashboard und Karte (`configured`, `ready`, `loading`, `reachable`, `status`, `message`, `retry_after`, `source`). |
 | `imageIntParseComponents` | `imageIntParseComponents(array $data): array` | Normalisiert `components`/`enhancer`/`renderer`/`models` aus `/v1/health` oder `/v1/ready` auf die vom Adminbereich erwartete Form. |
-| `imageIntComponentProgress` | `imageIntComponentProgress(array $component): array` | Liest optionalen Download-Fortschritt (`progress`/`download` oder flache Felder: `percent`, `bytes_downloaded`/`bytes_total`, `files_downloaded`/`files_total`, `eta_seconds`) und liefert `known`/`percent`/Bytes/Dateien/ETA. ImageInt meldet heute nur `state`/`since_seconds`, dann bleibt `known` false. |
+| `imageIntComponentProgress` | `imageIntComponentProgress(array $component): array` | Liest optionalen Download-Fortschritt (`progress`/`download` oder flache Felder: `percent`, `bytes_downloaded`/`bytes_total`, `files_downloaded`/`files_total`, `eta_seconds`, `bytes_per_second`) und liefert `known`/`percent`/Bytes/Dateien/ETA sowie `rate_bytes_per_second` (Bytes/s, ≥ 0, auf eine Nachkommastelle gerundet). Meldet ImageInt nur `state`/`since_seconds`, bleibt `known` false. |
 | `imageIntComponentLabel` | `imageIntComponentLabel(string $key, array $component = []): string` | Deutsches Label einer Komponente; ein vom Server geliefertes `label` hat Vorrang. |
 | `imageIntStateLabel` | `imageIntStateLabel(string $state, string $fallback = ''): string` | Deutsches Label eines ImageInt-Zustands (`ready` → „bereit", `loading` → „lädt", …). |
 | `imageIntNumeric` | `imageIntNumeric($value): ?float` | Tolerante Zahlumwandlung für Fortschrittsfelder (akzeptiert `"42,5 %"` und Tausender-Leerzeichen). |
@@ -681,7 +681,7 @@ Diese Dateien enthalten ausschließlich prozeduralen Code (kein top-level `funct
 | `api/healthcheck.php` | Ruft `isAnyLlmEndpointHealthy()` auf und liefert JSON |
 | `api/image_status.php` | Auftragsstatus für das Browser-Polling; übernimmt die Sitzung aus dem Deep-Link, nachdem sie gegen `user_id` geprüft wurde |
 | `api/image_notify.php` | Nimmt die Zustimmung zur Benachrichtigungs-Mail entgegen bzw. widerruft sie |
-| `api/image_health.php` | Verbindungstest aus der Admin-Karte; meldet Ladephase, Host-Dimensionierung und je Komponente `progress` (Download-Balken), prüft den Token authentifiziert gegen. GET-Parameter `quiet=1` unterdrückt den Access-Log-Eintrag, `compact=1` überspringt `/v1/models`. |
+| `api/image_health.php` | Verbindungstest aus der Admin-Karte; meldet Ladephase, Host-Dimensionierung und je Komponente `progress` (Download-Balken inklusive Rate in MB/s), prüft den Token authentifiziert gegen. GET-Parameter `quiet=1` unterdrückt den Access-Log-Eintrag, `compact=1` überspringt `/v1/models`, `fresh=1` umgeht den Health-Cache von ImageInt (Live-Balken). |
 | `api/image_notify_worker.php` | Cron-/CLI-Worker: versendet offene Benachrichtigungen serverseitig (Dateisperre gegen Doppelläufe) |
 | `api/models.php` | Proxy für `GET /v1/models` eines Endpunkts |
 | `api/admin_user_action.php` | Admin-Benutzeraktionen (`create_user`, `send_password_reset`, `set_user_model`, `set_user_doc_permission`, `set_user_role`) |
@@ -758,11 +758,15 @@ Aktivierung, Vorlagen für Zustimmungsfrage und Mail inkl. Platzhalterhilfe,
 Verbindungstest). Der Test fragt `api/image_health.php` ab.
 
 Das Panel `#image-load-panel` („⏬ Modell-Download") pollt dieselbe API automatisch
-(`?quiet=1&compact=1`): 2–60 s während der Ladephase, sonst alle 60 s, pausiert bei
-verstecktem Tab. Pro Komponente zeigt es einen Balken aus `components[*].progress`;
-die Funktionen `progressRow()`/`progressOf()`/`formatMegabytes()`/`formatDuration()`
+(`?quiet=1&compact=1&fresh=1`): 2 s während der Ladephase, sonst alle 60 s, pausiert bei
+verstecktem Tab. `fresh=1` reicht LLMInt als `?fresh=1` an `/v1/ready` und `/v1/health`
+weiter und umgeht so den Health-Cache von ImageInt, damit die Balken live laufen. Pro
+Komponente zeigt es einen Balken aus `components[*].progress`; die Funktionen
+`progressRow()`/`progressOf()`/`formatMegabytes()`/`formatRate()`/`formatDuration()`
 liegen im zweiten `<script>`-Block der Seite. Meldet ImageInt Bytes, steht unter dem
-Balken „X von Y MB" (`formatMegabytes()`, deutsches Zahlenformat, 1024-basiert).
+Balken „X von Y MB" (`formatMegabytes()`, deutsches Zahlenformat, 1024-basiert) und die
+aktuelle Übertragungsrate als „Z MB/s" (`formatRate()`, gespeist aus
+`progress.rate_bytes_per_second`).
 
 Die Aktionen `add_sd_endpoint`, `update_sd_endpoint`, `delete_sd_endpoint`,
 `add_comfy_endpoint`, `update_comfy_endpoint` und `delete_comfy_endpoint` werden von
