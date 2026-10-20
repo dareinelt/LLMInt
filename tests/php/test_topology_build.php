@@ -303,6 +303,23 @@ test_case('ein nicht erreichbares ImageInt erzeugt eine Störung', function (): 
     assert_same(['image-ep:1', 'ep:1', 'hub'], array_column($topology['incidents'], 'key'));
 });
 
+test_case('ein beschäftigtes ImageInt erzeugt eine Einschränkung statt einer Störung', function (): void {
+    $topology = topology_build(topology_stats_with_image_busy(), ['base_url' => '']);
+
+    $endpoint = topo_node($topology, 'image-ep:1');
+    assert_same('warn', $endpoint['state'], 'ein rechnender Host ist erreichbar, nur beschäftigt');
+    assert_same('beschäftigt', $endpoint['badge']);
+    assert_contains('rechnet vermutlich noch', $endpoint['message']);
+    assert_same('warn', topo_node($topology, 'image')['state']);
+    assert_same('ImageInt rechnet gerade an einem Bild; kein Endpunkt ist derzeit einsatzbereit.',
+        topo_node($topology, 'image')['message']);
+
+    assert_same(0, $topology['overall']['errors'], 'keine Störung');
+    assert_same(3, $topology['overall']['warnings'], 'die bestehenden zwei plus ImageInt');
+    assert_same('Eingeschränkt', $topology['overall']['label']);
+    assert_not_contains('Störung', $topology['overall']['message']);
+});
+
 // ── Detail card contract ──────────────────────────────────────────────────────
 
 test_case('LLM-Endpunkte liefern die sechs Kennzahlen der Detailkarte', function (): void {

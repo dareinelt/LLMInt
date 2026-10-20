@@ -389,6 +389,15 @@ German message, retry after `retry_after`), never as an error. `503` with
 `error: "host_unsupported"` is the opposite — a permanent misconfiguration (missing AVX2)
 that must be reported as a hard failure.
 
+**Busy ≠ unreachable.** A render holds ImageInt's render lock, so a probe issued while it
+works gets no answer at all. When the TCP connect succeeded but the response timed out
+(`CURLE_OPERATION_TIMEDOUT` with `CURLINFO_CONNECT_TIME > 0`), `imageIntHttpCall()` reports
+`error = 'timeout'` / `timed_out = true`, `imageIntReady()` returns `busy = true` and keeps
+`reachable = true`, and the dashboard topology shows the node as `warn` ("beschäftigt",
+label "Eingeschränkt") instead of `error` ("Störung"). Only a failed connect
+(`error = 'unreachable'`) is an outage. Do not widen the 4 s dashboard probe to hide this —
+the short probe is what keeps the dashboard responsive.
+
 **Download progress:** `admin/image.php` polls
 `api/image_health.php?quiet=1&compact=1&fresh=1` while the models load and renders one
 progress bar per component (`imageIntParseComponents()` + `imageIntComponentProgress()`).

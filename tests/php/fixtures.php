@@ -139,6 +139,7 @@ function topology_stats_fixture(array $overrides = []): array
             'url'         => 'http://imageint:8000',
             'ready'       => true,
             'loading'     => false,
+            'busy'        => false,
             'reachable'   => true,
             'probed'      => true,
             'status'      => 'ready',
@@ -288,5 +289,22 @@ function topology_stats_with_image_error(): array
     $stats['image_status']['reachable'] = false;
     $stats['image_status']['status']    = 'error';
     $stats['image_status']['message']   = 'Endpunkt nicht erreichbar.';
+    return $stats;
+}
+
+/**
+ * Fixture with a busy image endpoint: the host accepted the connection but the
+ * readiness probe ran into its timeout, which is what a running render looks
+ * like. Must not be reported as a Störung.
+ */
+function topology_stats_with_image_busy(): array
+{
+    $stats = topology_stats_fixture();
+    $stats['image_status']['ready']     = false;
+    $stats['image_status']['busy']      = true;
+    $stats['image_status']['reachable'] = true;
+    $stats['image_status']['status']    = '';
+    $stats['image_status']['message']   = 'ImageInt ist erreichbar, antwortet aber nicht innerhalb von 4 s – '
+        . 'der Host rechnet vermutlich noch.';
     return $stats;
 }

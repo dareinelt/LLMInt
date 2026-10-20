@@ -339,7 +339,8 @@ function imageIntAbsoluteImageUrl(string $relativePath): string
  *              connect_timeout?:int,token?:string} $options
  *
  * @return array{ok:bool,http:int,error:string,message:string,loading:bool,
- *               transient:bool,retry_after:int,latency_ms:int,data:?array<string,mixed>}
+ *               transient:bool,timed_out:bool,retry_after:int,latency_ms:int,
+ *               data:?array<string,mixed>}
  */
 function imageIntHttpCall(string $url, array $options = []): array
 {
@@ -355,6 +356,7 @@ function imageIntHttpCall(string $url, array $options = []): array
         'message'     => '',
         'loading'     => false,
         'transient'   => false,
+        'timed_out'   => false,
         'retry_after' => 0,
         'latency_ms'  => 0,
         'data'        => null,
@@ -395,6 +397,21 @@ function imageIntHttpCall(string $url, array $options = []): array
     $result['latency_ms'] = (int) round((microtime(true) - $startedAt) * 1000);
 
     if ($curlErr !== '') {
+        // A timeout *after* the TCP handshake is not an unreachable host: the
+        // machine answered, it just did not get around to answering the
+        // request. On a CPU-only ImageInt host that is exactly what a running
+        // render looks like – the render blocks the model server, the gateway's
+        // readiness probe waits on it, and `/v1/ready` stays silent until the
+        // client timeout expires. Keeping "busy" apart from "gone" is what lets
+        // the dashboard report an Einschränkung instead of a Störung.
+        $connectTime = (float) curl_getinfo($ch, CURLINFO_CONNECT_TIME);
+        if (curl_errno($ch) === CURLE_OPERATION_TIMEDOUT && $connectTime > 0) {
+            $result['error']     = 'timeout';
+            $result['timed_out'] = true;
+            $result['message']   = 'ImageInt hat innerhalb von ' . $timeout
+                . ' s nicht geantwortet (Zeitüberschreitung).';
+            return $result;
+        }
         $result['error'] = 'unreachable';
         $result['message'] = 'ImageInt nicht erreichbar: ' . $curlErr;
         return $result;
@@ -742,9 +759,14 @@ function imageIntParseComponents(array $data): array
  * separately: `ready` for the first, `loading` for the second. Only
  * `host_unsupported` is a permanent misconfiguration.
  *
+ * A probe that runs into its own timeout although the connection was accepted
+ * is reported as `busy`: the host is up and reachable, it just did not answer
+ * in time – the normal picture while another render occupies the model server.
+ * Callers must not turn that into "nicht erreichbar".
+ *
  * @param array{timeout?:int,connect_timeout?:int,fresh?:bool} $options
  *
- * @return array{ok:bool,reachable:bool,loading:bool,ready:bool,status:string,
+ * @return array{ok:bool,reachable:bool,loading:bool,ready:bool,busy:bool,status:string,
  *               message:string,retry_after:int,http:int,latency_ms:int,
  *               error:string,url:string,host:array<string,mixed>,
  *               components:array<string,array<string,mixed>>}
@@ -759,6 +781,7 @@ function imageIntReady(?string $url = null, ?string $token = null, array $option
         'reachable'   => false,
         'loading'     => false,
         'ready'       => false,
+        'busy'        => false,
         'status'      => '',
         'message'     => '',
         'retry_after' => 0,
@@ -776,8 +799,9 @@ function imageIntReady(?string $url = null, ?string $token = null, array $option
         return $health;
     }
 
+    $timeout = max(5, min(600, (int) ($options['timeout'] ?? 15)));
     $response = imageIntHttpCall($base . '/v1/ready' . (empty($options['fresh']) ? '' : '?fresh=1'), [
-        'timeout'         => max(5, min(600, (int) ($options['timeout'] ?? 15))),
+        'timeout'         => $timeout,
         'connect_timeout' => max(1, min(60, (int) ($options['connect_timeout'] ?? 10))),
         'token'           => $secret,
     ]);
@@ -785,7 +809,10 @@ function imageIntReady(?string $url = null, ?string $token = null, array $option
     $data = is_array($response['data']) ? $response['data'] : [];
 
     $health['components']  = imageIntParseComponents($data);
-    $health['reachable']   = $response['http'] > 0;
+    $health['busy']        = $response['timed_out'];
+    // A host that accepted the connection is reachable even when its answer
+    // took too long; only a failed connection attempt means "not there".
+    $health['reachable']   = $response['http'] > 0 || $response['timed_out'];
     $health['loading']     = $response['loading'];
     $health['status']      = (string) ($data['status'] ?? '');
     $health['http']        = $response['http'];
@@ -799,6 +826,12 @@ function imageIntReady(?string $url = null, ?string $token = null, array $option
         $health['message'] = $response['message'] !== ''
             ? $response['message']
             : 'ImageInt lehnt diesen Host ab (host_unsupported).';
+        return $health;
+    }
+
+    if ($health['busy']) {
+        $health['message'] = 'ImageInt ist erreichbar, antwortet aber nicht innerhalb von '
+            . $timeout . ' s – der Host rechnet vermutlich noch.';
         return $health;
     }
 
@@ -947,8 +980,8 @@ function imageIntModels(?string $url = null, ?string $token = null): array
  * settings table – the same pattern speechDictationDashboardStatus() uses.
  *
  * @return array{configured:bool,url:string,source:string,ready:bool,loading:bool,
- *               reachable:bool,status:string,message:string,retry_after:int,
- *               checked_at:int,probed:bool}
+ *               busy:bool,reachable:bool,status:string,message:string,
+ *               retry_after:int,checked_at:int,probed:bool}
  */
 function imageIntDashboardStatus(bool $allowProbe = true): array
 {
@@ -960,6 +993,7 @@ function imageIntDashboardStatus(bool $allowProbe = true): array
         'source'      => imageIntUrlSource(),
         'ready'       => false,
         'loading'     => false,
+        'busy'        => false,
         'reachable'   => false,
         'status'      => '',
         'message'     => '',
@@ -988,6 +1022,10 @@ function imageIntDashboardStatus(bool $allowProbe = true): array
         return $status;
     }
 
+    // The dashboard probe deliberately stays short: `load_stats.php` must not
+    // hang for ten seconds because the render host is busy. A probe that runs
+    // into that timeout is reported as `busy`, which the topology shows as an
+    // Einschränkung – the 20 s cache keeps the next poll cheap either way.
     $health = imageIntReady($url, null, ['timeout' => 4, 'connect_timeout' => 2]);
     $status = [
         'configured'  => true,
@@ -995,6 +1033,7 @@ function imageIntDashboardStatus(bool $allowProbe = true): array
         'source'      => imageIntUrlSource(),
         'ready'       => $health['ready'],
         'loading'     => $health['loading'],
+        'busy'        => $health['busy'],
         'reachable'   => $health['reachable'],
         'status'      => $health['status'],
         'message'     => $health['message'],
@@ -1381,8 +1420,10 @@ function imageIntPollJob(array $job, int $deadline, string $token, ?callable $on
                     : 'Der Bildauftrag ist nicht mehr abrufbar (abgelaufen).';
                 return ['job' => $job, 'timeout' => false, 'polls' => $polls];
             }
-            if ($response['error'] === 'unreachable') {
-                // A single dropped connection must not kill a running render.
+            if ($response['error'] === 'unreachable' || $response['error'] === 'timeout') {
+                // A single dropped connection – or a status answer that ran
+                // into its timeout because the render keeps the model server
+                // busy – must not kill a running render.
                 continue;
             }
             $job['status']  = 'error';
@@ -1468,6 +1509,19 @@ function imageIntGenerate(array $args, int $userId = 0, string $sessionId = ''):
                 'loading'     => true,
                 'retry_after' => max(15, (int) $ready['retry_after']),
                 'message'     => 'Das Bildmodell lädt noch, einen Moment bitte. '
+                    . 'Bitte versuche es in ein paar Minuten erneut.',
+            ];
+        }
+        if ($ready['busy']) {
+            // The host took the connection but the readiness probe ran into its
+            // timeout – typically because another render occupies the model
+            // server. Not a failure, just "not now".
+            return [
+                'status'      => 'loading',
+                'loading'     => true,
+                'busy'        => true,
+                'retry_after' => max(30, (int) $ready['retry_after']),
+                'message'     => 'ImageInt rechnet gerade an einem anderen Bild. '
                     . 'Bitte versuche es in ein paar Minuten erneut.',
             ];
         }

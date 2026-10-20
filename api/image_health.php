@@ -21,8 +21,11 @@
  *   fresh   – `1` bypasses the ImageInt health cache (live progress bars)
  *
  * Returns JSON:
- *   { ok, loading, permanent, ready, reachable, status, message, retry_after,
- *     latency_ms, http, url, models: {…}, components: {…}, host: {…} }
+ *   { ok, loading, busy, permanent, ready, reachable, status, message,
+ *     retry_after, latency_ms, http, url, models: {…}, components: {…}, host: {…} }
+ *
+ * `busy` means the host accepted the connection but the readiness probe ran
+ * into its timeout – it is rendering, not unreachable.
  *
  * Every component carries `label`, `state_label`, `transient`, `since_seconds`
  * and a `progress` block (`known`, `percent`, bytes, files, ETA and
@@ -72,8 +75,10 @@ $permanent = $health['error'] === 'host_unsupported';
 
 // ── Detail of the service and its two model servers ──────────────────────────
 // Only asked for when the service actually answered, so an unreachable host is
-// never probed twice. /v1/models answers 200 even while the models load, which
-// is why it is queried separately from the readiness gate.
+// never probed twice – and a busy one is not probed twice either, because the
+// detail endpoints would run into the same timeout. /v1/models answers 200 even
+// while the models load, which is why it is queried separately from the
+// readiness gate.
 $components = [];
 $host       = null;
 $limits     = [];
@@ -81,7 +86,7 @@ $quant      = '';
 $modelsRaw  = [];
 $authError  = '';
 
-if ($health['reachable']) {
+if ($health['reachable'] && !$health['busy']) {
     $detail = imageIntHealth($target, $token, $probeOptions);
     if ($detail['ok'] || $detail['models'] !== []) {
         $components = $detail['models'];
@@ -120,19 +125,21 @@ if ($authError !== '') {
 $permanent = $permanent || $authError !== '';
 
 if (!$quiet) {
-    writeLog($health['loading'] ? 'info' : ($ok ? 'info' : 'warning'),
+    writeLog($health['loading'] || $health['busy'] ? 'info' : ($ok ? 'info' : 'warning'),
         'Bildgenerierung: Verbindungstest '
         . ($target !== '' ? $target : '(nicht konfiguriert)') . ' – '
         . ($authError !== '' ? 'Zugangsschlüssel abgelehnt'
             : ($permanent ? 'Host nicht unterstützt'
                 : ($health['loading'] ? 'Modelle werden noch geladen'
-                    : ($ok ? 'bereit' : ($health['message'] !== '' ? $health['message'] : 'nicht bereit')))))
+                    : ($health['busy'] ? 'Host rechnet noch (Zeitüberschreitung)'
+                        : ($ok ? 'bereit' : ($health['message'] !== '' ? $health['message'] : 'nicht bereit'))))))
         . ' (' . $health['http'] . ', ' . $health['latency_ms'] . ' ms).');
 }
 
 echo json_encode([
     'ok'          => $ok,
     'loading'     => $health['loading'],
+    'busy'        => $health['busy'],
     'permanent'   => $permanent,
     'ready'       => $health['ready'],
     'reachable'   => $health['reachable'],
