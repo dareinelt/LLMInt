@@ -40,8 +40,20 @@ require_once __DIR__ . '/mailer.php';
 /** Default ceiling of the whole image operation, in seconds. */
 const IMAGE_INT_TIMEOUT_DEFAULT = 1800;
 
-/** Default sync window: how long one PHP request may wait for the PNG. */
+/** Default ceiling of the sync window (IMAGEINT_SYNC_TIMEOUT), in seconds. */
 const IMAGE_INT_SYNC_TIMEOUT_DEFAULT = 120;
+
+/**
+ * How long the chat request itself waits for the PNG before it hands the job
+ * back to the browser.
+ *
+ * Deliberately short and independent of IMAGEINT_SYNC_TIMEOUT: ImageInt answers
+ * 202 as soon as it accepted the job, so a long inline wait only delays the
+ * consent question and the job block – and every second spent here is a second
+ * in which the browser (and any proxy in front of PHP) may report a timeout
+ * while ImageInt is in fact still rendering.
+ */
+const IMAGE_INT_INLINE_WAIT_DEFAULT = 25;
 
 /** Default interval between two job polls, in seconds. */
 const IMAGE_INT_POLL_INTERVAL_DEFAULT = 15;
@@ -168,12 +180,13 @@ function imageIntTimeout(): int
 }
 
 /**
- * How long one PHP request may wait for the finished PNG before it hands the
- * job back to the browser (which then polls api/image_status.php).
+ * Configured ceiling of the sync window (IMAGEINT_SYNC_TIMEOUT).
  *
- * ImageInt answers with 202 after IMAGEINT_SYNC_TIMEOUT (120 s by default);
- * waiting any longer would run into every reverse-proxy timeout in front of
- * PHP without producing a result.
+ * This is *not* how long the chat request blocks – that is imageIntInlineWait(),
+ * which is deliberately much shorter. The value only bounds the two derived
+ * timeouts: the job-creating POST (imageIntCreateTimeout()) and the inline
+ * polling window. Keeping it configurable lets an installation with a very
+ * slow gateway stretch the create call without touching the code.
  */
 function imageIntSyncTimeout(): int
 {
@@ -182,6 +195,32 @@ function imageIntSyncTimeout(): int
         $timeout = IMAGE_INT_SYNC_TIMEOUT_DEFAULT;
     }
     return max(5, min(600, $timeout));
+}
+
+/**
+ * Inline window of the chat request: how long `imageIntGenerate()` polls a
+ * freshly created job before it returns it as `pending`.
+ *
+ * A quick render (GPU host, small model) still lands directly in the answer,
+ * everything longer goes to the browser, which shows the job block with the
+ * consent question and polls api/image_status.php. Never longer than
+ * IMAGE_INT_INLINE_WAIT_DEFAULT, whatever IMAGEINT_SYNC_TIMEOUT says.
+ */
+function imageIntInlineWait(): int
+{
+    return max(0, min(IMAGE_INT_INLINE_WAIT_DEFAULT, imageIntSyncTimeout()));
+}
+
+/**
+ * Timeout of the single job-creating POST.
+ *
+ * ImageInt only probes its model servers (≤ 10 s each) and then answers 202, so
+ * this is short on purpose: a host that keeps the request open longer is busy,
+ * and the chat must say so instead of blocking for two minutes.
+ */
+function imageIntCreateTimeout(): int
+{
+    return min(45, max(20, imageIntSyncTimeout()));
 }
 
 /**
@@ -1194,6 +1233,12 @@ function imageIntClientJob(array $job): array
     if (isset($job['duration_ms'])) {
         $client['duration_ms'] = (int) $job['duration_ms'];
     }
+    // The consent payload is stored on the job record so the question survives
+    // a page reload: the chat rebuilds the block from the persisted message,
+    // not from api/image_status.php.
+    if (isset($job['notify']) && is_array($job['notify'])) {
+        $client['notify'] = $job['notify'];
+    }
     return $client;
 }
 
@@ -1254,7 +1299,11 @@ function imageIntNotificationStatus(string $jobId, int $userId): string
  * Everything the chat frontend needs to render the consent question and the
  * "notification requested" confirmation.
  *
- * @return array{enabled:bool,email:string,consent_text:string,requested:bool}
+ * `reason` explains a missing offer so the chat can say *why* no mail is
+ * possible instead of silently dropping the question: `no_email` (no address in
+ * the profile) or `disabled` (an administrator switched the feature off).
+ *
+ * @return array{enabled:bool,reason:string,email:string,consent_text:string,requested:bool}
  */
 function imageIntNotifyClientPayload(int $userId, string $prompt = '', bool $requested = false): array
 {
@@ -1269,9 +1318,12 @@ function imageIntNotifyClientPayload(int $userId, string $prompt = '', bool $req
         }
     }
 
+    $enabled = imageNotifyEnabled() && $email !== '';
+
     return [
         // Without an address in the user profile there is nothing to ask for.
-        'enabled'      => imageNotifyEnabled() && $email !== '',
+        'enabled'      => $enabled,
+        'reason'       => $enabled ? '' : ($email === '' ? 'no_email' : 'disabled'),
         'email'        => $email,
         'consent_text' => imageIntRenderConsentText([
             'sitename' => imageIntSiteName(),
@@ -1420,10 +1472,13 @@ function imageIntPollJob(array $job, int $deadline, string $token, ?callable $on
                     : 'Der Bildauftrag ist nicht mehr abrufbar (abgelaufen).';
                 return ['job' => $job, 'timeout' => false, 'polls' => $polls];
             }
-            if ($response['error'] === 'unreachable' || $response['error'] === 'timeout') {
+            if ($response['error'] === 'unreachable' || $response['error'] === 'timeout'
+                || $response['error'] === 'image_unavailable' || $response['http'] === 503) {
                 // A single dropped connection – or a status answer that ran
                 // into its timeout because the render keeps the model server
-                // busy – must not kill a running render.
+                // busy – must not kill a running render. The same holds for a
+                // 503: while a render occupies the model server, ImageInt's
+                // readiness probe fails and every other call is refused.
                 continue;
             }
             $job['status']  = 'error';
@@ -1446,6 +1501,33 @@ function imageIntPollJob(array $job, int $deadline, string $token, ?callable $on
     }
 
     return ['job' => $job, 'timeout' => true, 'polls' => $polls];
+}
+
+/**
+ * Poll interval for a job that is still running.
+ *
+ * The browser starts with the short interval ImageInt suggests and backs off
+ * while the job ages: a render that takes many minutes does not need a status
+ * call every 15 s, and every call competes with the render for the service.
+ */
+function imageIntPollBackoff(array $record): int
+{
+    $base = max(5, IMAGE_INT_POLL_INTERVAL_DEFAULT);
+    $requested = $record['requested_at'] ?? null;
+    if (!is_numeric($requested)) {
+        return $base;
+    }
+    $age = max(0, time() - (int) $requested);
+    if ($age < 60) {
+        return $base;
+    }
+    if ($age < 180) {
+        return max($base, 30);
+    }
+    if ($age < 600) {
+        return max($base, 60);
+    }
+    return max($base, 120);
 }
 
 /**
@@ -1547,15 +1629,13 @@ function imageIntGenerate(array $args, int $userId = 0, string $sessionId = ''):
     $response  = imageIntHttpCall($base . '/v1/images/generations', [
         'method'  => 'POST',
         'json'    => $payload,
-        'timeout' => min(120, max(30, imageIntSyncTimeout())),
+        'timeout' => imageIntCreateTimeout(),
         'token'   => $token,
     ]);
 
     if (!$response['ok']) {
-        writeLog('warning', 'Bildgenerierung fehlgeschlagen: '
-            . ($response['error'] !== '' ? $response['error'] : 'http_' . $response['http'])
-            . ' – ' . $response['message']);
         if ($response['loading']) {
+            writeLog('info', 'ImageInt lädt noch: ' . $response['message']);
             return [
                 'status'      => 'loading',
                 'loading'     => true,
@@ -1565,6 +1645,39 @@ function imageIntGenerate(array $args, int $userId = 0, string $sessionId = ''):
                     : 'Das Bildmodell lädt noch, einen Moment bitte.',
             ];
         }
+        if ($response['timed_out']) {
+            // The host took the connection but did not accept the job in time.
+            // That is a busy host, not a broken one: reporting a timeout here
+            // would claim a failure while ImageInt is in fact still rendering.
+            writeLog('info', 'ImageInt nahm die Bildanfrage an, antwortete aber nicht innerhalb von '
+                . imageIntCreateTimeout() . ' s – Dienst vermutlich beschäftigt.');
+            return [
+                'status'      => 'loading',
+                'loading'     => true,
+                'busy'        => true,
+                'retry_after' => 60,
+                'message'     => 'ImageInt rechnet gerade und hat die Bildanfrage noch nicht '
+                    . 'angenommen. Bitte versuche es in ein paar Minuten erneut.',
+            ];
+        }
+        if ($response['error'] === 'image_unavailable' || $response['http'] === 503) {
+            // ImageInt prüft die Bereitschaft des Modells, bevor es den Auftrag
+            // annimmt. Während einer laufenden Generierung ist das Modell
+            // belegt und die Prüfung schlägt fehl – der Dienst ist dann
+            // beschäftigt, nicht kaputt.
+            writeLog('info', 'ImageInt nimmt derzeit keinen Bildauftrag an (503): ' . $response['message']);
+            return [
+                'status'      => 'loading',
+                'loading'     => true,
+                'busy'        => true,
+                'retry_after' => max(30, (int) $response['retry_after']),
+                'message'     => 'ImageInt rechnet gerade an einem anderen Bild und hat die '
+                    . 'Anfrage deshalb nicht angenommen. Bitte versuche es in ein paar Minuten erneut.',
+            ];
+        }
+        writeLog('warning', 'Bildgenerierung fehlgeschlagen: '
+            . ($response['error'] !== '' ? $response['error'] : 'http_' . $response['http'])
+            . ' – ' . $response['message']);
         return [
             'error'   => $response['error'] !== '' ? $response['error'] : 'http_' . $response['http'],
             'message' => $response['message'],
@@ -1573,13 +1686,17 @@ function imageIntGenerate(array $args, int $userId = 0, string $sessionId = ''):
 
     $job = is_array($response['data']) ? $response['data'] : [];
     $job['prompt'] = $prompt;
+    // Kept on the stored record so api/image_status.php can back the polling
+    // interval off while the render ages.
+    $job['requested_at'] = time();
     if ($sessionId !== '') {
         $job['session_id'] = $sessionId;
     }
 
-    // 3. Poll while the job is queued or running – but only for as long as one
-    //    PHP request may reasonably block.
-    $syncDeadline = min($deadline, time() + imageIntSyncTimeout());
+    // 3. Poll while the job is queued or running – but only inside the short
+    //    inline window. Everything longer goes to the browser, which keeps the
+    //    job (and the consent question) alive across a page reload.
+    $syncDeadline = min($deadline, time() + imageIntInlineWait());
     $lastStage = '';
     $polled = imageIntPollJob($job, $syncDeadline, $token, static function (string $stage) use (&$lastStage): void {
         if ($stage !== '' && $stage !== $lastStage) {
@@ -1622,6 +1739,15 @@ function imageIntGenerate(array $args, int $userId = 0, string $sessionId = ''):
     //    api/image_status.php, and the notification worker delivers the mail.
     unset($job['b64_json']);
     $job['pending'] = true;
+    // A job whose status polls all ran into their timeout keeps the status of
+    // the create answer, which may be empty. Without a status the browser
+    // cannot tell "still running" from "broken", so it gets a definite one.
+    if ((string) ($job['status'] ?? '') === '') {
+        $job['status'] = 'running';
+    }
+    if ((string) ($job['stage'] ?? '') === '') {
+        $job['stage'] = 'queued';
+    }
     if (($job['message'] ?? '') === '') {
         $job['message'] = imageIntStageMessage((string) ($job['stage'] ?? 'queued'));
     }
@@ -1761,7 +1887,13 @@ function imageIntResolveJob(array $record): array
     if (!$fetched['ok']) {
         $result['status']  = (string) ($record['status'] ?? 'running');
         $result['error']   = $fetched['error'] !== '' ? $fetched['error'] : 'unavailable';
-        $result['message'] = $fetched['message'];
+        // A status call that ran into its timeout or a dropped connection is
+        // not a failed render: the job is still running, the service is just
+        // busy. Reporting the raw "Zeitüberschreitung" here would claim a
+        // failure while ImageInt keeps computing.
+        $result['message'] = in_array($result['error'], ['timeout', 'unreachable'], true)
+            ? 'Das Bild wird noch erzeugt. ImageInt antwortet gerade nicht – die Abfrage wird wiederholt.'
+            : $fetched['message'];
         return $result;
     }
 

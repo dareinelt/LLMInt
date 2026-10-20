@@ -378,10 +378,19 @@ Endpoints live in the `image_endpoints` table (`alias`, `base_url`, `token`, `ti
 precedence over the active row (`imageIntUrl()`/`imageIntUrlSource()`). Tokens are shown
 masked (`imageIntMaskToken()`) and never logged.
 
-**Three timeouts, do not confuse them:** `IMAGEINT_TIMEOUT` (default 1800 s) is the
-ceiling of the whole render including polling; `IMAGEINT_SYNC_TIMEOUT` (default 120 s) is
-how long one PHP request waits before handing the job back to the browser; the per-call
-HTTP timeouts inside `imageIntHttpCall()` are clamped well below both.
+**Four timeouts, do not confuse them:** `IMAGEINT_TIMEOUT` (default 1800 s) is the
+ceiling of the whole render including polling; `IMAGEINT_SYNC_TIMEOUT` (default 120 s)
+does **not** say how long a chat request blocks – it only bounds the two derived values
+below; `imageIntCreateTimeout()` (20–45 s) is the timeout of the job-creating POST,
+because ImageInt probes its model servers (≤ 10 s each) and then answers `202`;
+`imageIntInlineWait()` (≤ 25 s, `IMAGE_INT_INLINE_WAIT_DEFAULT`) is how long
+`imageIntGenerate()` polls a fresh job before handing it back to the browser. The
+per-call HTTP timeouts inside `imageIntHttpCall()` are clamped well below all of them.
+
+A long inline wait is a bug, not a feature: every second the chat request blocks is a
+second in which the browser (or a reverse proxy in front of PHP) may report a timeout
+while ImageInt is still rendering – and a job that never reaches the browser is a job
+whose block, progress and consent question never appear.
 
 **Loading phase:** while ImageInt loads its two model servers it answers `503` with
 `transient: true` and `Retry-After`. LLMInt must treat this as "please wait" (show the
@@ -397,6 +406,24 @@ works gets no answer at all. When the TCP connect succeeded but the response tim
 label "Eingeschränkt") instead of `error` ("Störung"). Only a failed connect
 (`error = 'unreachable'`) is an outage. Do not widen the 4 s dashboard probe to hide this —
 the short probe is what keeps the dashboard responsive.
+
+**Still computing is not a failure.** A render also makes ImageInt refuse *new* work: its
+readiness probe fails while the model server is occupied, so `POST /v1/images/generations`
+answers `503` `image_unavailable` instead of `202`. Both that `503` and a status call that
+runs into its timeout keep the job alive – `imageIntPollJob()` skips them,
+`imageIntResolveJob()` keeps the last known status with a "wird weiter abgefragt" message,
+and `api/image_status.php` reports `service_ok = false` with a growing `poll_after_seconds`
+(`imageIntPollBackoff()`: 15 → 30 → 60 → 120 s, driven by `requested_at` on the record).
+Only `status = error`/`expired` ends the polling in `pollImageJob()`. Never classify an
+*unknown* status (`busy`, `loading`, `rendering`, …) as failed – that is what used to turn
+a running render into "Die Bildgenerierung ist fehlgeschlagen."
+
+**The consent question travels with the job record.** `api/chat.php` stores
+`notify = imageIntNotifyClientPayload(...)` on the persisted `image_job`, so the question
+survives a reload (the chat rebuilds the block from the message, not from
+`api/image_status.php`). `notify.reason` explains a missing offer – `no_email` (no address
+in the profile) or `disabled` (switched off by an administrator) – and the block says so
+instead of silently dropping the question.
 
 **Download progress:** `admin/image.php` polls
 `api/image_health.php?quiet=1&compact=1&fresh=1` while the models load and renders one

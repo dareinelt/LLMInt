@@ -158,10 +158,12 @@ ist zustandslos; jeder Auftrag wird über `job_id` und `status_url` verfolgt.
 Details zur Pipeline in [`architecture.md`](architecture.md#132-bildgenerierungs-pipeline).
 
 **Konstanten:** `IMAGE_INT_TIMEOUT_DEFAULT` (1800 s – Obergrenze eines Rendervorgangs
-inkl. Polling), `IMAGE_INT_SYNC_TIMEOUT_DEFAULT` (120 s – Budget einer einzelnen
-PHP-Anfrage, danach übernimmt das Browser-Polling), `IMAGE_INT_POLL_INTERVAL_DEFAULT`
-(15 s – Rückfallwert, falls ImageInt kein `poll_after_seconds` liefert),
-`IMAGE_INT_OUTPUT_DIR` (`image_output` – lokaler PNG-Cache).
+inkl. Polling), `IMAGE_INT_SYNC_TIMEOUT_DEFAULT` (120 s – Obergrenze der abgeleiteten
+Zeitfenster, **nicht** die Blockierzeit einer Chat-Anfrage),
+`IMAGE_INT_INLINE_WAIT_DEFAULT` (25 s – Fenster, in dem eine Chat-Anfrage den Auftrag
+selbst abpollt), `IMAGE_INT_POLL_INTERVAL_DEFAULT` (15 s – Rückfallwert, falls ImageInt
+kein `poll_after_seconds` liefert), `IMAGE_INT_OUTPUT_DIR` (`image_output` – lokaler
+PNG-Cache).
 
 ### Endpunkt, URL und Token
 
@@ -174,7 +176,9 @@ PHP-Anfrage, danach übernimmt das Browser-Polling), `IMAGE_INT_POLL_INTERVAL_DE
 | `imageIntUrl` | `imageIntUrl(): string` | Basis-URL; Reihenfolge `IMAGEINT_URL` → Endpunktzeile → leer. |
 | `imageIntToken` | `imageIntToken(): string` | Zugangstoken; Reihenfolge `IMAGEINT_TOKEN` → Endpunktzeile → leer. Wird als `X-Auth-Token` gesendet. |
 | `imageIntTimeout` | `imageIntTimeout(): int` | Obergrenze eines Rendervorgangs in Sekunden; `IMAGEINT_TIMEOUT` → Endpunktzeile → 1800. |
-| `imageIntSyncTimeout` | `imageIntSyncTimeout(): int` | Zeitbudget einer einzelnen PHP-Anfrage; `IMAGEINT_SYNC_TIMEOUT` → 120, nie größer als `imageIntTimeout()`. |
+| `imageIntSyncTimeout` | `imageIntSyncTimeout(): int` | Obergrenze für die abgeleiteten Zeitfenster; `IMAGEINT_SYNC_TIMEOUT` → 120, nie größer als `imageIntTimeout()`. Sagt **nicht**, wie lange eine Chat-Anfrage blockiert – das ist `imageIntInlineWait()`. |
+| `imageIntInlineWait` | `imageIntInlineWait(): int` | Fenster in Sekunden, das `imageIntGenerate()` einen frischen Auftrag noch selbst abpollt; höchstens `IMAGE_INT_INLINE_WAIT_DEFAULT` (25) und nie größer als `imageIntSyncTimeout()`. Danach übernimmt das Browser-Polling. |
+| `imageIntCreateTimeout` | `imageIntCreateTimeout(): int` | Zeitlimit des auftragserzeugenden `POST /v1/images/generations`, geklemmt auf 20–45 s (ImageInt prüft seine Modellserver und antwortet dann `202`). |
 | `imageIntUrlSource` | `imageIntUrlSource(): string` | Quelle der wirksamen URL (`env`, `endpoint`, `none`) für die Admin-Anzeige. |
 | `imageIntSourceLabel` | `imageIntSourceLabel(string $source): string` | Menschenlesbares Label zu einer Quelle aus `imageIntUrlSource()`. |
 | `imageIntEndpointLabel` | `imageIntEndpointLabel(array $endpoint): string` | Anzeigename eines Endpunkts (Alias, sonst Host:Port, sonst Basis-URL). |
@@ -210,7 +214,7 @@ PHP-Anfrage, danach übernimmt das Browser-Polling), `IMAGE_INT_POLL_INTERVAL_DE
 | `imageIntStageLabel` | `imageIntStageLabel(string $stage): string` | Kurzes Label zur Phase. |
 | `imageIntFormatDuration` | `imageIntFormatDuration(int $milliseconds): string` | Formatiert Millisekunden als Dauer für den Platzhalter `{duration}`. |
 | `imageIntJobDurationMs` | `imageIntJobDurationMs(array $job): int` | Gesamtdauer eines Auftrags aus `timings.total_ms` (inkl. Enhancer). |
-| `imageIntClientJob` | `imageIntClientJob(array $job): array` | Reduziert ein Auftragsdokument auf die Felder, die die Chat-Oberfläche braucht. |
+| `imageIntClientJob` | `imageIntClientJob(array $job): array` | Reduziert ein Auftragsdokument auf die Felder, die die Chat-Oberfläche braucht; ein vorhandenes `notify` (Zustimmungsdaten) wird unverändert durchgereicht, damit die Frage ein Neuladen übersteht. |
 | `imageIntUserName` | `imageIntUserName(int $userId): string` | Anzeigename des Nutzers für Platzhalter und Mails. |
 
 ### Zustimmung und Benachrichtigung
@@ -219,7 +223,7 @@ PHP-Anfrage, danach übernimmt das Browser-Polling), `IMAGE_INT_POLL_INTERVAL_DE
 |---|---|---|
 | `imageIntRenderConsentText` | `imageIntRenderConsentText(array $vars): string` | Rendert die konfigurierte Zustimmungsfrage; noch unbekannte Platzhalter bleiben leer. |
 | `imageIntNotificationStatus` | `imageIntNotificationStatus(string $jobId, int $userId): string` | Zustand der Benachrichtigung (`pending`, `sent`, `failed`, `expired`) oder `''`. |
-| `imageIntNotifyClientPayload` | `imageIntNotifyClientPayload(int $userId, string $prompt = '', bool $requested = false): array` | Nutzlast für die Oberfläche: Zustimmungstext, Zustand und ob bereits eine Mail vorgemerkt ist. |
+| `imageIntNotifyClientPayload` | `imageIntNotifyClientPayload(int $userId, string $prompt = '', bool $requested = false): array` | Nutzlast für die Oberfläche: Zustimmungstext, Zustand, ob bereits eine Mail vorgemerkt ist, und `reason` (`''`, `no_email`, `disabled`), falls kein Angebot möglich ist. |
 | `imageIntQueueNotification` | `imageIntQueueNotification(string $jobId, int $userId, string $sessionId, string $prompt, string $statusUrl, string $imageUrl): array` | Legt die Benachrichtigung in `image_notifications` an (Upsert über `job_id`+`user_id`). |
 | `imageIntPendingNotifications` | `imageIntPendingNotifications(int $limit = 20): array` | Offene Benachrichtigungen samt Empfängeradresse aus `users.email`. |
 | `imageIntPersistJobResult` | `imageIntPersistJobResult(int $userId, string $sessionId, string $jobId, array $job, string $imageUrl): void` | Schreibt Maße, Seed und Dauer in die gespeicherte Chat-Sitzung – nötig, weil der PNG-Cache die spätere Statusabfrage abkürzt. |
@@ -237,8 +241,9 @@ PHP-Anfrage, danach übernimmt das Browser-Polling), `IMAGE_INT_POLL_INTERVAL_DE
 | `imageIntJobFileName` | `imageIntJobFileName(string $jobId): string` | Dateiname des zwischengespeicherten PNGs zu einer `job_id`. |
 | `imageIntStoreImage` | `imageIntStoreImage(string $jobId, string $binary): string` | Legt PNG-Binärdaten im Cache ab und liefert den relativen Pfad. |
 | `imageIntEnsureImage` | `imageIntEnsureImage(array $job): string` | Liefert den lokalen PNG-Pfad, lädt das Bild bei Bedarf von ImageInt nach. |
-| `imageIntPollJob` | `imageIntPollJob(array $job, int $deadline, string $token, ?callable $onProgress = null): array` | Fragt `status_url` ab, solange `queued`/`running`, und meldet den Phasenwechsel über `$onProgress`. |
-| `imageIntGenerate` | `imageIntGenerate(array $args, int $userId = 0, string $sessionId = ''): array` | Hauptpfad des Werkzeugs: sendet `wait: false`, verfolgt den Auftrag bis `done` oder übergibt bei Zeitüberschreitung an das Browser-Polling. |
+| `imageIntPollJob` | `imageIntPollJob(array $job, int $deadline, string $token, ?callable $onProgress = null): array` | Fragt `status_url` ab, solange `queued`/`running`, und meldet den Phasenwechsel über `$onProgress`. Timeouts, `unreachable` und `503 image_unavailable` (ImageInt rechnet an einem anderen Bild) überspringt er – ein laufender Render wird dadurch nicht abgebrochen. |
+| `imageIntPollBackoff` | `imageIntPollBackoff(array $record): int` | Nächstes Poll-Intervall in Sekunden aus dem Alter des Auftrags (`requested_at`): 15 s bis 1 min, 30 s bis 3 min, 60 s bis 10 min, danach 120 s; ohne `requested_at` das Standardintervall. |
+| `imageIntGenerate` | `imageIntGenerate(array $args, int $userId = 0, string $sessionId = ''): array` | Hauptpfad des Werkzeugs: sendet `wait: false`, verfolgt den Auftrag bis `done` oder übergibt nach `imageIntInlineWait()` an das Browser-Polling. Ein beschäftigter Dienst (`503 image_unavailable`, Timeout beim Anlegen) liefert `status = 'loading'` mit `busy = true` und `retry_after` statt eines Fehlers. |
 | `imageIntFetchJob` | `imageIntFetchJob(string $statusUrl, string $token = ''): array` | Holt ein Auftragsdokument; übersetzt `404` in einen abgelaufenen Auftrag. |
 | `imageIntResolveJob` | `imageIntResolveJob(array $record): array` | Löst einen gespeicherten Auftrag auf: aus dem Cache, sonst per HTTP; mit `enrich` wird das Dokument trotz Cache nachgeladen. |
 | `imageIntMarkdown` | `imageIntMarkdown(string $relativeImageUrl): string` | Markdown-Bildverweis auf den lokalen PNG-Pfad. |
@@ -679,7 +684,7 @@ Diese Dateien enthalten ausschließlich prozeduralen Code (kein top-level `funct
 | `api/document_status.php` | Upload-Status als JSON (optional per `session_id` auf einen Chat gefiltert) |
 | `api/document_delete.php` | Entfernt einen Upload samt Datei und Chunks |
 | `api/healthcheck.php` | Ruft `isAnyLlmEndpointHealthy()` auf und liefert JSON |
-| `api/image_status.php` | Auftragsstatus für das Browser-Polling; übernimmt die Sitzung aus dem Deep-Link, nachdem sie gegen `user_id` geprüft wurde |
+| `api/image_status.php` | Auftragsstatus für das Browser-Polling; übernimmt die Sitzung aus dem Deep-Link, nachdem sie gegen `user_id` geprüft wurde. Liefert `service_ok`, ein mit dem Auftragsalter wachsendes `poll_after_seconds` und den Zustimmungsstand (`notify` inkl. `reason`); nur `error`/`expired` beenden das Polling, ein Timeout oder `503` nicht |
 | `api/image_notify.php` | Nimmt die Zustimmung zur Benachrichtigungs-Mail entgegen bzw. widerruft sie |
 | `api/image_health.php` | Verbindungstest aus der Admin-Karte; meldet Ladephase, Host-Dimensionierung und je Komponente `progress` (Download-Balken inklusive Rate in MB/s), prüft den Token authentifiziert gegen. GET-Parameter `quiet=1` unterdrückt den Access-Log-Eintrag, `compact=1` überspringt `/v1/models`, `fresh=1` umgeht den Health-Cache von ImageInt (Live-Balken). |
 | `api/image_notify_worker.php` | Cron-/CLI-Worker: versendet offene Benachrichtigungen serverseitig (Dateisperre gegen Doppelläufe) |

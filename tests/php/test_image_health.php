@@ -440,4 +440,88 @@ test_case('imageIntReady() behandelt ein transient 503 weiterhin als laden', fun
     });
 });
 
+// ── Zeitfenster: kurze Inline-Wartezeit, lange Abfrage im Browser ─────────────
+
+test_case('imageIntInlineWait() bleibt kurz, egal wie groß IMAGEINT_SYNC_TIMEOUT ist', function (): void {
+    putenv('IMAGEINT_SYNC_TIMEOUT=600');
+    assert_same(600, imageIntSyncTimeout(), 'die konfigurierte Obergrenze gilt weiter');
+    assert_same(IMAGE_INT_INLINE_WAIT_DEFAULT, imageIntInlineWait(),
+        'die Chat-Anfrage wartet nicht auf einen minutenlangen Render');
+
+    putenv('IMAGEINT_SYNC_TIMEOUT=10');
+    assert_same(10, imageIntInlineWait(), 'eine kleinere Konfiguration wird nicht überschritten');
+
+    putenv('IMAGEINT_SYNC_TIMEOUT');
+    assert_same(IMAGE_INT_INLINE_WAIT_DEFAULT, imageIntInlineWait(), 'Standardwert');
+    assert_true(imageIntInlineWait() < imageIntSyncTimeout(),
+        'inline wird nie so lange gewartet wie das konfigurierte Sync-Fenster');
+});
+
+test_case('imageIntCreateTimeout() bleibt im kurzen Bereich', function (): void {
+    putenv('IMAGEINT_SYNC_TIMEOUT=600');
+    assert_same(45, imageIntCreateTimeout(), 'ImageInt antwortet mit 202, lange zu warten bringt nichts');
+
+    putenv('IMAGEINT_SYNC_TIMEOUT=5');
+    assert_same(20, imageIntCreateTimeout(), 'nach unten begrenzt');
+
+    putenv('IMAGEINT_SYNC_TIMEOUT');
+    assert_same(45, imageIntCreateTimeout(), 'Standard: 120 s Konfiguration wird auf 45 s geklemmt');
+});
+
+// ── imageIntPollBackoff() ─────────────────────────────────────────────────────
+
+test_case('imageIntPollBackoff() fragt einen jungen Auftrag im kurzen Takt ab', function (): void {
+    assert_same(IMAGE_INT_POLL_INTERVAL_DEFAULT, imageIntPollBackoff(['requested_at' => time()]));
+    assert_same(IMAGE_INT_POLL_INTERVAL_DEFAULT, imageIntPollBackoff([]),
+        'ohne Zeitstempel bleibt es beim Standardtakt');
+});
+
+test_case('imageIntPollBackoff() zieht den Takt mit dem Alter des Auftrags an', function (): void {
+    assert_same(30, imageIntPollBackoff(['requested_at' => time() - 120]));
+    assert_same(60, imageIntPollBackoff(['requested_at' => time() - 300]));
+    assert_same(120, imageIntPollBackoff(['requested_at' => time() - 900]));
+    assert_same(120, imageIntPollBackoff(['requested_at' => time() - 86400]),
+        'auch ein alter Auftrag wird nicht seltener als alle zwei Minuten abgefragt');
+});
+
+test_case('imageIntPollBackoff() ignoriert einen Zeitstempel in der Zukunft', function (): void {
+    assert_same(IMAGE_INT_POLL_INTERVAL_DEFAULT, imageIntPollBackoff(['requested_at' => time() + 600]));
+});
+
+// ── imageIntClientJob(): Zustimmungsfrage überlebt den Reload ────────────────
+
+test_case('imageIntClientJob() gibt die Zustimmungsdaten weiter und verbirgt interne URLs', function (): void {
+    $notify = [
+        'enabled'      => true,
+        'reason'       => '',
+        'email'        => 'test@example.org',
+        'consent_text' => 'Sollen wir Dich unter test@example.org benachrichtigen?',
+        'requested'    => false,
+    ];
+
+    $client = imageIntClientJob([
+        'job_id'             => 'abc123',
+        'status'             => 'running',
+        'stage'              => 'rendering',
+        'message'            => 'Das Bild wird erzeugt …',
+        'prompt'             => 'Ein Testbild',
+        'session_id'         => 'abcdef12',
+        'status_url'         => 'http://imageint:8080/v1/images/abc123',
+        'image_url'          => 'http://imageint:8080/v1/images/abc123/file',
+        'poll_after_seconds' => 5,
+        'notify'             => $notify,
+    ]);
+
+    assert_same($notify, $client['notify'], 'die Frage wird aus dem gespeicherten Datensatz gerendert');
+    assert_false(array_key_exists('status_url', $client), 'interne Status-URL bleibt serverseitig');
+    assert_false(array_key_exists('image_url', $client), 'interne Bild-URL bleibt serverseitig');
+    assert_same('abc123', $client['job_id']);
+});
+
+test_case('imageIntClientJob() lässt notify weg, wenn der Datensatz keine Zustimmung kennt', function (): void {
+    $client = imageIntClientJob(['job_id' => 'abc123', 'status' => 'running']);
+
+    assert_false(array_key_exists('notify', $client));
+});
+
 exit(test_summary('ImageInt-Health'));
