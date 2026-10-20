@@ -673,6 +673,20 @@ Text-LLM ── Tool-Aufruf generate_image ──► api/chat.php
   Wartehinweis mit erneutem Versuch nach `retry_after` behandelt, nicht als Fehler;
   ein `503` mit `error: "host_unsupported"` ist dagegen eine dauerhafte
   Fehlkonfiguration und wird als solche gemeldet.
+- **Beschäftigt ist nicht dasselbe wie nicht erreichbar.** Antwortet ImageInt nicht
+  innerhalb des Timeouts, obwohl der TCP-Verbindungsaufbau geklappt hat
+  (`CURLE_OPERATION_TIMEDOUT` bei `CURLINFO_CONNECT_TIME > 0`), ist der Host
+  erreichbar und rechnet gerade – etwa an einem laufenden Render, der die
+  Anfrage hinter dem Render-Lock wartet. `imageIntHttpCall()` setzt dann
+  `error = 'timeout'` und `timed_out = true`; `imageIntReady()` meldet
+  `busy = true` **und** `reachable = true`, `imageIntGenerate()` liefert
+  `status = 'loading'` mit `retry_after`, und `imageIntPollJob()` überspringt den
+  Versuch wie bei `unreachable`. Nur ein fehlgeschlagener Verbindungsaufbau
+  (`error = 'unreachable'`) ist eine echte Störung. Die Topologie zeigt ein
+  beschäftigtes ImageInt deshalb als `warn` („beschäftigt", Dashboard-Label
+  „Eingeschränkt") statt als `error` („Störung"); `api/image_health.php` und
+  `admin/image.php` zeigen denselben Hinweis und verschieben das Poll-Intervall
+  auf 15 s.
 - Das fertige PNG wird nach `image_output/` geholt und von dort ausgeliefert
   (`imageIntStoreImage()`, `imageIntEnsureImage()`); der Auftrag wird am
   Assistenten-Eintrag der Sitzung unter `image_job` mitgeschrieben

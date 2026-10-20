@@ -12,12 +12,16 @@ declare(strict_types=1);
  *
  * Aufruf:
  *   php tests/php/support/fake_http.php <status> [antwort-body]
+ *   php tests/php/support/fake_http.php stall <sekunden>
  *
  * Ablauf:
  *   1. bindet an 127.0.0.1 auf einem vom Betriebssystem vergebenen Port,
  *      schreibt die Portnummer als erste Zeile auf STDOUT und flusht,
  *   2. beantwortet jede eingehende Anfrage mit dem übergebenen Statuscode und
- *      Body (JSON, Connection: close),
+ *      Body (JSON, Connection: close); im Modus `stall` nimmt er die Anfrage
+ *      an, wartet die angegebenen Sekunden und schließt dann ohne Antwort –
+ *      so lässt sich eine Zeitüberschreitung nach aufgebauter Verbindung
+ *      prüfen (das Bild eines rechnenden ImageInt-Hosts),
  *   3. beendet sich nach MAX_REQUESTS Antworten oder wenn ACCEPT_TIMEOUT
  *      Sekunden lang keine Verbindung mehr eingeht.
  *
@@ -28,8 +32,16 @@ declare(strict_types=1);
 const MAX_REQUESTS   = 20;
 const ACCEPT_TIMEOUT = 10;
 
-$status = (int) ($argv[1] ?? 200);
-$body   = (string) ($argv[2] ?? '{"object":"list","data":[]}');
+$mode   = (string) ($argv[1] ?? '200');
+$stall  = 0;
+if ($mode === 'stall') {
+    $stall  = max(1, (int) ($argv[2] ?? 10));
+    $status = 200;
+    $body   = '';
+} else {
+    $status = (int) $mode;
+    $body   = (string) ($argv[2] ?? '{"object":"list","data":[]}');
+}
 
 $reason = match ($status) {
     200 => 'OK',
@@ -70,6 +82,14 @@ for ($served = 0; $served < MAX_REQUESTS; $served++) {
         if (rtrim($line, "\r\n") === '') {
             break;
         }
+    }
+
+    if ($stall > 0) {
+        // Annehmen, schweigen, schließen: der Client läuft in seine
+        // Zeitüberschreitung, obwohl die Verbindung stand.
+        sleep($stall);
+        fclose($conn);
+        continue;
     }
 
     fwrite($conn, $response);

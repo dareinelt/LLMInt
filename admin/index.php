@@ -411,6 +411,10 @@ require __DIR__ . '/partials/layout_head.php';
                     $imageEpState = '–';
                 } elseif (!empty($imageStatus['ready'])) {
                     $imageEpState = 'bereit';
+                } elseif (!empty($imageStatus['loading'])) {
+                    $imageEpState = 'lädt';
+                } elseif (!empty($imageStatus['busy'])) {
+                    $imageEpState = 'beschäftigt';
                 } elseif (!empty($imageStatus['reachable'])) {
                     $imageEpState = 'erreichbar';
                 } else {

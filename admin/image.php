@@ -748,6 +748,15 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
                 return;
             }
 
+            if (data && data.busy) {
+                // The host accepted the connection but did not answer within
+                // the probe's timeout – it is rendering, not unreachable.
+                resultEl.style.color = 'var(--warning)';
+                resultEl.textContent = '⏳ ' + (data.message || 'ImageInt rechnet noch …');
+                if (detailEl) { detailEl.hidden = true; }
+                return;
+            }
+
             if (data && data.ok) {
                 resultEl.style.color = 'var(--success)';
                 resultEl.textContent = '✓ ' + (data.message || 'ImageInt ist bereit.')
@@ -843,6 +852,9 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
         } else if (data && data.loading) {
             panelSummary.textContent = '⏳ ' + (data.message || 'Die Modelle werden noch geladen …');
             panelSummary.style.color = 'var(--warning)';
+        } else if (data && data.busy) {
+            panelSummary.textContent = '⏳ ' + (data.message || 'ImageInt rechnet noch …');
+            panelSummary.style.color = 'var(--warning)';
         } else {
             panelSummary.textContent = (data && data.message) || 'ImageInt ist nicht bereit.';
             panelSummary.style.color = 'var(--error)';
@@ -881,8 +893,9 @@ admin_help_text('image-ep-token', 'Auth-Token (X-Auth-Token)',
             renderPanel(data);
             panelLoaded = true;
             // While a model loads the panel polls fast; otherwise it only keeps
-            // the state fresh. A finished download needs no live updates.
-            const wait = data && data.loading ? PANEL_LIVE_MS : PANEL_IDLE_MS;
+            // the state fresh. A finished download needs no live updates, and a
+            // busy (rendering) host is polled at a polite distance.
+            const wait = data && data.loading ? PANEL_LIVE_MS : (data && data.busy ? 15000 : PANEL_IDLE_MS);
             schedulePanel(wait);
         } catch (e) {
             panelSummary.textContent = '✗ ' + e.message;

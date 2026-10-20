@@ -11,14 +11,85 @@ declare(strict_types=1);
  * percentage from bytes, files or a percentage, and that it carries the
  * transfer rate (`bytes_per_second`) through for the MB/s display.
  *
- * Deliberately not covered here (they need a live endpoint): imageIntHealth(),
- * imageIntReady(), imageIntModels() and the HTTP transport.
+ * Deliberately not covered here (they need a live endpoint): imageIntHealth()
+ * and imageIntModels(). imageIntReady() is covered only for the transport
+ * contract, against a local fake server: a host that accepts the connection but
+ * stays silent is `busy` (it is rendering), a refused port stays `unreachable`.
  *
  * Run from the repository root:  php tests/php/test_image_health.php
  */
 
 require __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/../../lib/image_generation.php';
+
+// ── Fake HTTP server ─────────────────────────────────────────────────────────
+
+/**
+ * Startet tests/php/support/fake_http.php mit $args, führt $fn($port) aus und
+ * beendet den Kindprozess wieder – auch wenn $fn eine Ausnahme wirft.
+ *
+ * @param array<int,string> $args Zusätzliche Argumente (Status, Body oder `stall`, Sekunden).
+ * @param callable          $fn   function (int $port): void
+ */
+function withFakeHttp(array $args, callable $fn): void
+{
+    $proc  = null;
+    $pipes = [];
+
+    try {
+        $command = array_merge([PHP_BINARY, __DIR__ . '/support/fake_http.php'], $args);
+        $proc = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (!is_resource($proc)) {
+            throw new RuntimeException('Fake-HTTP-Server konnte nicht gestartet werden.');
+        }
+
+        stream_set_timeout($pipes[1], 10);
+        $portLine = fgets($pipes[1]);
+        if ($portLine === false) {
+            throw new RuntimeException('Fake-HTTP-Server hat keinen Port gemeldet: '
+                . trim((string) stream_get_contents($pipes[2])));
+        }
+        $port = (int) trim($portLine);
+        if ($port <= 0) {
+            throw new RuntimeException('Fake-HTTP-Server meldete einen ungültigen Port.');
+        }
+
+        $fn($port);
+    } finally {
+        foreach ($pipes as $pipe) {
+            if (is_resource($pipe)) {
+                fclose($pipe);
+            }
+        }
+        if (is_resource($proc)) {
+            $status = proc_get_status($proc);
+            if ($status['running']) {
+                proc_terminate($proc);
+                $deadline = microtime(true) + 2.0;
+                while ($status['running'] && microtime(true) < $deadline) {
+                    usleep(20000);
+                    $status = proc_get_status($proc);
+                }
+                if ($status['running']) {
+                    proc_terminate($proc, 9);
+                }
+            }
+            proc_close($proc);
+        }
+    }
+}
+
+/** Ein Port, auf dem garantiert nichts lauscht (Verbindung wird abgelehnt). */
+function freeTcpPort(): int
+{
+    $server = @stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+    if ($server === false) {
+        throw new RuntimeException('Kein freier Port gefunden: ' . $errstr);
+    }
+    $name = (string) stream_socket_get_name($server, false);
+    fclose($server);
+    return (int) substr($name, (int) strrpos($name, ':') + 1);
+}
 
 // ── imageIntNumeric() ─────────────────────────────────────────────────────────
 
@@ -325,6 +396,48 @@ test_case('imageIntParseComponents() übernimmt ein eigenes state_label', functi
 
     assert_same('wird geladen', $components['image']['state_label']);
     assert_same(false, $components['image']['transient'], 'unbekannter Zustand ist nicht transient');
+});
+
+// ── Transport: "beschäftigt" ist nicht "nicht erreichbar" ─────────────────────
+
+test_case('imageIntReady() meldet einen stillen Host als beschäftigt, nicht als nicht erreichbar', function (): void {
+    // Der Fake-Server nimmt die Verbindung an, antwortet aber nicht: genau das
+    // Bild, das ein rechnender ImageInt-Host bietet.
+    withFakeHttp(['stall', '8'], function (int $port): void {
+        $health = imageIntReady('http://127.0.0.1:' . $port, '', ['timeout' => 5, 'connect_timeout' => 3]);
+
+        assert_same(true, $health['busy'], 'Zeitüberschreitung nach aufgebauter Verbindung');
+        assert_same(true, $health['reachable'], 'der Host hat die Verbindung angenommen');
+        assert_same(false, $health['ready']);
+        assert_same(false, $health['loading']);
+        assert_same('timeout', $health['error']);
+        assert_contains('rechnet vermutlich noch', $health['message']);
+        assert_not_contains('nicht erreichbar', $health['message']);
+    });
+});
+
+test_case('imageIntReady() meldet einen abgelehnten Port weiterhin als nicht erreichbar', function (): void {
+    $health = imageIntReady('http://127.0.0.1:' . freeTcpPort(), '', ['timeout' => 5, 'connect_timeout' => 3]);
+
+    assert_same(false, $health['busy'], 'ohne Verbindung ist der Host nicht bloß beschäftigt');
+    assert_same(false, $health['reachable']);
+    assert_same(false, $health['ready']);
+    assert_same('unreachable', $health['error']);
+    assert_contains('nicht erreichbar', $health['message']);
+});
+
+test_case('imageIntReady() behandelt ein transient 503 weiterhin als laden', function (): void {
+    $body = '{"status":"loading","transient":true,"message":"Die Gewichte werden geladen."}';
+
+    withFakeHttp(['503', $body], function (int $port): void {
+        $health = imageIntReady('http://127.0.0.1:' . $port, '', ['timeout' => 5, 'connect_timeout' => 3]);
+
+        assert_same(true, $health['loading']);
+        assert_same(false, $health['busy'], 'eine Antwort ist keine Zeitüberschreitung');
+        assert_same(true, $health['reachable']);
+        assert_same(false, $health['ready']);
+        assert_same('Die Gewichte werden geladen.', $health['message']);
+    });
 });
 
 exit(test_summary('ImageInt-Health'));

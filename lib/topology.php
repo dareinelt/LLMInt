@@ -1053,6 +1053,11 @@ function topology_build(array $stats, array $options = []): array
     $imageConfigured = $imageStatus !== null && !empty($imageStatus['configured']);
     $imageReady      = $imageStatus !== null && !empty($imageStatus['ready']);
     $imageLoading    = $imageStatus !== null && !empty($imageStatus['loading']);
+    // A busy host accepted the connection but did not answer the readiness
+    // probe in time – it is rendering, not gone. That is an Einschränkung, and
+    // turning it into a Störung is what made a working render look like an
+    // outage.
+    $imageBusy       = $imageStatus !== null && !empty($imageStatus['busy']);
     $imageReachable  = $imageStatus !== null && !empty($imageStatus['reachable']);
     $imageProbed     = $imageStatus === null || !array_key_exists('probed', $imageStatus) || !empty($imageStatus['probed']);
 
@@ -1088,6 +1093,10 @@ function topology_build(array $stats, array $options = []): array
                 $state   = 'warn';
                 $badge   = 'lädt';
                 $message = (string) ($imageStatus['message'] ?? 'Modell wird geladen.');
+            } elseif ($imageBusy) {
+                $state   = 'warn';
+                $badge   = 'beschäftigt';
+                $message = (string) ($imageStatus['message'] ?? 'ImageInt rechnet noch.');
             } elseif (!$imageReachable) {
                 $state   = 'error';
                 $badge   = 'offline';
@@ -1142,7 +1151,9 @@ function topology_build(array $stats, array $options = []): array
             'badge'    => $imageOk > 0 ? $imageOk . ' bereit' : '',
             'message'  => $imageOk > 0
                 ? $imageOk . ' von ' . count($imageKeys) . ' Bild-Endpunkt' . (count($imageKeys) !== 1 ? 'en' : '') . ' bereit.'
-                : 'Kein Bild-Endpunkt ist einsatzbereit.',
+                : ($imageBusy
+                    ? 'ImageInt rechnet gerade an einem Bild; kein Endpunkt ist derzeit einsatzbereit.'
+                    : 'Kein Bild-Endpunkt ist einsatzbereit.'),
             'activity' => topology_activity($imageOk > 0 ? max(1, $imageOk * 2) : 0),
             'facts'    => [
                 topology_fact('🔌', 'Endpunkte', (string) count($imageKeys), 'plain'),
