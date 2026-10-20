@@ -4582,7 +4582,6 @@ $csrfToken = $_SESSION['csrf_token'];
      * dieser Mail.
      */
     const watchedImageJobs = new Map();
-    const IMAGE_JOB_RUNNING = ['queued', 'running', 'enhancing', 'rendering'];
 
     function ensureImageJobBlock(jobId, state) {
         let wrapper = chatArea.querySelector('[data-image-job="' + jobId + '"]');
@@ -4657,6 +4656,16 @@ $csrfToken = $_SESSION['csrf_token'];
                     + '<button type="button" class="image-job-no">Nein, ich warte hier</button>'
                     + '</div>';
             }
+        } else if (state.notify && !state.notify.enabled) {
+            // Ohne Adresse im Profil gibt es nichts zu fragen. Das wird
+            // erklärt, statt die Zustimmungsfrage stillschweigend wegzulassen.
+            html += '<div class="image-job-note">'
+                + (state.notify.reason === 'no_email'
+                    ? 'Für eine Benachrichtigung per E-Mail fehlt eine Adresse in Deinem Profil. '
+                        + 'Das Bild erscheint so oder so automatisch in diesem Chat.'
+                    : 'Benachrichtigungen per E-Mail sind derzeit nicht aktiviert. '
+                        + 'Das Bild erscheint automatisch in diesem Chat, sobald es fertig ist.')
+                + '</div>';
         }
 
         bubble.innerHTML = html;
@@ -4756,7 +4765,6 @@ $csrfToken = $_SESSION['csrf_token'];
         }
 
         const status = data ? String(data.status || '') : '';
-        const isRunning = IMAGE_JOB_RUNNING.indexOf(status) !== -1;
 
         if (data && data.ok === true && status === 'done' && data.image_url) {
             state.stopped = true;
@@ -4785,7 +4793,10 @@ $csrfToken = $_SESSION['csrf_token'];
             return;
         }
 
-        if (data && !isRunning) {
+        // Nur ein echter Fehler beendet die Abfrage. Ein Status, den dieser
+        // Browser nicht kennt (busy, loading, …), und ein Dienst, der diese
+        // Runde nicht antwortet, heißen weiterrechnen – nicht fehlgeschlagen.
+        if (data && status === 'error') {
             state.stopped = true;
             clearTimeout(state.timer);
             state.job.failed = true;
@@ -4795,10 +4806,24 @@ $csrfToken = $_SESSION['csrf_token'];
             return;
         }
 
+        // Der Server kennt den Auftrag nicht mehr (z. B. 404 nach einem
+        // gelöschten Chat): dann gibt es nichts mehr abzufragen.
+        if (data && !data.status) {
+            state.stopped = true;
+            clearTimeout(state.timer);
+            state.job.failed = true;
+            state.job.message = data.message || 'Dieser Bildauftrag ist nicht mehr verfügbar.';
+            renderImageJobBlock(state);
+            setStatus(state.job.message, 'error');
+            return;
+        }
+
         // Still running – or the service did not answer this round, in which
         // case the last known status is kept and simply polled again.
         if (!data) {
             state.job.message = state.job.message || 'Das Bild wird erzeugt …';
+        } else if (status !== '') {
+            state.job.status = status;
         }
         renderImageJobBlock(state);
         state.timer = setTimeout(() => pollImageJob(state), state.pollMs);
@@ -4896,8 +4921,11 @@ $csrfToken = $_SESSION['csrf_token'];
             return;
         }
 
-        if (!data.ok && IMAGE_JOB_RUNNING.indexOf(String(data.status || '')) === -1
-            && String(data.status || '') !== 'done') {
+        // Nur ein echter Fehler oder ein dem Server unbekannter Auftrag beendet
+        // den Deep-Link. Ein laufender – oder gerade nicht antwortender –
+        // Dienst führt unten zur normalen Statusabfrage.
+        const status = String(data.status || '');
+        if (status === 'error' || status === '') {
             appendSystemMessage(data.message || 'Dieser Bildauftrag ist nicht mehr verfügbar.');
             return;
         }

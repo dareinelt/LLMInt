@@ -687,17 +687,43 @@ Text-LLM ── Tool-Aufruf generate_image ──► api/chat.php
   „Eingeschränkt") statt als `error` („Störung"); `api/image_health.php` und
   `admin/image.php` zeigen denselben Hinweis und verschieben das Poll-Intervall
   auf 15 s.
+- **Ein laufender Render ist kein Fehler.** Während ImageInt rechnet, schlägt auch
+  die Bereitschaftsprüfung des Modells fehl: `POST /v1/images/generations`
+  antwortet dann `503` mit `error: "image_unavailable"` statt `202`. Dieses `503`
+  wird wie `timeout`/`unreachable` behandelt (Auftrag bleibt bestehen,
+  `imageIntGenerate()` meldet `status = 'loading'` mit `busy = true`,
+  `imageIntPollJob()` überspringt den Versuch). `api/image_status.php` antwortet
+  bei solchen Runden mit `service_ok = false` und einem mit dem Alter des Auftrags
+  wachsenden `poll_after_seconds` (`imageIntPollBackoff()`: 15 → 30 → 60 → 120 s
+  aus `requested_at`). Nur `status = error` oder `expired` beendet das Polling im
+  Browser – ein unbekannter Status (`busy`, `loading`, `rendering`) bedeutet
+  weiterrechnen, nie „fehlgeschlagen".
 - Das fertige PNG wird nach `image_output/` geholt und von dort ausgeliefert
   (`imageIntStoreImage()`, `imageIntEnsureImage()`); der Auftrag wird am
   Assistenten-Eintrag der Sitzung unter `image_job` mitgeschrieben
   (`imageIntPatchJobInMessages()`, `imageIntPersistJobResult()`).
-- Überschreitet der Render `IMAGEINT_SYNC_TIMEOUT`, gibt `api/chat.php` den Auftrag
-  an den Browser zurück, der `api/image_status.php` pollt. Auf Wunsch hinterlegt der
-  Nutzer über `api/image_notify.php` eine Zustimmung in `image_notifications`; der
-  Cron-/CLI-Worker `api/image_notify_worker.php` (`imageIntProcessNotifications()`)
-  versendet die Mail, sobald der Auftrag fertig ist. Der Deep-Link aus der Mail
-  (`index.php?session=…&job=…`) übernimmt die Sitzung nur, wenn sie dem angemeldeten
-  Benutzer gehört.
+- **Vier Zeitfenster, nicht verwechseln.** `IMAGEINT_TIMEOUT` (Standard 1800 s) ist
+  die Obergrenze des gesamten Rendervorgangs inklusive Polling.
+  `IMAGEINT_SYNC_TIMEOUT` (Standard 120 s) legt **nicht** fest, wie lange eine
+  Chat-Anfrage blockiert, sondern begrenzt nur die beiden folgenden Werte.
+  `imageIntCreateTimeout()` (20–45 s) ist das Zeitlimit des auftragserzeugenden
+  POST – ImageInt prüft seine Modellserver (je ≤ 10 s) und antwortet dann `202`.
+  `imageIntInlineWait()` (höchstens 25 s, `IMAGE_INT_INLINE_WAIT_DEFAULT`) ist das
+  Fenster, in dem `imageIntGenerate()` einen frischen Auftrag noch selbst abpollt;
+  alles darüber geht sofort an den Browser. Ein langes Inline-Fenster wäre ein
+  Fehler: jede blockierte Sekunde ist eine Sekunde, in der Browser oder
+  Reverse-Proxy einen Timeout melden können, während ImageInt weiterrechnet – und
+  ein Auftrag, der den Browser nie erreicht, zeigt weder Fortschritt noch
+  Zustimmungsfrage.
+- Der Browser pollt `api/image_status.php`, bis der Auftrag fertig ist. Auf Wunsch
+  hinterlegt der Nutzer über `api/image_notify.php` eine Zustimmung in
+  `image_notifications`; der Cron-/CLI-Worker `api/image_notify_worker.php`
+  (`imageIntProcessNotifications()`) versendet die Mail, sobald der Auftrag fertig
+  ist. Die Zustimmungsdaten (`imageIntNotifyClientPayload()`) liegen am
+  gespeicherten `image_job`, damit die Frage einen Reload überlebt;
+  `notify.reason` (`no_email`, `disabled`) erklärt, warum kein Angebot möglich ist.
+  Der Deep-Link aus der Mail (`index.php?session=…&job=…`) übernimmt die Sitzung
+  nur, wenn sie dem angemeldeten Benutzer gehört.
 - Die Dimensionierung des Hosts (`host.cpu_cores`, `host.memory_gb`, `host.avx2`,
   `host.blocking`, `host.warnings`) sowie die beiden Modellserver (`components`)
   liefert `GET /v1/health`; der Verbindungstest im Adminbereich zeigt sie an.

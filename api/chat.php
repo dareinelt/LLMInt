@@ -2845,7 +2845,12 @@ if ($useTools) {
                     // Remember the running job so the assistant message can carry
                     // it: the browser renders the consent question from it, the
                     // status endpoint resolves it, and the notification mail links
-                    // back to it.
+                    // back to it. The consent payload travels with the record so
+                    // the question also appears after a page reload.
+                    $toolResult['notify'] = imageIntNotifyClientPayload(
+                        $sessionUserId,
+                        (string) ($toolResult['prompt'] ?? '')
+                    );
                     $imageJobRecord = $toolResult;
                 }
                 // Include a markdown image in the result so the LLM can reference it.
@@ -2907,11 +2912,8 @@ if ($useTools) {
         if ($imageJobRecord !== null) {
             // The browser polls api/image_status.php with the job id and renders
             // the consent question; the internal ImageInt URLs stay server-side.
+            // The consent payload rides along on the record (imageIntClientJob()).
             $responseDetails['image_job'] = imageIntClientJob($imageJobRecord);
-            $responseDetails['image_job']['notify'] = imageIntNotifyClientPayload(
-                $sessionUserId,
-                (string) ($imageJobRecord['prompt'] ?? '')
-            );
         }
         $finalData['response_details'] = $responseDetails;
     }

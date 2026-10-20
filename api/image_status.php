@@ -19,10 +19,15 @@
  * Returns JSON:
  *   { ok, status, stage, stage_label, message, image_url, image_markdown,
  *     width, height, duration_ms, duration, poll_after_seconds, expired,
- *     notify: { enabled, email, consent_text, requested, status } }
+ *     service_ok, notify: { enabled, reason, email, consent_text, requested,
+ *     status } }
  *
- * `ok` is false for a failed or expired job, together with a German message the
- * chat renders as an error bubble – never as an empty image.
+ * `ok` is true only for a finished job. `service_ok` says whether ImageInt
+ * answered this round: false means "busy or momentarily unreachable", and the
+ * browser must keep polling (with a growing interval) instead of reporting a
+ * failure – a render keeps the service busy and a status call may time out
+ * while the image is still being computed. Only `status = error`/`expired` end
+ * the polling.
  *
  * Requires an active user session.
  */
@@ -83,11 +88,22 @@ $notify['requested'] = $notify['status'] !== '';
 
 $resolved = imageIntResolveJob($record);
 
+$status = (string) ($resolved['status'] ?? '');
+$error  = (string) ($resolved['error'] ?? '');
+
+// A status call that timed out, a dropped connection or an ImageInt that is
+// busy with the render says nothing about the job itself – it only says that
+// this round got no answer. That is "keep polling", not "failed".
+$serviceOk = !in_array($error, ['timeout', 'unreachable', 'unavailable', 'image_unavailable'], true);
+
 $payload = [
     'ok'                 => false,
+    'service_ok'         => $serviceOk,
     'job_id'             => $jobId,
     'session_id'         => $sessionId,
-    'status'             => $resolved['status'],
+    // An empty status would make the browser treat the job as broken, so the
+    // last known status is reported instead.
+    'status'             => $status !== '' ? $status : 'running',
     'stage'              => $resolved['stage'],
     'stage_label'        => imageIntStageLabel($resolved['stage']),
     'message'            => $resolved['message'],
@@ -95,7 +111,7 @@ $payload = [
     'image_markdown'     => '',
     'duration_ms'        => 0,
     'duration'           => '',
-    'poll_after_seconds' => IMAGE_INT_POLL_INTERVAL_DEFAULT,
+    'poll_after_seconds' => imageIntPollBackoff($record),
     'expired'            => $resolved['expired'],
     'notify'             => $notify,
 ];
@@ -112,7 +128,7 @@ if ($resolved['expired']) {
     exit;
 }
 
-if (($resolved['status'] ?? '') === 'error' || ($resolved['error'] ?? '') === 'image_error') {
+if ($status === 'error' || $error === 'image_error') {
     $payload['message'] = $resolved['message'] !== ''
         ? $resolved['message']
         : 'Die Bildgenerierung ist fehlgeschlagen.';
@@ -120,14 +136,20 @@ if (($resolved['status'] ?? '') === 'error' || ($resolved['error'] ?? '') === 'i
     exit;
 }
 
-if (($resolved['error'] ?? '') === 'image_unavailable') {
-    $payload['status']  = 'done';
-    $payload['message'] = $resolved['message'];
+if ($error === 'image_unavailable' && $status === 'done') {
+    // The render finished but the PNG could not be fetched yet (ImageInt was
+    // busy answering). The next attempt usually succeeds, so the browser keeps
+    // polling instead of seeing "abgelaufen".
+    $payload['status']     = 'rendering';
+    $payload['service_ok'] = false;
+    $payload['message']    = $resolved['message'] !== ''
+        ? $resolved['message'] . ' Es wird erneut versucht.'
+        : 'Das Bild wurde erzeugt, konnte aber noch nicht abgerufen werden. Es wird erneut versucht.';
     echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
 
-if (!$resolved['ok'] || $resolved['status'] !== 'done') {
+if (!$resolved['ok'] || $status !== 'done') {
     // Still queued/running, or ImageInt is momentarily unreachable. Both mean
     // "keep polling", not "failed".
     if ($payload['message'] === '') {
@@ -183,6 +205,7 @@ try {
 }
 
 $payload['ok']             = true;
+$payload['service_ok']     = true;
 $payload['status']         = 'done';
 $payload['stage']          = 'done';
 $payload['stage_label']    = imageIntStageLabel('done');

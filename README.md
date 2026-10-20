@@ -624,7 +624,7 @@ ImageInt ersetzt die früheren Integrationen **AUTOMATIC1111** und **ComfyUI**. 
 
 1. **Erkennung:** Der Systemprompt enthält die Auslöse-Formulierungen aus `image_prompt_trigger_text` (Standard: „Generiere ein Bild …", „Erstelle eine Grafik …", „Zeige mir ein Bild von …"). Genauso wichtig ist die Gegenregel aus `image_prompt_anti_trigger_text`: eine Frage *über* Bilder („Wie funktioniert Bildgenerierung?") darf das Tool nicht auslösen. Beide Texte sind in der Admin-Karte editierbar, damit sie ohne Deployment erweitert werden können.
 2. **Aufruf:** `api/chat.php` schickt `POST /v1/images/generations` mit `prompt`, optional `negative_prompt` und `size` (z. B. `16:9`, `1:1`, `4:3`) – und immer mit `wait: false`. Der Dienst antwortet sofort mit **202** und einer `job_id`; ein PHP-Request bleibt damit nicht minutenlang offen.
-3. **Warten:** LLMInt pollt `status_url`, solange der Auftrag `queued` oder `running` ist, und zeigt den Fortschritt anhand von `stage` (`queued` → `enhancing` → `rendering` → `done`). Nach `IMAGEINT_SYNC_TIMEOUT` (Standard 120 s) gibt der Request den Auftrag an den Browser zurück, der über `api/image_status.php` weiterpollt.
+3. **Warten:** LLMInt pollt `status_url`, solange der Auftrag `queued` oder `running` ist, und zeigt den Fortschritt anhand von `stage` (`queued` → `enhancing` → `rendering` → `done`). Nur ein kurzes Fenster (`imageIntInlineWait()`, höchstens 25 s) wird direkt im Chat-Request abgewartet; danach gibt der Request den Auftrag an den Browser zurück, der über `api/image_status.php` weiterpollt. So bleibt der Chat schnell und kein Browser oder Reverse-Proxy läuft in einen Timeout, während ImageInt weiterrechnet.
 4. **Ergebnis:** Ist der Auftrag `done`, lädt LLMInt das PNG über `image_url` herunter und legt es in `image_output/` ab. Im Chat erscheint es als Markdown-Bild.
 
 Die `image_url` aus dem Job-Dokument zeigt auf den ImageInt-Host, den ein Browser in der Regel nicht erreichen kann. LLMInt spiegelt das PNG deshalb lokal und verwendet für Chat und Mail die lokale Adresse.
@@ -633,13 +633,17 @@ Die `image_url` aus dem Job-Dokument zeigt auf den ImageInt-Host, den ein Browse
 
 Nach einem Neustart lädt ImageInt erst den Enhancer und den Renderer. Solange antwortet `/v1/ready` und `POST /v1/images/generations` mit **503** und `transient: true` samt deutschem Hinweistext und `Retry-After`. LLMInt behandelt das **nicht** als Fehler: Der Chat zeigt eine Wartemeldung und fragt nach der von `Retry-After` vorgegebenen Zeit erneut an. Erst wenn der Host die Hardwareanforderung nicht erfüllt (`503 host_unsupported`, AVX2 fehlt), meldet der Verbindungstest einen echten Fehler – Warten hilft dort nicht.
 
+Dasselbe gilt für ein **beschäftigtes** ImageInt: Solange ein Bild gerendert wird, ist der Modellserver belegt und der Dienst lehnt neue Aufträge mit **503** und `error: "image_unavailable"` ab. Auch das ist kein Fehler, sondern eine Wartezeit – der Chat meldet „ImageInt rechnet gerade an einem anderen Bild" mit einem erneuten Versuch in einigen Minuten. Ein laufender Auftrag wird bei einem solchen `503` weiter verfolgt, nicht abgebrochen; das Poll-Intervall wächst dabei mit dem Alter des Auftrags (15 → 30 → 60 → 120 s). Timeouts bei der Statusabfrage werden genauso behandelt: Der Chat pollt weiter, solange der Auftrag nicht `error` oder `expired` meldet.
+
 #### Zustimmung und Benachrichtigungsmail
 
-Eine CPU-Generierung dauert Minuten. Läuft der Auftrag nach `IMAGEINT_SYNC_TIMEOUT` noch, blendet der Chat die Zustimmungsfrage aus `image_notify_consent_text` ein:
+Eine CPU-Generierung dauert Minuten. Sobald der Auftrag länger als das Inline-Fenster läuft, blendet der Chat die Zustimmungsfrage aus `image_notify_consent_text` ein:
 
 > Das Generieren dieser Antwort kann einige Zeit in Anspruch nehmen. Möchten Sie per E-Mail über die Fertigstellung benachrichtigt werden?
 
 Darunter stehen „Ja, per E-Mail benachrichtigen" und „Nein, ich warte hier". Ein „Ja" legt über `api/image_notify.php` genau eine Zeile in `image_notifications` an; ein zweiter Klick oder ein Neuladen erzeugt dank `UNIQUE KEY uniq_job_user` keine zweite Mail. Ein „Nein" erzeugt keine Zeile und keine Mail.
+
+Kann keine Mail angeboten werden, sagt der Chat das, statt die Frage zu verschweigen: fehlt im Profil eine E-Mail-Adresse, erscheint der Hinweis „Für eine Benachrichtigung per E-Mail fehlt eine Adresse in Deinem Profil …"; ist die Funktion im Adminbereich abgeschaltet, der Hinweis „Benachrichtigungen per E-Mail sind derzeit nicht aktiviert …". Die Frage selbst liegt am gespeicherten Auftrag (`image_job.notify`), übersteht damit ein Neuladen der Sitzung und wird nicht erneut gestellt, sobald eine Zustimmung hinterlegt ist.
 
 Die Mail verschickt **nicht** der Browser, sondern `api/image_notify_worker.php`:
 
