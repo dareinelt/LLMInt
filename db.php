@@ -938,9 +938,17 @@ function ensureRuntimeSchema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
-    // Seed default security rules if the table is still empty.
-    $psrCount = (int) $pdo->query('SELECT COUNT(*) FROM prompt_security_rules')->fetchColumn();
-    if ($psrCount === 0) {
+    // Seed default security rules.
+    //
+    // Insert-only and versioned: rules an administrator has edited or deleted
+    // are never overwritten or restored. The version marker lets a later
+    // release add new rules to installations whose table is already filled –
+    // a plain "only seed when empty" check would never reach them.
+    $psrSeedVersion = '2';
+    $psrStoredSeed  = (string) $pdo->query(
+        "SELECT setting_value FROM settings WHERE setting_key = 'prompt_security_rules_seed'"
+    )->fetchColumn();
+    if ($psrStoredSeed !== $psrSeedVersion) {
         $defaultRules = [
             // ── Prompt Injection ─────────────────────────────────────────────
             ['prompt_injection', 'Ignore previous instructions', 'ignore.{0,10}(all|previous|prior|above).{0,15}(instruction|prompt|rule|directive)', 1, 85, 'Classic prompt injection – instructing the model to discard its system prompt.'],
@@ -965,7 +973,7 @@ function ensureRuntimeSchema(PDO $pdo): void
             ['tool_abuse', 'Ignore tool permissions', 'ignore.{0,15}(tool|permission|access|right)', 1, 70, 'Attempts to bypass tool permission checks.'],
             // ── RAG Attacks ──────────────────────────────────────────────────
             ['rag_attack', 'Export knowledge base', '(export|dump|list|show|print).{0,20}(all|entire|complete|whole).{0,20}(document|knowledge|chunk|embedding)', 1, 75, 'Attempts to dump the RAG knowledge base.'],
-            ['rag_attack', 'Show all documents', '(show|list|display|give me).{0,15}all.{0,15}document', 1, 65, 'Requests enumeration of all documents.'],
+            ['rag_attack', 'Show all documents', '(show|list|display|give me).{0,15}all.{0,15}document', 1, 50, 'Requests enumeration of all documents.'],
             ['rag_attack', 'Export chunk contents', '(export|dump|output).{0,15}(chunk|embed)', 1, 70, 'Attempts to extract raw RAG chunks.'],
             // ── Role Switching ───────────────────────────────────────────────
             ['role_switch', 'You are now admin', 'you are now.{0,20}(admin|root|superuser|administrator|developer)', 1, 80, 'Attempts to grant the model elevated privileges.'],
@@ -977,14 +985,39 @@ function ensureRuntimeSchema(PDO $pdo): void
             ['data_exfiltration', 'Export all users', '(export|dump|list|show).{0,15}all.{0,15}user', 1, 80, 'Attempts to enumerate user data.'],
             ['data_exfiltration', 'Show database entries', '(show|dump|print|output|select).{0,20}(database|db|table|row|record|entry)', 1, 75, 'Attempts to read database contents.'],
             ['data_exfiltration', 'Read config files', '(read|show|cat|open).{0,15}(config|configuration|env|\.env|settings)', 1, 80, 'Attempts to read configuration files.'],
+            // ── Deutschsprachige Varianten ───────────────────────────────────
+            // Die Oberfläche und die Korrespondenz der Installation sind
+            // deutsch, die englischen Muster greifen bei deutschen Angriffen
+            // daher nicht.
+            ['prompt_injection', 'Vorherige Anweisungen ignorieren', '(ignorier|vergiss|vergesse|missachte|umgehe)\w*.{0,25}(vorherig|bisherig|obig|vorig|alle[nrs]?)\w*.{0,25}(anweisung|instruktion|regel|vorgabe|prompt)', 1, 85, 'Deutsche Variante der klassischen Prompt-Injection.'],
+            ['prompt_injection', 'Ab jetzt gilt', '(ab jetzt|von nun an|ab sofort).{0,30}(gilt|bist du|ignorier|vergiss|verhalte|agiere)', 1, 75, 'Deutsche Anweisung zum Überschreiben der Vorgaben.'],
+            ['prompt_injection', 'Neuer Systemprompt', '(neue|neuen|neuer|geänderte|geänderten)\w*.{0,12}system.{0,12}(prompt|anweisung)', 1, 75, 'Versuch, einen Systemprompt einzuschleusen.'],
+            ['prompt_leakage', 'Systemprompt ausgeben', '(gib|zeig|nenne|drucke|verrate|offenbare|wiederhole)\w*.{0,25}(systemprompt|system.?anweisung|system.?nachricht|deine[nrms]?\s{0,12}(anweisung|regel|vorgabe|prompt))', 1, 70, 'Versuch, den Systemprompt auszulesen.'],
+            ['prompt_leakage', 'Anweisungen wörtlich wiederholen', '(wiederhole|zitiere|kopiere)\w*.{0,25}(alles|alle|den|die|deine)\w*.{0,25}(wortwörtlich|wörtlich|wortgenau|exakt|vollständig)', 1, 70, 'Wörtliche Ausgabe des Kontexts.'],
+            ['jailbreak', 'Ohne Einschränkungen', '(ohne|keine)\w*.{0,15}(einschränkung|beschränkung|regel|filter|zensur)', 1, 60, 'Versuch, ohne Sicherheitsvorgaben zu arbeiten.'],
+            ['jailbreak', 'Uneingeschränkter Modus', '(uneingeschränkt|ungefiltert|ungezensiert|unzensiert)\w*.{0,20}(antworten|modus|agieren|verhalten|ausgeben)', 1, 75, 'Anfrage nach einem ungefilterten Modus.'],
+            ['role_switch', 'Du bist jetzt Admin', 'du bist (jetzt|nun|ab sofort).{0,20}(admin|administrator|root|superuser|entwickler)', 1, 80, 'Versuch der Rechteausweitung.'],
+            ['role_switch', 'Als Admin antworten', '(antworte|agiere|verhalte dich|handle)\w*.{0,20}als.{0,20}(admin|administrator|root|superuser|entwickler)', 1, 55, 'Anfrage nach einer privilegierten Rolle.'],
+            ['data_exfiltration', 'Zugangsdaten ausgeben', '(gib|zeig|nenne|liste|drucke)\w*.{0,20}(api.?key|api.?schlüssel|passwort|kennwort|zugangsdaten|token|geheimnis)', 1, 90, 'Versuch, Geheimnisse oder Zugangsdaten auszulesen.'],
+            ['data_exfiltration', 'Datenbank auslesen', '(zeig|gib|liste|dump|exportiere)\w*.{0,20}(datenbank|tabelle|datensätze|alle nutzer)', 1, 75, 'Versuch, Datenbankinhalte auszulesen.'],
+            ['tool_abuse', 'Alle Werkzeuge nutzen', '(nutze|verwende|rufe)\w*.{0,15}alle.{0,15}(werkzeug|tool|funktion)', 1, 65, 'Versuch, alle Werkzeuge ungeprüft aufzurufen.'],
+            ['rag_attack', 'Alle Dokumente ausgeben', '(zeig|gib|liste|exportiere|drucke)\w*.{0,20}alle.{0,20}(dokument|datei|unterlage)', 1, 50, 'Anfrage zum Auflisten des gesamten Dokumentbestands.'],
         ];
-        $psrStmt = $pdo->prepare(
-            'INSERT IGNORE INTO prompt_security_rules (category, name, pattern, is_regex, severity, is_active, description)
+        $psrExists = $pdo->prepare('SELECT 1 FROM prompt_security_rules WHERE name = ? LIMIT 1');
+        $psrStmt   = $pdo->prepare(
+            'INSERT INTO prompt_security_rules (category, name, pattern, is_regex, severity, is_active, description)
              VALUES (?, ?, ?, ?, ?, 1, ?)'
         );
         foreach ($defaultRules as $r) {
-            $psrStmt->execute($r);
+            $psrExists->execute([$r[1]]);
+            if ($psrExists->fetchColumn() === false) {
+                $psrStmt->execute($r);
+            }
         }
+        $pdo->prepare(
+            'INSERT INTO settings (setting_key, setting_value) VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()'
+        )->execute(['prompt_security_rules_seed', $psrSeedVersion]);
     }
 
     // ── Speech recognition / dictation defaults ──────────────────────────────

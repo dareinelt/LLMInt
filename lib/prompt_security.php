@@ -122,6 +122,24 @@ function psNormalise(string $input): array
 // ── Stage 2 – Rule-based matching ────────────────────────────────────────────
 
 /**
+ * Turn a stored pattern into a usable regex.
+ *
+ * Patterns are stored either bare ("ignore.{0,10}…") or already delimited
+ * ("/ignore/i"). Detection must not rely on the first character: a bare pattern
+ * starting with "(" is valid but not delimited, and a naive check would feed it
+ * to preg_match() without delimiters – silently disabling every such rule.
+ */
+function psDelimitRegex(string $pattern): string
+{
+    // Already delimited: one non-alphanumeric delimiter, closing one, optional flags.
+    if (preg_match('/^([^a-zA-Z0-9\\\\\s]).*\1[a-zA-Z]*$/s', $pattern) === 1) {
+        return $pattern;
+    }
+
+    return '/' . addcslashes($pattern, '/') . '/iu';
+}
+
+/**
  * Match normalised input against all active rules.
  *
  * Returns an array of matched rule rows (each row as returned from the DB plus
@@ -142,12 +160,8 @@ function psMatchRules(string $normalised): array
         $excerpt = '';
 
         if ((int) ($rule['is_regex'] ?? 0) === 1) {
-            // Regex pattern – wrap in delimiters if not already wrapped.
-            $regex = $pattern;
-            if (!preg_match('/^[^a-zA-Z0-9\\\\ ]/', $pattern)) {
-                // Not already delimited – add delimiters and flags.
-                $regex = '/' . addcslashes($pattern, '/') . '/iu';
-            }
+            // Regex pattern – wrap in delimiters unless it already carries them.
+            $regex = psDelimitRegex($pattern);
             if (@preg_match($regex, $normalised, $m) === 1) {
                 $hit     = true;
                 $excerpt = $m[0];
