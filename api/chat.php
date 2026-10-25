@@ -2113,15 +2113,18 @@ for ($idx = count($payload['messages']) - 1; $idx >= 0; $idx--) {
 // ── Prompt Security check ─────────────────────────────────────────────────────
 // Every chat request is evaluated before reaching the LLM pipeline.
 //
-// All client-supplied "user" and "system" messages are screened – not just the
-// last user turn. Restricting the check to the last "user" message left three
-// trivial bypasses: a payload in a client "system" message, a payload in an
-// earlier turn, and a payload split across turns. Every one of them reaches the
+// All client-supplied "user" messages are screened – not just the last turn.
+// Restricting the check to the last "user" message left two trivial bypasses:
+// a payload in an earlier turn and a payload split across turns. Both reach the
 // model unfiltered.
 //
-// "assistant" turns are deliberately not screened: they are model output and
-// regularly quote attack patterns verbatim (security questions, documentation),
-// which would make the next question of a legitimate conversation fail.
+// "system" messages are exempt: the "System-Prompt" field and the "/command"
+// additions are set by the operator and are trusted policy, not user input.
+// Screening them would block legitimate instructions such as "ignoriere alle
+// vorherigen Anweisungen". "assistant" turns are exempt as well: they are model
+// output and regularly quote attack patterns verbatim (security questions,
+// documentation), which would make the next question of a legitimate
+// conversation fail.
 {
     $psUserId    = isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null;
     $psSessionId = isset($payload['session_id']) && is_string($payload['session_id'])
@@ -2134,7 +2137,7 @@ for ($idx = count($payload['messages']) - 1; $idx >= 0; $idx--) {
             continue;
         }
         $psRole = (string) ($psMsg['role'] ?? '');
-        if (!in_array($psRole, ['user', 'system'], true)) {
+        if ($psRole !== 'user') {
             continue;
         }
         $psClientTexts[] = is_string($psMsg['content'] ?? null)
