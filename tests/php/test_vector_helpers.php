@@ -313,7 +313,13 @@ test_case('buildVectorContextSystemPrompt() trennt die Auszüge mit Leerzeilen',
 
     assert_contains('Erster Auszug.', $prompt);
     assert_contains('Zweiter Auszug.', $prompt);
-    assert_contains("Erster Auszug.\n\n[Quelle 2", $prompt);
+
+    // Jeder Auszug steht in einer Untrusted-Klammer; zwischen den Quellen
+    // bleibt eine Leerzeile als Trennung erhalten.
+    preg_match('/<<(UNTRUSTED-[0-9A-Fa-f]+) label=/', $prompt, $matches);
+    $boundary = (string) ($matches[1] ?? '');
+    assert_true($boundary !== '', 'Der Prompt enthält eine Untrusted-Klammer');
+    assert_contains('Erster Auszug.' . "\n" . '<</' . $boundary . '>>' . "\n\n[Quelle 2", $prompt);
 });
 
 test_case('buildVectorContextSystemPrompt() kürzt zu lange Auszüge', function (): void {

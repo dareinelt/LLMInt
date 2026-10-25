@@ -25,6 +25,20 @@ $GLOBALS['LLMINT_OPENAI_STRICT_MODE'] = true;
 $GLOBALS['LLMINT_OPENAI_TOOL_MODE'] = ((string) ($GLOBALS['LLMINT_OPENAI_TOOL_MODE'] ?? 'disabled')) === 'enabled'
     ? 'enabled'
     : 'disabled';
+
+// The tool-enabled endpoint reaches the web and the document store. Unless an
+// administrator explicitly allows it, it therefore requires a valid API key.
+if ($GLOBALS['LLMINT_OPENAI_TOOL_MODE'] === 'enabled'
+    && $apiKey === null
+    && !openaiAnonymousToolAccessAllowed()) {
+    openaiSendError(
+        401,
+        'The tool-enabled API requires a valid API key.',
+        'invalid_request_error',
+        'invalid_api_key'
+    );
+}
+
 $GLOBALS['LLMINT_REQUEST_BODY_OVERRIDE'] = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
 openaiBeginAnonymousApiRequest($apiKey);
