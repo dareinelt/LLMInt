@@ -2372,7 +2372,7 @@ $csrfToken = $_SESSION['csrf_token'];
 
         <!-- System prompt (shown on demand above the input box) -->
         <div id="system-prompt-wrap">
-            <div id="system-prompt-label" title="Wird als zusätzlicher Wunsch an die Anfrage gehängt. Die Systemrichtlinien der Installation haben Vorrang.">Zusätzliche Anweisung (optional):</div>
+            <div id="system-prompt-label">System-Prompt (optional):</div>
             <textarea id="system-prompt" rows="3"
                       placeholder="Du bist ein hilfreicher Assistent …"></textarea>
         </div>
