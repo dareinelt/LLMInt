@@ -69,6 +69,30 @@ function openaiReadBearerToken(): string
 }
 
 /**
+ * Whether the OpenAI-compatible API accepts requests without a valid API key.
+ *
+ * Default "1" keeps existing integrations working. Set
+ * `openai_api_allow_anonymous` to "0" to require a valid key for every call.
+ */
+function openaiAnonymousAccessAllowed(): bool
+{
+    return getSetting('openai_api_allow_anonymous', '1') !== '0';
+}
+
+/**
+ * Whether the tool-enabled API ("/api/openai-tools/v1") may be used without a
+ * valid API key.
+ *
+ * Default "0": tool calls reach the web and the document store, so an
+ * unauthenticated caller would be able to use LLMInt as an open proxy. An
+ * administrator can opt out with `openai_tools_allow_anonymous` = "1".
+ */
+function openaiAnonymousToolAccessAllowed(): bool
+{
+    return getSetting('openai_tools_allow_anonymous', '0') === '1';
+}
+
+/**
  * Validate the optional API key of an OpenAI-compatible request.
  *
  * Without an Authorization header – or with an unknown, inactive or expired
@@ -76,12 +100,23 @@ function openaiReadBearerToken(): string
  * identification in the log and for the optional model it pins – API clients
  * never act as the key owner.
  *
+ * If `openai_api_allow_anonymous` is set to "0", a request without a valid key
+ * is rejected with 401 instead.
+ *
  * @return array{key_id:int,name:string,model:string}|null Key info, or null without key.
  */
 function openaiAuthenticateApiRequest(): ?array
 {
     $token = openaiReadBearerToken();
     if ($token === '') {
+        if (!openaiAnonymousAccessAllowed()) {
+            openaiSendError(
+                401,
+                'An API key is required. Send it as "Authorization: Bearer sk-...".',
+                'invalid_request_error',
+                'invalid_api_key'
+            );
+        }
         return null;
     }
 
@@ -103,6 +138,9 @@ function openaiAuthenticateApiRequest(): ?array
     }
 
     if (!$row) {
+        if (!openaiAnonymousAccessAllowed()) {
+            openaiSendError(401, 'The provided API key is not valid.', 'invalid_request_error', 'invalid_api_key');
+        }
         // Anonymous access is allowed anyway, and many OpenAI clients insist
         // on sending some placeholder key – treat unknown keys as anonymous.
         return null;

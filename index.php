@@ -3272,6 +3272,18 @@ $csrfToken = $_SESSION['csrf_token'];
             .replace(/"/g, '&quot;');
     }
 
+    // Only these schemes may end up in an href/src attribute. Everything else
+    // (javascript:, data:, vbscript:, …) is rendered as plain text so a model
+    // answer can never smuggle executable markup into the page.
+    function isSafeMarkdownUrl(url) {
+        const trimmed = String(url).trim();
+        // Relative URLs and in-page anchors are fine.
+        if (!/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+            return true;
+        }
+        return /^(https?:\/\/|mailto:)/i.test(trimmed);
+    }
+
     function inlineMarkdown(str) {
         // Explicit line break <br> / <br/> / <br /> (escaped by escapeHtmlContent
         // beforehand, so this restores it as a real line break instead of literal text).
@@ -3292,12 +3304,18 @@ $csrfToken = $_SESSION['csrf_token'];
         str = str.replace(/`([^`]+)`/g, '<code>$1</code>');
         // Image ![alt](url) – must come before link processing
         str = str.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (_, alt, url) {
+            if (!isSafeMarkdownUrl(url)) {
+                return alt;
+            }
             const safeAlt = alt.replace(/"/g, '&quot;');
             const safeUrl = url.replace(/"/g, '&quot;');
             return '<img src="' + safeUrl + '" alt="' + safeAlt + '" style="max-width:100%;border-radius:8px;margin:.4em 0;">';
         });
         // Link [text](url)
         str = str.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, text, url) {
+            if (!isSafeMarkdownUrl(url)) {
+                return text;
+            }
             const safeUrl = url.replace(/"/g, '&quot;');
             return '<a href="' + safeUrl + '" target="_blank" rel="noopener noreferrer">' + text + '</a>';
         });

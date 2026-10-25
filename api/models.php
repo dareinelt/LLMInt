@@ -18,6 +18,13 @@
 
 require_once __DIR__ . '/../db.php';
 
+// The endpoint list is an internal network probe: it connects to whatever URL
+// the caller supplies and returns the answer. Only administrators may use it.
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+requireAdminOrJson403();
+
 header('Content-Type: application/json; charset=utf-8');
 
 // ── Determine target endpoint ─────────────────────────────────────────────────
@@ -28,6 +35,12 @@ if (isset($_GET['endpoint_url']) && $_GET['endpoint_url'] !== '') {
     if ($baseUrl === false) {
         http_response_code(400);
         echo json_encode(['error' => 'Ungültige endpoint_url.']);
+        exit;
+    }
+    $scheme = strtolower((string) parse_url($baseUrl, PHP_URL_SCHEME));
+    if ($scheme !== 'http' && $scheme !== 'https') {
+        http_response_code(400);
+        echo json_encode(['error' => 'endpoint_url muss mit http:// oder https:// beginnen.']);
         exit;
     }
     $baseUrl = rtrim($baseUrl, '/');

@@ -209,14 +209,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ── Load current settings ─────────────────────────────────────────────────────
-$psEnabled          = getSetting('prompt_security_enabled',          '0') === '1';
+$psEnabled          = getSetting('prompt_security_enabled',          '1') === '1';
 $psMode             = getSetting('prompt_security_mode',             'active');
 $psScoreLimit       = (int) getSetting('prompt_security_score_limit', '81');
 $psWarnLimit        = (int) getSetting('prompt_security_warn_limit',  '51');
 $psLog              = getSetting('prompt_security_log',              '1') === '1';
 $psLogInput         = getSetting('prompt_security_log_input',        'full');
 $psLogRetention     = (int) getSetting('prompt_security_log_retention_days', '30');
-$psFailOpen         = getSetting('prompt_security_fail_open',        '1') === '1';
+$psFailOpen         = getSetting('prompt_security_fail_open',        '0') === '1';
 $psAiEnabled        = getSetting('prompt_security_ai_enabled',       '0') === '1';
 $psAiEndpoint       = getSetting('prompt_security_ai_endpoint',      '');
 $psAiModel          = getSetting('prompt_security_ai_model',         '');

@@ -236,6 +236,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     : 'SearXNG-URL gespeichert.';
             }
 
+        // ── Save OpenAI API access control ────────────────────────────────────
+        } elseif ($action === 'save_openai_api_settings') {
+            setSetting('openai_api_allow_anonymous', isset($_POST['openai_api_allow_anonymous']) ? '1' : '0');
+            setSetting('openai_tools_allow_anonymous', isset($_POST['openai_tools_allow_anonymous']) ? '1' : '0');
+            $flashOk = 'Zugriffsschutz der OpenAI-API gespeichert.';
+
         // ── Save request-handling settings ───────────────────────────────────
         } elseif ($action === 'save_request_handling') {
             $newGuestDefaultModel = trim($_POST['guest_default_model'] ?? '');

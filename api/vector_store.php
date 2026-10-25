@@ -36,6 +36,7 @@
  */
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../lib/prompt_security.php';
 require_once __DIR__ . '/embedding.php';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -875,11 +876,17 @@ function buildVectorContextSystemPrompt(array $hits, int $budget = 12000): strin
     if ($hits === []) {
         return '';
     }
+    // RAG chunks are untrusted: they are whatever somebody uploaded into the
+    // shared knowledge base. Each excerpt is wrapped in the request's
+    // untrusted-content boundary and the model is told explicitly that the
+    // content is data, never instructions.
+    $boundary = psUntrustedBoundary();
     $parts = [
         'Wissensdatenbank-Kontext: Die folgenden Auszüge stammen aus der zentralen Vektordatenbank '
         . 'und wurden zur aktuellen Nutzeranfrage gefunden. Nutze sie bevorzugt zur Beantwortung, '
         . 'wenn sie relevant sind, und nenne die Quelle (Dateiname, ggf. Seite). '
-        . 'Erfinde keine Inhalte, die nicht in den Auszügen oder im Gespräch stehen.',
+        . 'Erfinde keine Inhalte, die nicht in den Auszügen oder im Gespräch stehen. '
+        . psUntrustedDataRule($boundary),
     ];
     $perHit = (int) max(400, $budget / max(1, count($hits)));
     foreach ($hits as $i => $hit) {
@@ -887,14 +894,15 @@ function buildVectorContextSystemPrompt(array $hits, int $budget = 12000): strin
         if (mb_strlen($text) > $perHit) {
             $text = mb_substr($text, 0, $perHit) . ' […]';
         }
-        $src = '"' . (string) $hit['filename'] . '"';
+        $src = '"' . psSanitizeLabel((string) $hit['filename']) . '"';
         if (!empty($hit['page_start'])) {
             $src .= ', Seite ' . (int) $hit['page_start'];
             if (!empty($hit['page_end']) && (int) $hit['page_end'] !== (int) $hit['page_start']) {
                 $src .= '–' . (int) $hit['page_end'];
             }
         }
-        $parts[] = sprintf("[Quelle %d: %s, Abschnitt %d, Relevanz %.2f]\n%s", $i + 1, $src, (int) $hit['chunk_index'] + 1, (float) $hit['score'], $text);
+        $parts[] = sprintf("[Quelle %d: %s, Abschnitt %d, Relevanz %.2f]", $i + 1, $src, (int) $hit['chunk_index'] + 1, (float) $hit['score'])
+            . "\n" . psWrapUntrusted($text, (string) $hit['filename'], $boundary);
     }
     return implode("\n\n", $parts);
 }
@@ -905,7 +913,7 @@ function vectorHitsToToolResults(array $hits): array
     return array_map(static function (array $hit): array {
         $page = (int) ($hit['page_start'] ?? 0);
         return [
-            'document'  => (string) $hit['filename'],
+            'document'  => psSanitizeLabel((string) $hit['filename']),
             'source'    => 'Vektordatenbank',
             'page'      => $page > 0 ? $page : null,
             'chunk'     => (int) $hit['chunk_index'] + 1,
